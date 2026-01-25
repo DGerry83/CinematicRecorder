@@ -10,7 +10,10 @@ namespace CinematicRecorder.Capture
     {
         // Public API for FrameCapture to control us
         public FrameCapture FrameCaptureInstance { get; set; }
+
         private bool _isCapturing = false;
+
+        // Readback limiting
         private int _inFlightReadbacks = 0;
         private const int MAX_IN_FLIGHT = 2;
         private readonly object _readbackLock = new object();
@@ -22,6 +25,7 @@ namespace CinematicRecorder.Capture
                 Debug.LogError("[RenderCapture] No FrameCapture instance assigned!");
                 return;
             }
+
             _isCapturing = true;
             Debug.Log("[RenderCapture] Started capturing via OnRenderImage.");
         }
@@ -32,29 +36,31 @@ namespace CinematicRecorder.Capture
             Debug.Log("[RenderCapture] Stopped capturing.");
         }
 
-        // UNITY CALLBACK: Called after the camera finishes rendering the 3D scene,
-        // but before the final pass to screen. 'source' is the clean, post-processed buffer.
+        // UNITY CALLBACK
         void OnRenderImage(RenderTexture source, RenderTexture destination)
         {
-            // 1. Pass the image through the pipeline (required)
+            // Always pass through
             Graphics.Blit(source, destination);
 
-            // 2. If we're recording, capture this pristine frame
-            if (_isCapturing && FrameCaptureInstance != null && FrameCaptureInstance.IsRecording)
-            {
-                RenderTexture temp = RenderTexture.GetTemporary(
-                    source.width, source.height, 0, source.format);
+            if (!_isCapturing || FrameCaptureInstance == null || !FrameCaptureInstance.IsRecording)
+                return;
 
-                // Vertical flip
-                Graphics.Blit(
-                    source,
-                    temp,
-                    new Vector2(1f, -1f),
-                    new Vector2(0f, 1f));
+            RenderTexture temp = RenderTexture.GetTemporary(
+                source.width,
+                source.height,
+                0,
+                source.format);
 
-                CaptureFrame(temp);
-                RenderTexture.ReleaseTemporary(temp);
-            }
+            // Vertical flip (Unity → FFmpeg orientation fix)
+            Graphics.Blit(
+                source,
+                temp,
+                new Vector2(1f, -1f),
+                new Vector2(0f, 1f));
+
+            CaptureFrame(temp);
+
+            RenderTexture.ReleaseTemporary(temp);
         }
 
         private void CaptureFrame(RenderTexture source)
@@ -62,10 +68,15 @@ namespace CinematicRecorder.Capture
             if (!_isCapturing)
                 return;
 
+            // Limit in-flight GPU readbacks
             lock (_readbackLock)
             {
                 if (_inFlightReadbacks >= MAX_IN_FLIGHT)
-                    return; // Skip issuing readback this frame
+                {
+                    // Drop this frame cleanly
+                    return;
+                }
+
                 _inFlightReadbacks++;
             }
 
@@ -75,6 +86,7 @@ namespace CinematicRecorder.Capture
                 TextureFormat.RGBA32,
                 OnReadbackComplete);
         }
+
         public void WaitForReadbacksToComplete()
         {
             while (true)
@@ -85,12 +97,13 @@ namespace CinematicRecorder.Capture
                         return;
                 }
 
-                System.Threading.Thread.Sleep(1);
+                Thread.Sleep(1);
             }
         }
 
         private void OnReadbackComplete(AsyncGPUReadbackRequest request)
         {
+            // Always decrement first — even on error
             lock (_readbackLock)
             {
                 _inFlightReadbacks--;
@@ -105,6 +118,7 @@ namespace CinematicRecorder.Capture
                 return;
             }
 
+            // Copy out of Unity-owned memory
             var src = request.GetData<byte>();
             var copy = new NativeArray<byte>(src.Length, Allocator.Persistent);
             NativeArray<byte>.Copy(src, copy);

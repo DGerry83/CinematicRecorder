@@ -38,6 +38,16 @@ namespace CinematicRecorder.Capture
         private float lastReportTime;
         private int framesSinceReport;
 
+        // Safety limits (Step 2)
+        private const int MaxFramesInFlight = 2; // matches your readback cap
+        private const long MaxBytesInFlight = 512L * 1024 * 1024; // 512 MB hard ceiling
+
+        // Instrumentation (Step 1)
+        private long bytesInFlight = 0;
+        private long peakBytesInFlight = 0;
+        private int peakFramesInFlight = 0;
+        private int droppedFrames = 0;
+
         public void Initialize(int fps, string outputDir, bool pngSequence)
         {
             targetFPS = fps;
@@ -126,24 +136,22 @@ namespace CinematicRecorder.Capture
 
             isRecording = false;
 
-            // Stop GPU capture first — no more frames will arrive
             renderCapture.StopCapture();
 
-            // Drain any frames already captured
             while (_frameQueue.TryDequeue(out NativeArray<byte> frameData))
             {
+                bytesInFlight -= frameData.Length;
+
                 if (hardwareEncoder != null && hardwareEncoder.IsInitialized)
                 {
                     hardwareEncoder.EncodeFrame(frameData);
                 }
                 else
                 {
-                    if (frameData.IsCreated)
-                        frameData.Dispose();
+                    frameData.Dispose();
                 }
             }
 
-            // Now it is SAFE to stop the encoder
             hardwareEncoder?.RequestStop();
             hardwareEncoder = null;
         }
@@ -151,15 +159,42 @@ namespace CinematicRecorder.Capture
         // Called from RenderCapture's AsyncGPUReadback callback (may be on render thread)
         public void EnqueueCapturedFrame(NativeArray<byte> frameData)
         {
-            if (isRecording)
+            if (!frameData.IsCreated)
+                return;
+
+            int frameBytes = frameData.Length;
+
+            if (!isRecording)
             {
-                _frameQueue.Enqueue(frameData);
+                frameData.Dispose();
+                return;
             }
-            else
+
+            // STEP 2: hard safety caps
+            if (_frameQueue.Count >= MaxFramesInFlight ||
+                bytesInFlight + frameBytes > MaxBytesInFlight)
             {
-                if (frameData.IsCreated)
-                    frameData.Dispose();
+                droppedFrames++;
+                frameData.Dispose();
+
+                if ((droppedFrames % 60) == 1)
+                {
+                    Debug.LogWarning(
+                        $"[FrameCapture] Dropping frame — " +
+                        $"Queue: {_frameQueue.Count}/{MaxFramesInFlight}, " +
+                        $"Bytes: {bytesInFlight / (1024 * 1024)} MB"
+                    );
+                }
+
+                return;
             }
+
+            // Accept frame
+            _frameQueue.Enqueue(frameData);
+            bytesInFlight += frameBytes;
+
+            peakBytesInFlight = Math.Max(peakBytesInFlight, bytesInFlight);
+            peakFramesInFlight = Math.Max(peakFramesInFlight, _frameQueue.Count);
         }
 
 
@@ -168,6 +203,9 @@ namespace CinematicRecorder.Capture
         {
             while (isRecording && _frameQueue.TryDequeue(out NativeArray<byte> frameData))
             {
+                int frameBytes = frameData.Length;
+                bytesInFlight -= frameBytes;
+
                 float encodeStart = Time.realtimeSinceStartup;
 
                 if (hardwareEncoder != null && hardwareEncoder.IsInitialized)
@@ -179,24 +217,25 @@ namespace CinematicRecorder.Capture
                 }
                 else
                 {
-                    // Encoder not available — we must dispose
-                    if (frameData.IsCreated)
-                        frameData.Dispose();
+                    // Encoder unavailable — must dispose here
+                    frameData.Dispose();
                 }
 
                 float encodeEnd = Time.realtimeSinceStartup;
 
-                // Report once per second (NOT per frame)
+                // Report once per second
                 if (Time.realtimeSinceStartup - lastReportTime >= 1.0f)
                 {
                     float elapsed = encodeEnd - encodeStart;
                     float avgMs = (elapsed / Mathf.Max(1, framesSinceReport)) * 1000f;
 
                     Debug.Log(
-                        $"[Perf] " +
-                        $"Encoded: {capturedFrames} | " +
-                        $"Avg encode cost: {avgMs:F2} ms/frame | " +
-                        $"Queue depth: {_frameQueue.Count}"
+                        $"[Perf] Encoded: {capturedFrames} | " +
+                        $"Avg encode: {avgMs:F2} ms | " +
+                        $"Queue: {_frameQueue.Count} | " +
+                        $"Bytes in flight: {bytesInFlight / (1024 * 1024)} MB | " +
+                        $"Peak: {peakBytesInFlight / (1024 * 1024)} MB | " +
+                        $"Dropped: {droppedFrames}"
                     );
 
                     lastReportTime = Time.realtimeSinceStartup;
