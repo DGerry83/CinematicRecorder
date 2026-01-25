@@ -34,6 +34,10 @@ namespace CinematicRecorder.Capture
         private int captureWidth = 0;
         private int captureHeight = 0;
 
+        // Profiling
+        private float lastReportTime;
+        private int framesSinceReport;
+
         public void Initialize(int fps, string outputDir, bool pngSequence)
         {
             targetFPS = fps;
@@ -121,8 +125,25 @@ namespace CinematicRecorder.Capture
                 return;
 
             isRecording = false;
+
+            // Stop GPU capture first — no more frames will arrive
             renderCapture.StopCapture();
 
+            // Drain any frames already captured
+            while (_frameQueue.TryDequeue(out NativeArray<byte> frameData))
+            {
+                if (hardwareEncoder != null && hardwareEncoder.IsInitialized)
+                {
+                    hardwareEncoder.EncodeFrame(frameData);
+                }
+                else
+                {
+                    if (frameData.IsCreated)
+                        frameData.Dispose();
+                }
+            }
+
+            // Now it is SAFE to stop the encoder
             hardwareEncoder?.RequestStop();
             hardwareEncoder = null;
         }
@@ -145,22 +166,41 @@ namespace CinematicRecorder.Capture
 
         void Update()
         {
-            // Process the frame queue on the main thread.
-            // This is where we feed frames to the encoder.
             while (isRecording && _frameQueue.TryDequeue(out NativeArray<byte> frameData))
             {
+                float encodeStart = Time.realtimeSinceStartup;
+
                 if (hardwareEncoder != null && hardwareEncoder.IsInitialized)
                 {
+                    // Ownership TRANSFERRED to encoder thread
                     hardwareEncoder.EncodeFrame(frameData);
                     capturedFrames++;
+                    framesSinceReport++;
                 }
-                // Dispose the native array after encoding
-                if (frameData.IsCreated) frameData.Dispose();
-
-                // Optional diagnostic log
-                if (capturedFrames % 60 == 0)
+                else
                 {
-                    Debug.Log($"[FrameCapture] Encoded {capturedFrames} frames.");
+                    // Encoder not available — we must dispose
+                    if (frameData.IsCreated)
+                        frameData.Dispose();
+                }
+
+                float encodeEnd = Time.realtimeSinceStartup;
+
+                // Report once per second (NOT per frame)
+                if (Time.realtimeSinceStartup - lastReportTime >= 1.0f)
+                {
+                    float elapsed = encodeEnd - encodeStart;
+                    float avgMs = (elapsed / Mathf.Max(1, framesSinceReport)) * 1000f;
+
+                    Debug.Log(
+                        $"[Perf] " +
+                        $"Encoded: {capturedFrames} | " +
+                        $"Avg encode cost: {avgMs:F2} ms/frame | " +
+                        $"Queue depth: {_frameQueue.Count}"
+                    );
+
+                    lastReportTime = Time.realtimeSinceStartup;
+                    framesSinceReport = 0;
                 }
             }
         }

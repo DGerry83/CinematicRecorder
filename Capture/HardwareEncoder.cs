@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 
 namespace CinematicRecorder.Capture
@@ -27,9 +28,10 @@ namespace CinematicRecorder.Capture
         public bool ForceSoftwareEncoding { get; set; } = false;
 
         // Threading for software encoding
-        private ConcurrentQueue<(EncoderCommand cmd, byte[] data)> commandQueue;
+        private ConcurrentQueue<(EncoderCommand cmd, NativeArray<byte> native)> commandQueue;
         private volatile bool encoderAlive;
         private Thread encoderThread;
+        private volatile bool stopping;
 
 
         public enum EncoderType { NVENC, AMF, QuickSync, CPU }
@@ -72,12 +74,12 @@ namespace CinematicRecorder.Capture
                 UnityEngine.Debug.Log("[HardwareEncoder] Force software encoding enabled");
                 if (TryInitializeEncoder("libx264", EncoderType.CPU))
                 {
-                    commandQueue = new ConcurrentQueue<(EncoderCommand, byte[])>();
+                    commandQueue = new ConcurrentQueue<(EncoderCommand, NativeArray<byte>)>();
                     encoderAlive = true;
 
                     encoderThread = new Thread(EncoderThreadMain)
                     {
-                        IsBackground = true,
+                        IsBackground = false,
                         Name = "CinematicRecorder_Encoder"
                     };
                     encoderThread.Start();
@@ -91,12 +93,12 @@ namespace CinematicRecorder.Capture
                 if (TryInitializeEncoder("h264_amf", EncoderType.AMF)) return true;
                 if (TryInitializeEncoder("libx264", EncoderType.CPU))
                 {
-                    commandQueue = new ConcurrentQueue<(EncoderCommand, byte[])>();
+                    commandQueue = new ConcurrentQueue<(EncoderCommand, NativeArray<byte>)>();
                     encoderAlive = true;
 
                     encoderThread = new Thread(EncoderThreadMain)
                     {
-                        IsBackground = true,
+                        IsBackground = false,
                         Name = "CinematicRecorder_Encoder"
                     };
                     encoderThread.Start();
@@ -108,12 +110,64 @@ namespace CinematicRecorder.Capture
             return false;
         }
 
+        private void EncodeFrameInternalNative(NativeArray<byte> rgba)
+        {
+            byte* srcPtr = (byte*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(rgba);
+
+            byte_ptrArray4 srcData = new byte_ptrArray4();
+            int_array4 srcLinesize = new int_array4();
+
+            srcData[0] = srcPtr;
+            srcLinesize[0] = width * 4;
+
+            byte_ptrArray4 dstData = new byte_ptrArray4();
+            int_array4 dstLinesize = new int_array4();
+
+            dstData[0] = frame->data[0];
+            dstData[1] = frame->data[1];
+            dstData[2] = frame->data[2];
+
+            dstLinesize[0] = frame->linesize[0];
+            dstLinesize[1] = frame->linesize[1];
+            dstLinesize[2] = frame->linesize[2];
+
+            ffmpeg.sws_scale(
+                swsContext,
+                srcData,
+                srcLinesize,
+                0,
+                height,
+                dstData,
+                dstLinesize);
+
+            frame->pts = framePts++;
+
+            int ret = ffmpeg.avcodec_send_frame(codecContext, frame);
+            if (ret < 0) return;
+
+            while (ret >= 0)
+            {
+                ret = ffmpeg.avcodec_receive_packet(codecContext, packet);
+                if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) ||
+                    ret == ffmpeg.AVERROR_EOF)
+                    break;
+
+                ffmpeg.av_packet_rescale_ts(
+                    packet,
+                    codecContext->time_base,
+                    videoStream->time_base);
+
+                packet->stream_index = videoStream->index;
+                ffmpeg.av_interleaved_write_frame(formatContext, packet);
+                ffmpeg.av_packet_unref(packet);
+            }
+        }
 
         private void EncoderThreadMain()
         {
             Debug.Log("[HardwareEncoder] Encoder thread started");
 
-            while (encoderAlive)
+            while (true)
             {
                 if (!commandQueue.TryDequeue(out var item))
                 {
@@ -121,15 +175,11 @@ namespace CinematicRecorder.Capture
                     continue;
                 }
 
-                if (item.cmd == EncoderCommand.Frame)
-                {
-                    EncodeFrameInternal(item.data);
-                }
-                else if (item.cmd == EncoderCommand.Stop)
+                if (item.cmd == EncoderCommand.Stop)
                 {
                     Debug.Log("[HardwareEncoder] Stop requested, flushing encoder");
 
-                    // Flush
+                    // Flush encoder
                     ffmpeg.avcodec_send_frame(codecContext, null);
 
                     while (true)
@@ -150,12 +200,21 @@ namespace CinematicRecorder.Capture
                     }
 
                     ffmpeg.av_write_trailer(formatContext);
-                    encoderAlive = false;
+                    break; // EXIT THREAD
+                }
+
+                if (item.cmd == EncoderCommand.FrameNative)
+                {
+                    // ENCODER THREAD IS THE SOLE OWNER
+                    EncodeFrameInternalNative(item.native);
+
+                    if (item.native.IsCreated)
+                        item.native.Dispose();
                 }
             }
 
-            Debug.Log("[HardwareEncoder] Encoder thread exiting, cleaning up");
-            Cleanup();
+            encoderAlive = false;
+            Debug.Log("[HardwareEncoder] Encoder thread exited cleanly");
         }
 
 
@@ -205,19 +264,22 @@ namespace CinematicRecorder.Capture
         // Called from main thread (AsyncGPUReadback callback)
         public void EncodeFrame(NativeArray<byte> rgba)
         {
-            if (!isInitialized)
+            // If encoder is not ready, do nothing — Unity owns this buffer
+            if (!isInitialized || stopping)
                 return;
 
             if (ActiveEncoder != EncoderType.CPU)
             {
-                // Hardware encoders run on main thread
+                // Hardware encoders: copy, but DO NOT dispose Unity-owned NativeArray
                 EncodeFrameInternal(rgba.ToArray());
                 return;
             }
 
-            byte[] copy = new byte[rgba.Length];
-            rgba.CopyTo(copy);
-            commandQueue.Enqueue((EncoderCommand.Frame, copy));
+            // CPU encoder path
+            if (!encoderAlive)
+                return;
+
+            commandQueue.Enqueue((EncoderCommand.FrameNative, rgba));
         }
 
         private void TestAvailableEncoders()
@@ -419,22 +481,26 @@ namespace CinematicRecorder.Capture
             return Marshal.PtrToStringAnsi((IntPtr)buffer);
         }
 
-
         public void RequestStop()
         {
-            if (!isInitialized)
+            if (!isInitialized || stopping)
                 return;
+
+            stopping = true;
 
             if (ActiveEncoder == EncoderType.CPU)
             {
-                if (!encoderAlive)
-                    return;
-                commandQueue.Enqueue((EncoderCommand.Stop, null));
-                encoderThread?.Join();
+                if (encoderAlive)
+                {
+                    commandQueue.Enqueue((EncoderCommand.Stop, default));
+                    encoderThread?.Join();   // ⬅️ HARD BARRIER
+                }
+
+                Cleanup();  // ⬅️ ONLY AFTER THREAD IS DEAD
             }
             else
             {
-                // Flush hardware encoder
+                // Flush hardware encoder (unchanged)
                 ffmpeg.avcodec_send_frame(codecContext, null);
 
                 while (true)
@@ -461,11 +527,13 @@ namespace CinematicRecorder.Capture
 
         private enum EncoderCommand
         {
-            Frame,
+            FrameNative,
             Stop
         }
         private void Cleanup()
         {
+            if (!isInitialized)
+                return;
             if (frame != null)
             {
                 fixed (AVFrame** f = &frame) ffmpeg.av_frame_free(f);
