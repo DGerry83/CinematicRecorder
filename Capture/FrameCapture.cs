@@ -41,6 +41,7 @@ namespace CinematicRecorder.Capture
         // Safety limits (Step 2)
         private const int MaxFramesInFlight = 2; // matches your readback cap
         private const long MaxBytesInFlight = 512L * 1024 * 1024; // 512 MB hard ceiling
+        private bool stopRequested = false;
 
         // Instrumentation (Step 1)
         private long bytesInFlight = 0;
@@ -93,6 +94,7 @@ namespace CinematicRecorder.Capture
         public void StartRecording()
         {
             if (isRecording || targetCamera == null) return;
+            stopRequested = false;
 
             // SET RESOLUTION TO SCREEN RESOLUTION
             captureWidth = Screen.width;
@@ -131,29 +133,24 @@ namespace CinematicRecorder.Capture
 
         public void StopRecording()
         {
-            if (!isRecording)
+            // Idempotent
+            if (stopRequested)
                 return;
 
-            isRecording = false;
+            stopRequested = true;
 
-            renderCapture.StopCapture();
-
-            while (_frameQueue.TryDequeue(out NativeArray<byte> frameData))
+            if (isRecording)
             {
-                bytesInFlight -= frameData.Length;
-
-                if (hardwareEncoder != null && hardwareEncoder.IsInitialized)
-                {
-                    hardwareEncoder.EncodeFrame(frameData);
-                }
-                else
-                {
-                    frameData.Dispose();
-                }
+                Debug.Log("[FrameCapture] Stop requested — entering finalization");
             }
 
-            hardwareEncoder?.RequestStop();
-            hardwareEncoder = null;
+            // Stop new frames immediately
+            isRecording = false;
+
+            // Stop GPU capture hook
+            renderCapture.StopCapture();
+
+            // DO NOT stop encoder yet — Update() will drain the queue
         }
 
         // Called from RenderCapture's AsyncGPUReadback callback (may be on render thread)
@@ -201,53 +198,94 @@ namespace CinematicRecorder.Capture
 
         void Update()
         {
-            while (isRecording && _frameQueue.TryDequeue(out NativeArray<byte> frameData))
+            // Drain frames while recording OR finalizing
+            while ((isRecording || stopRequested) &&
+                   _frameQueue.TryDequeue(out NativeArray<byte> frameData))
             {
                 int frameBytes = frameData.Length;
                 bytesInFlight -= frameBytes;
 
-                float encodeStart = Time.realtimeSinceStartup;
-
                 if (hardwareEncoder != null && hardwareEncoder.IsInitialized)
                 {
-                    // Ownership TRANSFERRED to encoder thread
                     hardwareEncoder.EncodeFrame(frameData);
                     capturedFrames++;
                     framesSinceReport++;
                 }
                 else
                 {
-                    // Encoder unavailable — must dispose here
                     frameData.Dispose();
                 }
+            }
 
-                float encodeEnd = Time.realtimeSinceStartup;
+            // PERF REPORT (unchanged)
+            if (framesSinceReport > 0 &&
+                Time.realtimeSinceStartup - lastReportTime >= 1.0f)
+            {
+                Debug.Log(
+                    $"[Perf] Encoded: {capturedFrames} | " +
+                    $"Queue: {_frameQueue.Count} | " +
+                    $"Bytes in flight: {bytesInFlight / (1024 * 1024)} MB | " +
+                    $"Dropped: {droppedFrames}"
+                );
 
-                // Report once per second
-                if (Time.realtimeSinceStartup - lastReportTime >= 1.0f)
-                {
-                    float elapsed = encodeEnd - encodeStart;
-                    float avgMs = (elapsed / Mathf.Max(1, framesSinceReport)) * 1000f;
+                lastReportTime = Time.realtimeSinceStartup;
+                framesSinceReport = 0;
+            }
 
-                    Debug.Log(
-                        $"[Perf] Encoded: {capturedFrames} | " +
-                        $"Avg encode: {avgMs:F2} ms | " +
-                        $"Queue: {_frameQueue.Count} | " +
-                        $"Bytes in flight: {bytesInFlight / (1024 * 1024)} MB | " +
-                        $"Peak: {peakBytesInFlight / (1024 * 1024)} MB | " +
-                        $"Dropped: {droppedFrames}"
-                    );
+            // FINALIZATION COMPLETE
+            if (stopRequested &&
+                _frameQueue.IsEmpty &&
+                bytesInFlight == 0 &&
+                hardwareEncoder != null)
+            {
+                Debug.Log(
+                    $"[FrameCapture] Finalizing recording — total frames encoded: {capturedFrames}"
+                );
 
-                    lastReportTime = Time.realtimeSinceStartup;
-                    framesSinceReport = 0;
-                }
+                hardwareEncoder.RequestStop();
+                hardwareEncoder.Dispose();
+                hardwareEncoder = null;
+
+                stopRequested = false;
+            }
+        }
+
+        void OnDisable()
+        {
+            if (isRecording)
+            {
+                Debug.Log("[FrameCapture] OnDisable — forcing recording stop");
+                StopRecording();
+            }
+        }
+        void OnApplicationPause(bool paused)
+        {
+            if (paused && isRecording)
+            {
+                Debug.Log("[FrameCapture] Application paused — forcing recording stop");
+                StopRecording();
+            }
+        }
+        void OnApplicationQuit()
+        {
+            if (isRecording)
+            {
+                Debug.Log("[FrameCapture] Application quitting — forcing recording stop");
+                StopRecording();
             }
         }
 
         void OnDestroy()
         {
-            if (isRecording) StopRecording();
-            hardwareEncoder?.Dispose();
+            StopRecording();
+
+            // Force finalization if Unity is tearing down
+            if (hardwareEncoder != null)
+            {
+                hardwareEncoder.RequestStop();
+                hardwareEncoder.Dispose();
+                hardwareEncoder = null;
+            }
         }
     }
 }

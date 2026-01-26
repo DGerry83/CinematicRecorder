@@ -218,68 +218,36 @@ namespace CinematicRecorder.Capture
         }
 
 
-
-        private void EncodeFrameInternal(byte[] rgbaData)
-        {
-            // Convert RGBA to YUV420P
-            byte_ptrArray4 srcData = new byte_ptrArray4();
-            int_array4 srcLinesize = new int_array4();
-
-            fixed (byte* srcPtr = rgbaData)
-            {
-                srcData[0] = srcPtr;
-                srcLinesize[0] = width * 4;
-
-                byte_ptrArray4 dstData = new byte_ptrArray4();
-                int_array4 dstLinesize = new int_array4();
-
-                dstData[0] = frame->data[0];
-                dstData[1] = frame->data[1];
-                dstData[2] = frame->data[2];
-                dstLinesize[0] = frame->linesize[0];
-                dstLinesize[1] = frame->linesize[1];
-                dstLinesize[2] = frame->linesize[2];
-
-                ffmpeg.sws_scale(swsContext, srcData, srcLinesize, 0, height, dstData, dstLinesize);
-            }
-
-            frame->pts = framePts++;
-
-            int ret = ffmpeg.avcodec_send_frame(codecContext, frame);
-            if (ret < 0) return;
-
-            while (ret >= 0)
-            {
-                ret = ffmpeg.avcodec_receive_packet(codecContext, packet);
-                if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF) break;
-                if (ret < 0) return;
-
-                ffmpeg.av_packet_rescale_ts(packet, codecContext->time_base, videoStream->time_base);
-                packet->stream_index = videoStream->index;
-                ffmpeg.av_interleaved_write_frame(formatContext, packet);
-                ffmpeg.av_packet_unref(packet);
-            }
-        }
-
         // Called from main thread (AsyncGPUReadback callback)
         public void EncodeFrame(NativeArray<byte> rgba)
         {
-            // If encoder is not ready, do nothing — Unity owns this buffer
             if (!isInitialized || stopping)
-                return;
-
-            if (ActiveEncoder != EncoderType.CPU)
             {
-                // Hardware encoders: copy, but DO NOT dispose Unity-owned NativeArray
-                EncodeFrameInternal(rgba.ToArray());
+                if (rgba.IsCreated)
+                    rgba.Dispose();
                 return;
             }
 
-            // CPU encoder path
-            if (!encoderAlive)
-                return;
+            // ALL encoders use native path
+            if (ActiveEncoder == EncoderType.CPU)
+            {
+                if (!encoderAlive)
+                {
+                    if (rgba.IsCreated)
+                        rgba.Dispose();
+                    return;
+                }
 
-            commandQueue.Enqueue((EncoderCommand.FrameNative, rgba));
+                commandQueue.Enqueue((EncoderCommand.FrameNative, rgba));
+            }
+            else
+            {
+                // Encode immediately on calling thread
+                EncodeFrameInternalNative(rgba);
+
+                if (rgba.IsCreated)
+                    rgba.Dispose();
+            }
         }
 
         private void TestAvailableEncoders()
