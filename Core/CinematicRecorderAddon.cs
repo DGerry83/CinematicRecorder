@@ -12,7 +12,6 @@ namespace CinematicRecorder.Core
     public class CinematicRecorderAddon : MonoBehaviour
     {
         public static CinematicRecorderAddon Instance { get; private set; }
-        public static TimeLocker TimeLockerInstance { get; private set; }
         public static FrameCapture FrameCaptureInstance { get; private set; }
 
         private ApplicationLauncherButton toolbarButton;
@@ -67,7 +66,6 @@ namespace CinematicRecorder.Core
             // Initialize core systems
             GameObject coreObject = new GameObject("CinematicRecorder_Core");
             DontDestroyOnLoad(coreObject);
-            TimeLockerInstance = coreObject.AddComponent<TimeLocker>();
 
             FrameCaptureInstance = coreObject.AddComponent<FrameCapture>();
 

@@ -114,11 +114,15 @@ namespace CinematicRecorder.Capture
         {
             byte* srcPtr = (byte*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(rgba);
 
+            // 🔁 FLIP IMAGE VERTICALLY (Unity → Video space)
             byte_ptrArray4 srcData = new byte_ptrArray4();
             int_array4 srcLinesize = new int_array4();
 
-            srcData[0] = srcPtr;
-            srcLinesize[0] = width * 4;
+            // Start at LAST row
+            srcData[0] = srcPtr + (height - 1) * width * 4;
+
+            // Negative stride = walk UP instead of down
+            srcLinesize[0] = -width * 4;
 
             byte_ptrArray4 dstData = new byte_ptrArray4();
             int_array4 dstLinesize = new int_array4();
@@ -143,7 +147,8 @@ namespace CinematicRecorder.Capture
             frame->pts = framePts++;
 
             int ret = ffmpeg.avcodec_send_frame(codecContext, frame);
-            if (ret < 0) return;
+            if (ret < 0)
+                return;
 
             while (ret >= 0)
             {

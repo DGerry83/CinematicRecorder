@@ -18,9 +18,14 @@ namespace CinematicRecorder.UI
         // Toggles and settings
         private bool forceSoftwareEncoding = false;
 
-        // Framerate presets
+        // Default Settings
         private readonly int[] frameratePresets = { 24, 30, 60, 120, 240 };
         private int framerateIndex = 2;
+        private string durationSecondsText = "10";
+
+        private int simFpsIndex = 2;     // default 60
+        private int playbackFpsIndex = 2;
+        private bool lockFps = true;
 
         // Format
         private bool pngSequence = false;
@@ -74,20 +79,33 @@ namespace CinematicRecorder.UI
             GUILayout.Label(GetStatusText(), HighLogic.Skin.label);
             GUILayout.Space(15);
 
-            // FRAMERATE
-            GUILayout.Label("Target Framerate:", HighLogic.Skin.label);
+            GUILayout.Label("Simulation FPS:", HighLogic.Skin.label);
+            DrawFpsSelector(ref simFpsIndex);
+
+            GUILayout.Space(5);
+
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("<", HighLogic.Skin.button, GUILayout.Width(30)) && framerateIndex > 0)
-            {
-                framerateIndex--;
-            }
-            GUILayout.Label($"{frameratePresets[framerateIndex]} FPS", HighLogic.Skin.label);
-            if (GUILayout.Button(">", HighLogic.Skin.button, GUILayout.Width(30)) && framerateIndex < frameratePresets.Length - 1)
-            {
-                framerateIndex++;
-            }
+            lockFps = GUILayout.Toggle(lockFps, " Lock Playback Rate", HighLogic.Skin.toggle);
             GUILayout.EndHorizontal();
-            GUILayout.Space(10);
+
+            GUILayout.Space(5);
+
+            GUILayout.Label("Playback FPS:", HighLogic.Skin.label);
+            GUI.enabled = !lockFps;
+            DrawFpsSelector(ref playbackFpsIndex);
+            GUI.enabled = true;
+
+            if (lockFps)
+            {
+                playbackFpsIndex = simFpsIndex;
+            }
+            float simFps = frameratePresets[simFpsIndex];
+            float outFps = frameratePresets[playbackFpsIndex];
+            float speed = outFps / simFps;
+
+            GUILayout.Label(
+                $"Playback Speed: {speed:0.##}×",
+                HighLogic.Skin.label);
 
             // FORMAT
             pngSequence = GUILayout.Toggle(pngSequence, " PNG Sequence (uncheck for MKV/x264)", HighLogic.Skin.toggle);
@@ -96,6 +114,29 @@ namespace CinematicRecorder.UI
             // SAFE MODE TOGGLE
             forceSoftwareEncoding = GUILayout.Toggle(forceSoftwareEncoding, " Force Software Encoding (Safe Mode)", HighLogic.Skin.toggle);
             GUILayout.Space(10);
+
+            // DURATION
+            GUILayout.Label("Duration (seconds):", HighLogic.Skin.label);
+
+            // Draw text box
+            durationSecondsText = GUILayout.TextField(
+                durationSecondsText,
+                HighLogic.Skin.textField,
+                GUILayout.Width(100)
+            );
+
+            // Sanitize AFTER user input
+            durationSecondsText = SanitizeDurationInput(durationSecondsText);
+
+            GUILayout.Space(10);
+
+            // Preview
+            float.TryParse(durationSecondsText, out float previewSeconds);
+            int previewFrames = Mathf.RoundToInt(previewSeconds * frameratePresets[framerateIndex]);
+
+            GUILayout.Label(
+                $"Total Frames: {previewFrames}",
+                HighLogic.Skin.label);
 
             // RECORD BUTTON
             if (GUILayout.Button(GetRecordButtonText(), HighLogic.Skin.button))
@@ -108,82 +149,82 @@ namespace CinematicRecorder.UI
             GUI.DragWindow();
         }
 
+        private void DrawFpsSelector(ref int index)
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("<", GUILayout.Width(30)) && index > 0)
+                index--;
+            GUILayout.Label($"{frameratePresets[index]} FPS", GUILayout.Width(100));
+            if (GUILayout.Button(">", GUILayout.Width(30)) && index < frameratePresets.Length - 1)
+                index++;
+            GUILayout.EndHorizontal();
+        }
+
+        private string SanitizeDurationInput(string input)
+        {
+            bool hasDot = false;
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+            foreach (char c in input)
+            {
+                if (char.IsDigit(c))
+                {
+                    sb.Append(c);
+                }
+                else if (c == '.' && !hasDot)
+                {
+                    sb.Append(c);
+                    hasDot = true;
+                }
+            }
+
+            return sb.ToString();
+        }
+
         private string GetStatusText()
         {
-            if (CinematicRecorderAddon.TimeLockerInstance == null)
-                return "System Offline";
-
-            var stats = CinematicRecorderAddon.TimeLockerInstance.GetStats();
-
-            if (stats.IsRecording)
+            if (DeterministicCaptureSession.IsRunning)
             {
-                if (CinematicRecorderAddon.FrameCaptureInstance != null &&
-                    CinematicRecorderAddon.FrameCaptureInstance.IsRecording)
-                {
-                    string encoderType = CinematicRecorderAddon.FrameCaptureInstance.ActiveEncoderType.ToString();
-                    return $"Recording ({encoderType}) - Frame: {stats.FrameIndex}, Duration: {stats.EffectiveDuration:F1}s";
-                }
-                return $"Recording - Frame: {stats.FrameIndex}, Duration: {stats.EffectiveDuration:F1}s";
+                return
+                    $"Recording (Offline Deterministic)\n" +
+                    $"Time: {DeterministicCaptureSession.CapturedSeconds:F1}s / {DeterministicCaptureSession.TargetSeconds:F1}s\n" +
+                    $"Frames: {DeterministicCaptureSession.CapturedFrames} / {DeterministicCaptureSession.TargetFrames}\n" +
+                    $"Sim Speed: {DeterministicCaptureSession.SimSpeedPercent:F0}%";
             }
-            else
-            {
-                // Get screen resolution for status display
-                int screenWidth = Screen.width;
-                int screenHeight = Screen.height;
 
-                string mode = pngSequence ? "PNG" : (forceSoftwareEncoding ? "MKV (CPU Safe Mode)" : "MKV");
-                return $"Ready - {screenWidth}x{screenHeight}, {frameratePresets[framerateIndex]} FPS, {mode}";
-            }
+            int screenWidth = Screen.width;
+            int screenHeight = Screen.height;
+
+            string mode = pngSequence
+                ? "PNG"
+                : (forceSoftwareEncoding ? "MKV (CPU Safe Mode)" : "MKV");
+
+            return $"Ready - {screenWidth}x{screenHeight}, {frameratePresets[framerateIndex]} FPS, {mode}";
         }
 
         private string GetRecordButtonText()
         {
-            if (CinematicRecorderAddon.TimeLockerInstance?.GetStats().IsRecording ?? false)
-                return "Stop Recording";
-            return "Start Recording";
+            return DeterministicCaptureSession.IsRunning
+                ? "Recording…"
+                : "Start Recording";
         }
 
         private void OnRecordButtonClick()
         {
-            if (CinematicRecorderAddon.TimeLockerInstance == null || CinematicRecorderAddon.FrameCaptureInstance == null)
-                return;
+            int simFps = frameratePresets[simFpsIndex];
+            int playbackFps = frameratePresets[playbackFpsIndex];
 
-            if (CinematicRecorderAddon.TimeLockerInstance.GetStats().IsRecording)
+            if (!float.TryParse(durationSecondsText, out float durationSeconds))
             {
-                // Stop recording
-                CinematicRecorderAddon.TimeLockerInstance.StopRecording();
-                CinematicRecorderAddon.FrameCaptureInstance.StopRecording();
+                Debug.LogWarning("[CinematicRecorder] Invalid duration entered, defaulting to 10 seconds.");
+                durationSeconds = 10f;
             }
-            else
-            {
-                // Start recording
-                int fps = frameratePresets[framerateIndex];
 
-                // Determine output path based on format
-                string baseDir = Path.Combine(KSPUtil.ApplicationRootPath, "GameData", "CinematicRecorder", "Videos");
-                string outputDir;
-
-                if (pngSequence)
-                {
-                    // PNG: Create subfolder with timestamp (frames aren't timestamped)
-                    string sessionFolder = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-                    outputDir = Path.Combine(baseDir, sessionFolder);
-                }
-                else
-                {
-                    // MKV: Filename has timestamp, no subfolder needed
-                    outputDir = baseDir;
-                }
-
-                // SET THE SAFE MODE FLAG
-                CinematicRecorderAddon.FrameCaptureInstance.ForceSoftwareEncoding = forceSoftwareEncoding;
-
-                // Configure and start capture - NO RESOLUTION PARAMETERS
-                CinematicRecorderAddon.TimeLockerInstance.targetCaptureFramerate = fps;
-                CinematicRecorderAddon.FrameCaptureInstance.Initialize(fps, outputDir, pngSequence);
-                CinematicRecorderAddon.FrameCaptureInstance.StartRecording();
-                CinematicRecorderAddon.TimeLockerInstance.StartRecording();
-            }
+            DeterministicCaptureSession.Run(
+                simFps,
+                playbackFps,
+                durationSeconds,
+                forceSoftwareEncoding);
         }
     }
 }

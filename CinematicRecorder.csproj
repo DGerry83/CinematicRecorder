@@ -48,11 +48,14 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Capture\CaptureRunner.cs" />
     <Compile Include="Capture\FrameCapture.cs" />
     <Compile Include="Capture\HardwareEncoder.cs" />
-    <Compile Include="Capture\RenderCaptureHook.cs" />
+    <Compile Include="Capture\OfflineCaptureController.cs" />
+    <Compile Include="Capture\OfflineFrameRenderer.cs" />
     <Compile Include="Core\CinematicRecorderAddon.cs" />
-    <Compile Include="Core\TimeLocker.cs" />
+    <Compile Include="Core\DeterministicCaptureSession.cs" />
+    <Compile Include="Core\HarmonyBootstrap.cs" />
     <Compile Include="Core\TimeWarpPatch.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="UI\SettingsDialog.cs" />
