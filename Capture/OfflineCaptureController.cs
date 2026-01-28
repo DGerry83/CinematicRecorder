@@ -79,6 +79,8 @@ namespace CinematicRecorder.Capture
                 SetupRenderTargets();
                 SetupEncoder();
 
+                DeterministicCaptureSession.CaptureFPS = 0f;
+
                 realTimeAtLastSample = Time.realtimeSinceStartup;
                 framesSinceSpeedSample = 0;
 
@@ -128,10 +130,10 @@ namespace CinematicRecorder.Capture
                     {
                         float realNow = Time.realtimeSinceStartup;
                         float realDelta = realNow - realTimeAtLastSample;
-                        float expectedSimTime = SimSpeedWindowFrames * simFrameDelta;
 
-                        DeterministicCaptureSession.SimSpeedPercent =
-                            realDelta > 0.0001f ? (expectedSimTime / realDelta) * 100f : 100f;
+                        // Calculate actual capture FPS (frames per real-world second)
+                        float captureFps = realDelta > 0.0001f ? SimSpeedWindowFrames / realDelta : 0f;
+                        DeterministicCaptureSession.CaptureFPS = captureFps;
 
                         realTimeAtLastSample = realNow;
                         framesSinceSpeedSample = 0;

@@ -117,10 +117,10 @@ namespace CinematicRecorder.UI
             GUILayout.Space(10);
 
             // GPU ZERO COPY TOGGLE
-            GUI.enabled = !forceSoftwareEncoding; // Disable if forcing software
-            useGpuZeroCopy = GUILayout.Toggle(useGpuZeroCopy, " GPU Zero Copy (AMF Native)", HighLogic.Skin.toggle);
-            GUI.enabled = true;
-            GUILayout.Space(10);
+            //GUI.enabled = !forceSoftwareEncoding; // Disable if forcing software
+            //useGpuZeroCopy = GUILayout.Toggle(useGpuZeroCopy, " GPU Zero Copy (AMF Native)", HighLogic.Skin.toggle);
+            //GUI.enabled = true;
+            //GUILayout.Space(10);
 
             // DURATION
             GUILayout.Label("Duration (seconds):", HighLogic.Skin.label);
@@ -192,20 +192,23 @@ namespace CinematicRecorder.UI
         {
             if (DeterministicCaptureSession.IsRunning)
             {
+                // Calculate time remaining from FPS
+                int framesRemaining = DeterministicCaptureSession.TargetFrames - DeterministicCaptureSession.CapturedFrames;
+                float fps = DeterministicCaptureSession.CaptureFPS;
+                float secondsRemaining = fps > 0.1f ? framesRemaining / fps : 0f;
+                TimeSpan remaining = TimeSpan.FromSeconds(secondsRemaining);
+
                 return
                     $"Recording (Offline Deterministic)\n" +
                     $"Time: {DeterministicCaptureSession.CapturedSeconds:F1}s / {DeterministicCaptureSession.TargetSeconds:F1}s\n" +
                     $"Frames: {DeterministicCaptureSession.CapturedFrames} / {DeterministicCaptureSession.TargetFrames}\n" +
-                    $"Sim Speed: {DeterministicCaptureSession.SimSpeedPercent:F0}%";
+                    $"Capture Rate: {fps:F1} FPS\n" +
+                    $"Est. Remaining: {remaining:mm\\:ss}";
             }
 
             int screenWidth = Screen.width;
             int screenHeight = Screen.height;
-
-            string mode = pngSequence
-                ? "PNG"
-                : (forceSoftwareEncoding ? "MKV (CPU Safe Mode)" : "MKV");
-
+            string mode = forceSoftwareEncoding ? "MKV (CPU Safe Mode)" : "MKV (Hardware Zero-Copy)";
             return $"Ready - {screenWidth}x{screenHeight}, {frameratePresets[framerateIndex]} FPS, {mode}";
         }
 
@@ -235,7 +238,7 @@ namespace CinematicRecorder.UI
                 playbackFps,
                 durationSeconds,
                 forceSoftwareEncoding,
-                gpuZeroCopy);
+                true);
         }
     }
 }

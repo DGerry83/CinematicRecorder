@@ -10,7 +10,7 @@ namespace CinematicRecorder.Core
         public static bool IsRunning { get; private set; }
 
         // UI Fields
-        public static float SimSpeedPercent { get; internal set; }
+        public static float CaptureFPS { get; internal set; }
         public static float CapturedSeconds { get; internal set; }
         public static int CapturedFrames { get; internal set; }
         public static float TargetSeconds { get; internal set; }
@@ -43,7 +43,7 @@ namespace CinematicRecorder.Core
 
             CapturedSeconds = 0f;
             CapturedFrames = 0;
-            SimSpeedPercent = 100f;
+            CaptureFPS = 0f;
 
             Camera cam = Camera.main;
             if (cam == null)
@@ -114,7 +114,7 @@ namespace CinematicRecorder.Core
             // Reset UI-facing state
             CapturedSeconds = 0f;
             CapturedFrames = 0;
-            SimSpeedPercent = 100f;
+            CaptureFPS = 0f;
             TargetSeconds = 0f;
             TargetFrames = 0;
 

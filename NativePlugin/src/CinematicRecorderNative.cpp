@@ -8,6 +8,7 @@
 // ---------------- AMF 1.5 ----------------
 #include "AMFFactory.h"
 #include "components/VideoEncoderVCE.h"
+#include "components/VideoEncoderHEVC.h"  // ADD THIS INCLUDE
 #include "core/Context.h"
 #include "core/Surface.h"
 #include "core/Variant.h"
@@ -68,6 +69,7 @@ struct EncoderContext
     int64_t frameCount = 0;
     bool initialized = false;
     bool headerWritten = false;
+    bool hevcMode = false;                  // NEW: Track if using HEVC vs H.264
     std::mutex writeMutex;
 };
 
@@ -98,7 +100,8 @@ static bool InitializeFFmpegMuxer(EncoderContext* ctx, const char* outputPath)
 
     AVCodecParameters* par = ctx->videoStream->codecpar;
     par->codec_type = AVMEDIA_TYPE_VIDEO;
-    par->codec_id   = AV_CODEC_ID_H264;
+    // Codec selection based on mode
+    par->codec_id   = ctx->hevcMode ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
     par->width      = ctx->width;
     par->height     = ctx->height;
     par->format     = AV_PIX_FMT_YUV420P;
@@ -226,31 +229,69 @@ CREncoderHandle CR_InitEncoder(
         return nullptr;
     }
 
+    // Try HEVC first (RX 400+), fall back to H.264 (all AMD GPUs)
     res = g_AMFFactory.GetFactory()->CreateComponent(
         ctx->amfContext,
-        AMFVideoEncoderVCE_AVC,
+        AMFVideoEncoder_HEVC,  // CORRECT: From VideoEncoderHEVC.h
         &ctx->encoder);
-
-    if (res != AMF_OK)
+    
+    if (res == AMF_OK)
     {
-        SetError("CreateComponent(VCE_AVC) failed");
-        delete ctx;
-        return nullptr;
+        ctx->hevcMode = true;
+    }
+    else
+    {
+        // Fallback to H.264 for older GPUs (HD 7000, R9 200/300 series)
+        res = g_AMFFactory.GetFactory()->CreateComponent(
+            ctx->amfContext,
+            AMFVideoEncoderVCE_AVC,
+            &ctx->encoder);
+        
+        if (res != AMF_OK)
+        {
+            SetError("No suitable hardware encoder found (requires AMD VCE 1.0+)");
+            delete ctx;
+            return nullptr;
+        }
+        ctx->hevcMode = false;
     }
 
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_USAGE, AMF_VIDEO_ENCODER_USAGE_TRANSCODING);
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, 80000000);
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMESIZE, AMFConstructSize(width, height));
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(fps, 1));
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_B_PIC_PATTERN, 0);
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_COLOR_PROFILE, 
-                              AMF_VIDEO_ENCODER_COLOR_PROFILE_FULL);
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_COLOR_PRIMARIES, 
-                              AMF_COLOR_PRIMARIES_BT709);
-    ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_TRANSFER_CHARACTERISTIC, 
-                              AMF_COLOR_TRANSFER_CHARACTERISTIC_SRGB);
+    // Configure encoder based on mode
+    if (ctx->hevcMode)
+    {
+        // HEVC settings - using string constants from SDK header
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_USAGE, AMF_VIDEO_ENCODER_HEVC_USAGE_TRANSCODING);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_PROFILE, AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_TIER, AMF_VIDEO_ENCODER_HEVC_TIER_HIGH);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_FRAMESIZE, AMFConstructSize(width, height));
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_FRAMERATE, AMFConstructRate(fps, 1));
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, fps * 2); // 2-second keyframes for scrubbing
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_VBV_BUFFER_SIZE, 80000000);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_INITIAL_VBV_BUFFER_FULLNESS, 80000000 / 2);
+        
+        // Color settings - using string constants from SDK header
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_INPUT_COLOR_PROFILE, AMF_VIDEO_ENCODER_COLOR_PROFILE_FULL);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_INPUT_COLOR_PRIMARIES, AMF_COLOR_PRIMARIES_BT709);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_INPUT_TRANSFER_CHARACTERISTIC, AMF_COLOR_TRANSFER_CHARACTERISTIC_SRGB);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PROFILE, AMF_VIDEO_ENCODER_COLOR_PROFILE_FULL);
+    }
+    else
+    {
+        // H.264 fallback settings
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_USAGE, AMF_VIDEO_ENCODER_USAGE_TRANSCODING);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, 80000000);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMESIZE, AMFConstructSize(width, height));
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(fps, 1));
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_B_PIC_PATTERN, 0);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_COLOR_PROFILE, 
+                                  AMF_VIDEO_ENCODER_COLOR_PROFILE_FULL);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_COLOR_PRIMARIES, 
+                                  AMF_COLOR_PRIMARIES_BT709);
+        ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_INPUT_TRANSFER_CHARACTERISTIC, 
+                                  AMF_COLOR_TRANSFER_CHARACTERISTIC_SRGB);
+    }
 
-    res = ctx->encoder->Init(amf::AMF_SURFACE_RGBA, width, height);  // Match RGBA format
+    res = ctx->encoder->Init(amf::AMF_SURFACE_RGBA, width, height);
     if (res != AMF_OK)
     {
         SetError("encoder->Init failed");
@@ -267,7 +308,9 @@ CREncoderHandle CR_InitEncoder(
 
     // Extract extradata (available after encoder Init) and set it before header
     amf::AMFVariant var;
-    if (ctx->encoder->GetProperty(AMF_VIDEO_ENCODER_EXTRADATA, &var) == AMF_OK 
+    const wchar_t* extradataProp = ctx->hevcMode ? AMF_VIDEO_ENCODER_HEVC_EXTRADATA : AMF_VIDEO_ENCODER_EXTRADATA;
+    
+    if (ctx->encoder->GetProperty(extradataProp, &var) == AMF_OK 
         && var.type == amf::AMF_VARIANT_INTERFACE)
     {
         amf::AMFBufferPtr extradata(var.pInterface);
@@ -301,7 +344,7 @@ CREncoderHandle CR_InitEncoder(
     desc.Height = height;
     desc.MipLevels = 1;
     desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;  // Was B8G8R8A8_UNORM, now RGBA to match Unity
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -445,11 +488,13 @@ int CR_EncodeFrame(
         AVPacket pkt{};
         av_init_packet(&pkt);
 
-        amf_int64 outputDataType = AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_P;
-        buffer->GetProperty(AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE, &outputDataType);
+        // Use correct output data type property based on codec
+        amf_int64 outputDataType = AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_P;
+        const wchar_t* outputTypeProp = ctx->hevcMode ? AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE : AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE;
+        buffer->GetProperty(outputTypeProp, &outputDataType);
         
-        if (outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_IDR ||
-            outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_I)
+        if (outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR ||
+            outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I)
         {
             pkt.flags |= AV_PKT_FLAG_KEY;
         }
@@ -491,10 +536,13 @@ int CR_ShutdownEncoder(CREncoderHandle encoder)
             AVPacket pkt{};
             av_init_packet(&pkt);
             
-            amf_int64 outputDataType = AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_P;
-            buffer->GetProperty(AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE, &outputDataType);
-            if (outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_IDR ||
-                outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_I)
+            // Use correct output data type property based on codec
+            amf_int64 outputDataType = AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_P;
+            const wchar_t* outputTypeProp = ctx->hevcMode ? AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE : AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE;
+            buffer->GetProperty(outputTypeProp, &outputDataType);
+            
+            if (outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR ||
+                outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I)
             {
                 pkt.flags |= AV_PKT_FLAG_KEY;
             }
