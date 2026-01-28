@@ -63,6 +63,21 @@ namespace CinematicRecorder.Capture
             }
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AmfEncoderSettings
+        {
+            public int RateControlMode;      // 0=CQP, 1=VBR, 2=CBR
+            public int TargetBitrateKbps;    // Kilobits per second (for VBR/CBR)
+            public int QpI;                  // QP for I-frames (CQP mode)
+            public int QpP;                  // QP for P-frames  
+            public int QpB;                  // QP for B-frames
+            public int QualityPreset;        // 0=Speed, 1=Balanced, 2=Quality
+            public int Codec;                // 0=H264, 1=HEVC (for future expansion)
+            public int GopSize;              // Keyframe interval in frames
+            public int Reserved1;            // Padding for alignment/future use
+            public int Reserved2;            // Padding for alignment/future use
+        }
+
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool SetDllDirectory(string lpPathName);
 
@@ -90,7 +105,8 @@ namespace CinematicRecorder.Capture
             int width,
             int height,
             int fps,
-            [MarshalAs(UnmanagedType.LPStr)] string outputPath);
+            [MarshalAs(UnmanagedType.LPStr)] string outputPath,
+            ref AmfEncoderSettings settings);
 
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern int CR_EncodeFrame(
@@ -130,7 +146,13 @@ namespace CinematicRecorder.Capture
         }
 
         // Maintains backward compatibility: extracts device from texture internally
-        public bool Initialize(int width, int height, int fps, string outputPath, IntPtr d3d11TexturePtr)
+        public bool Initialize(
+            int width,
+            int height,
+            int fps,
+            string outputPath,
+            IntPtr d3d11TexturePtr,
+            AmfEncoderSettings settings)  // <-- Added parameter
         {
             if (_isInitialized)
                 return true;
@@ -141,13 +163,20 @@ namespace CinematicRecorder.Capture
                 return false;
             }
 
-            Debug.Log($"[AmfZeroCopyEncoder] Initializing: {width}x{height}@{fps}, tex=0x{d3d11TexturePtr.ToInt64():X}, path={outputPath}");
+            Debug.Log($"[AmfZeroCopyEncoder] Initializing: {width}x{height}@{fps}, " +
+                $"RC={settings.RateControlMode}, Bitrate={settings.TargetBitrateKbps}kbps, " +
+                $"QP={settings.QpI}, Preset={settings.QualityPreset}");
 
             try
             {
-                // This will extract the device from the texture and store it globally in C++
-                // Subsequent calls can use CR_InitEncoder (without device) if desired
-                _encoderHandle = CR_InitEncoderFromTexture(d3d11TexturePtr, width, height, fps, outputPath);
+                // Pass settings by ref to native code
+                _encoderHandle = CR_InitEncoderFromTexture(
+                    d3d11TexturePtr,
+                    width,
+                    height,
+                    fps,
+                    outputPath,
+                    ref settings);  // <-- Pass settings here
 
                 if (_encoderHandle == IntPtr.Zero)
                 {
@@ -157,7 +186,7 @@ namespace CinematicRecorder.Capture
                 }
 
                 _isInitialized = true;
-                Debug.Log($"[AmfZeroCopyEncoder] Initialized successfully");
+                Debug.Log($"[AmfZeroCopyEncoder] Initialized successfully with custom AMF settings");
                 return true;
             }
             catch (SEHException ex)
