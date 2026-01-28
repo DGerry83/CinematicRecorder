@@ -152,3 +152,14 @@ This repository contains the C# Kerbal Space Program plugin and the C++ native e
 ```batch
 cd NativePlugin
 build_release.bat
+```
+
+## License
+
+Cinematic Recorder is licensed under the **GNU General Public License v3.0**.
+
+This project redistributes FFmpeg binaries and links against FFmpeg at runtime.
+As such, it is distributed under GPLv3 to ensure full compliance.
+
+You are free to use, modify, and redistribute this software under the terms
+of the GPLv3. See the [LICENSE](LICENSE) file for full details.
