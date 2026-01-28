@@ -22,11 +22,11 @@ namespace CinematicRecorder.Core
         public static float PlaybackSpeed { get; internal set; }
 
         public static void Run(
-            int simulationFps,
-            int playbackFps,
-            float durationSeconds,
-            bool forceSoftwareEncoding)
-
+           int simulationFps,
+           int playbackFps,
+           float durationSeconds,
+           bool forceSoftwareEncoding,
+           bool useGpuZeroCopy = false)  // NEW PARAMETER
         {
             if (IsRunning)
                 return;
@@ -64,14 +64,15 @@ namespace CinematicRecorder.Core
                 Path.Combine(outputDir, $"Cinematic_{System.DateTime.Now:yyyy-MM-dd_HH-mm-ss}.mkv");
 
             var controller = new OfflineCaptureController(
-                cam,
-                width,
-                height,
-                simulationFps,
-                playbackFps,
-                durationSeconds,
-                outputFile,
-                forceSoftwareEncoding);
+                            cam,
+                            width,
+                            height,
+                            simulationFps,
+                            playbackFps,
+                            durationSeconds,
+                            outputFile,
+                            forceSoftwareEncoding,
+                            useGpuZeroCopy);
 
             var runner = new GameObject("DeterministicCaptureRunner");
             UnityEngine.Object.DontDestroyOnLoad(runner);

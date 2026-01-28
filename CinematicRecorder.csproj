@@ -48,6 +48,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Capture\AmfZeroCopyEncoder.cs" />
     <Compile Include="Capture\CaptureRunner.cs" />
     <Compile Include="Capture\FrameCapture.cs" />
     <Compile Include="Capture\HardwareEncoder.cs" />

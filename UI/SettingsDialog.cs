@@ -17,6 +17,7 @@ namespace CinematicRecorder.UI
 
         // Toggles and settings
         private bool forceSoftwareEncoding = false;
+        private bool useGpuZeroCopy = false;
 
         // Default Settings
         private readonly int[] frameratePresets = { 24, 30, 60, 120, 240 };
@@ -113,6 +114,12 @@ namespace CinematicRecorder.UI
 
             // SAFE MODE TOGGLE
             forceSoftwareEncoding = GUILayout.Toggle(forceSoftwareEncoding, " Force Software Encoding (Safe Mode)", HighLogic.Skin.toggle);
+            GUILayout.Space(10);
+
+            // GPU ZERO COPY TOGGLE
+            GUI.enabled = !forceSoftwareEncoding; // Disable if forcing software
+            useGpuZeroCopy = GUILayout.Toggle(useGpuZeroCopy, " GPU Zero Copy (AMF Native)", HighLogic.Skin.toggle);
+            GUI.enabled = true;
             GUILayout.Space(10);
 
             // DURATION
@@ -220,11 +227,15 @@ namespace CinematicRecorder.UI
                 durationSeconds = 10f;
             }
 
+            // Validate: can't use zero copy with software encoding
+            bool gpuZeroCopy = useGpuZeroCopy && !forceSoftwareEncoding;
+
             DeterministicCaptureSession.Run(
                 simFps,
                 playbackFps,
                 durationSeconds,
-                forceSoftwareEncoding);
+                forceSoftwareEncoding,
+                gpuZeroCopy);
         }
     }
 }
