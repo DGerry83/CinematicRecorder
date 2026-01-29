@@ -1,5 +1,4 @@
-﻿// File: Capture/OfflineCaptureController.cs
-using System;
+﻿using System;
 using System.Collections;
 using System.IO;
 using UnityEngine.Rendering;
@@ -14,9 +13,7 @@ namespace CinematicRecorder.Capture
         private readonly Camera camera;
         private readonly int width;
         private readonly int height;
-        private readonly int simulationFps;
         private readonly int playbackFps;
-        private int totalFrames; // Not readonly anymore - can be extended
         private readonly string outputPath;
         private readonly bool useGpuZeroCopy;
         private AmfZeroCopyEncoder zeroCopyEncoder;
@@ -27,7 +24,11 @@ namespace CinematicRecorder.Capture
         private const int SimSpeedWindowFrames = 5;
         private int framesSinceSpeedSample = 0;
         private float realTimeAtLastSample;
-        private float simFrameDelta;
+
+        // NEW: Dynamic simulation state
+        private float simFrameDelta;  // Current physics step size, updated each frame
+        private int frameIndex;       // Sequential counter for encoder (0, 1, 2...)
+        private float startTime;
 
         private RenderTexture[] renderTextures; // Double-buffered: [0] and [1]
         private Texture2D readbackTexture;
@@ -36,7 +37,6 @@ namespace CinematicRecorder.Capture
 
         // Track actual frames captured for final report
         private int actualCapturedFrames = 0;
-        private float startTime;
         public string OutputPath => outputPath;
 
         public OfflineCaptureController(
@@ -53,9 +53,8 @@ namespace CinematicRecorder.Capture
             this.camera = camera;
             this.width = width;
             this.height = height;
-            this.simulationFps = simulationFps;
+            // Store original for reference, but we use dynamic calculation now
             this.playbackFps = playbackFps;
-            this.totalFrames = Mathf.RoundToInt(durationSeconds * simulationFps);
             this.outputPath = outputPath;
             this.useGpuZeroCopy = useGpuZeroCopy;
 
@@ -75,10 +74,10 @@ namespace CinematicRecorder.Capture
 
             try
             {
-                // Phase 1: Setup (physics ramp will go here later)
+                // Phase 1: Setup
                 yield return InitializeCaptureSession();
 
-                // Phase 2: Main capture loop
+                // Phase 2: Main capture loop (dynamic time scale)
                 yield return RunCaptureLoop();
 
                 // Phase 3: Drain encoder queues
@@ -92,66 +91,117 @@ namespace CinematicRecorder.Capture
 
         private IEnumerator InitializeCaptureSession()
         {
-            simFrameDelta = 1f / simulationFps;
             startTime = Time.realtimeSinceStartup;
             actualCapturedFrames = 0;
+            frameIndex = 0;
 
-            // Physics setup (ramp will replace these 3 lines later)
-            TimeWarp_FixedDeltaTime_Patch.OverrideValue = simFrameDelta;
+            // Enable override IMMEDIATELY so we can go below 0.02s
             TimeWarp_FixedDeltaTime_Patch.IsOverridden = true;
-            Time.fixedDeltaTime = simFrameDelta;
-            Time.maximumDeltaTime = simFrameDelta;
-            Time.captureFramerate = simulationFps;
-            Planetarium.fetch.fixedDeltaTime = simFrameDelta;
+
+            // RAMP IN: Linear ramp from current physics step to target
+            float currentDelta = Time.fixedDeltaTime;
+            float targetSimFps = DeterministicCaptureSession.GetCurrentSimulationFps();
+            float targetDelta = 1f / targetSimFps;
+
+            const float LINEAR_STEP = 0.001f; // 1ms per frame step
+
+            // Ramp if we're far enough from target
+            while (Mathf.Abs(currentDelta - targetDelta) > LINEAR_STEP)
+            {
+                if (currentDelta > targetDelta)
+                    currentDelta -= LINEAR_STEP;
+                else
+                    currentDelta += LINEAR_STEP; // Shouldn't happen normally but handle it
+
+                // Update patch AND Unity every frame during ramp
+                TimeWarp_FixedDeltaTime_Patch.OverrideValue = currentDelta;
+                Time.fixedDeltaTime = currentDelta;
+                Time.maximumDeltaTime = currentDelta;
+                Planetarium.fetch.fixedDeltaTime = currentDelta;
+
+                yield return null; // One frame per step
+            }
+
+            // Final snap to exact target
+            simFrameDelta = targetDelta;
+            TimeWarp_FixedDeltaTime_Patch.OverrideValue = targetDelta;
+            Time.fixedDeltaTime = targetDelta;
+            Time.maximumDeltaTime = targetDelta;
+            Time.captureFramerate = Mathf.RoundToInt(targetSimFps);
+            Planetarium.fetch.fixedDeltaTime = targetDelta;
             Planetarium.TimeScale = 1.0;
 
             SetupRenderTargets();
             SetupEncoder();
 
             DeterministicCaptureSession.CaptureFPS = 0f;
+            realTimeAtLastSample = Time.realtimeSinceStartup;
 
             yield break;
         }
 
         private IEnumerator RunCaptureLoop()
         {
-            float realTimeAtLastSample = Time.realtimeSinceStartup;
-            int framesSinceSpeedSample = 0;
-            int currentTotalFrames = totalFrames; // Snap current target (handles extension)
+            framesSinceSpeedSample = 0;
+            // NEW: Check unlimited mode for loop condition
+            bool isUnlimited = DeterministicCaptureSession.IsUnlimitedMode;
 
-            for (int i = 0; i < currentTotalFrames; i++)
+            // MODIFIED: While-loop supports both unlimited and limited modes
+            while (true)
             {
+                // Check stop request first (works for both modes)
                 if (DeterministicCaptureSession.StopRequested)
                 {
                     UnityEngine.Debug.Log("[OfflineCapture] Stop requested, finishing up...");
                     break;
                 }
 
-                // Handle duration extension mid-recording
-                if (totalFrames != currentTotalFrames)
+                // MODIFIED: For limited mode, check if we've reached target duration
+                if (!isUnlimited && DeterministicCaptureSession.AccumulatedSimulatedSeconds > DeterministicCaptureSession.TargetSeconds + 0.0001f)
+                    break;
+
+                // NEW: Step 1 - Update time scale ramping (smooth transitions)
+                DeterministicCaptureSession.UpdateTimeScale();
+
+                // NEW: Step 2 - Calculate current simulation FPS based on time scale
+                float currentSimFps = DeterministicCaptureSession.GetCurrentSimulationFps();
+
+                // NEW: Step 3 - Update physics timestep for THIS frame
+                simFrameDelta = 1f / currentSimFps;
+                Time.fixedDeltaTime = simFrameDelta;
+                Time.maximumDeltaTime = simFrameDelta;
+                Time.captureFramerate = Mathf.RoundToInt(currentSimFps);
+                TimeWarp_FixedDeltaTime_Patch.OverrideValue = simFrameDelta;
+                Planetarium.fetch.fixedDeltaTime = simFrameDelta;
+
+                // NEW: Safety clamp to prevent infinite loops or divide-by-zero
+                if (simFrameDelta < 0.0001f)
                 {
-                    currentTotalFrames = DeterministicCaptureSession.TargetFrames;
+                    UnityEngine.Debug.LogError("[OfflineCapture] Sim frame delta too small, clamping to 0.0001s");
+                    simFrameDelta = 0.0001f;
                 }
 
-                // Capture frame based on path
+                // Step 4 - Capture frame with sequential index
                 if (usingZeroCopyPath)
                 {
-                    yield return CaptureFrameZeroCopy(i);
+                    yield return CaptureFrameZeroCopy(frameIndex);
                 }
                 else
                 {
                     yield return CaptureFrameStandard();
                 }
 
-                // Update progress
-                float currentSimSeconds = actualCapturedFrames * simFrameDelta;
+                // NEW: Step 5 - Increment accumulated simulated time
+                DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
+
+                // Step 6 - Update progress (using accumulated time for seconds)
                 DeterministicCaptureSession.UpdateProgress(
                     actualCapturedFrames,
-                    currentSimSeconds,
+                    DeterministicCaptureSession.AccumulatedSimulatedSeconds,
                     DeterministicCaptureSession.CaptureFPS
                 );
 
-                // Rolling FPS calculation
+                // Rolling FPS calculation (real-world performance metric)
                 framesSinceSpeedSample++;
                 if (framesSinceSpeedSample >= SimSpeedWindowFrames)
                 {
@@ -162,6 +212,9 @@ namespace CinematicRecorder.Capture
                     realTimeAtLastSample = realNow;
                     framesSinceSpeedSample = 0;
                 }
+
+                // Step 7 - Sequential frame index for next iteration
+                frameIndex++;
             }
         }
 
@@ -217,7 +270,8 @@ namespace CinematicRecorder.Capture
                 zeroCopyEncoder.EncodeFrame(lastTexPtr, actualCapturedFrames - 1);
             }
 
-            UnityEngine.Debug.Log($"[OfflineCapture] Deterministic capture complete. Captured {actualCapturedFrames} frames.");
+            UnityEngine.Debug.Log($"[OfflineCapture] Deterministic capture complete. Captured {actualCapturedFrames} frames " +
+                $"({DeterministicCaptureSession.AccumulatedSimulatedSeconds:F2}s simulated)");
             yield break;
         }
 
@@ -293,7 +347,8 @@ namespace CinematicRecorder.Capture
                     QpB = SessionState.AmfCqpValue + 4,
                     QualityPreset = SessionState.AmfEncoderSpeed,
                     Codec = 1,  // 0=H264, 1=HEVC - using HEVC for zero-copy path
-                    GopSize = playbackFps * 2  // 2-second GOP matching HardwareEncoder
+                    GopSize = playbackFps * 2,  // 2-second GOP matching HardwareEncoder
+                    EnableVbaq = 1, // VBAQ ON/OFF for helping skies look better
                 };
 
                 if (!zeroCopyEncoder.Initialize(
@@ -384,7 +439,7 @@ namespace CinematicRecorder.Capture
             {
                 DeterministicCaptureSession.UpdateProgress(
                     actualCapturedFrames,
-                    actualCapturedFrames * simFrameDelta,
+                    DeterministicCaptureSession.AccumulatedSimulatedSeconds,
                     0f
                 );
             }

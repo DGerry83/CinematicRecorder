@@ -106,7 +106,7 @@ static bool InitializeFFmpegMuxer(EncoderContext* ctx, const char* outputPath)
     par->width      = ctx->width;
     par->height     = ctx->height;
     par->format     = AV_PIX_FMT_YUV420P;
-    par->color_range     = AVCOL_RANGE_JPEG;
+    par->color_range = AVCOL_RANGE_MPEG;
     par->color_primaries = AVCOL_PRI_BT709;
     par->color_trc       = AVCOL_TRC_IEC61966_2_1;
     par->color_space     = AVCOL_SPC_BT709;
@@ -304,14 +304,30 @@ CREncoderHandle CR_InitEncoder(
             ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_QP_I, settings->QpI);
             ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_QP_P, settings->QpP);
         }
-        else if (settings->RateControlMode == 1) // VBR
+        else if (settings->RateControlMode == 1) // HQVBR (High Quality VBR)
         {
             ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD, 
-                AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_PEAK_CONSTRAINED_VBR);
+                AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_HIGH_QUALITY_VBR);
             ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE, 
                 settings->TargetBitrateKbps * 1000);
             ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_VBV_BUFFER_SIZE, 
-                settings->TargetBitrateKbps * 1000); // 1 second buffer
+                settings->TargetBitrateKbps * 1000);
+
+            // Allow encoder to go as low as QP 2 for smooth gradients
+            ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_MIN_QP_I, 2);
+            ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_MIN_QP_P, 2);
+
+            ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_PREENCODE_ENABLE, true); //Pre-Encode required for HQVBR
+            
+            
+            // VBAQ works with HQVBR (unlike CQP) - redistributes bits to protect smooth gradients
+            if (settings->EnableVbaq)
+            {
+                res = ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_ENABLE_VBAQ, true);
+                if (res == AMF_OK) {
+                    OutputDebugStringA("[CinematicRecorder] HQVBR + VBAQ enabled\n");
+                }
+            }
         }
         else // CBR (2 or default)
         {
@@ -573,9 +589,53 @@ int CR_EncodeFrame(
     // GPU copy Unity texture → encoder-owned texture
     ctx->context->CopyResource(ctx->d3dTextures[idx], unityTexture);
 
-    // Submit to AMF encoder
-    AMF_RESULT res = ctx->encoder->SubmitInput(ctx->amfSurfaces[idx]);
-    if (res != AMF_OK && res != AMF_INPUT_FULL)
+ // Submit to AMF encoder - handle INPUT_FULL by draining until accepted
+    AMF_RESULT res;
+    do {
+        res = ctx->encoder->SubmitInput(ctx->amfSurfaces[idx]);
+        if (res == AMF_INPUT_FULL) {
+            // Queue full - must drain an output frame before retrying
+            amf::AMFDataPtr data;
+            if (ctx->encoder->QueryOutput(&data) == AMF_OK && data) {
+                // Process frame immediately to free the slot
+                amf::AMFBufferPtr buffer(data);
+                AVPacket pkt{};
+                av_init_packet(&pkt);
+                
+                amf_int64 outputDataType;
+                const wchar_t* outputTypeProp = ctx->hevcMode ? 
+                    AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE : 
+                    AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE;
+                buffer->GetProperty(outputTypeProp, &outputDataType);
+                
+                if (ctx->hevcMode) {
+                    if (outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR ||
+                        outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I)
+                        pkt.flags |= AV_PKT_FLAG_KEY;
+                } else {
+                    if (outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_IDR ||
+                        outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_I)
+                        pkt.flags |= AV_PKT_FLAG_KEY;
+                }
+
+                pkt.data = (uint8_t*)buffer->GetNative();
+                pkt.size = (int)buffer->GetSize();
+                pkt.pts = ctx->frameCount;
+                pkt.dts = ctx->frameCount;
+                pkt.duration = 1;
+                pkt.stream_index = ctx->videoStream->index;
+                av_packet_rescale_ts(&pkt, ctx->timeBase, ctx->videoStream->time_base);
+
+                {
+                    std::lock_guard<std::mutex> lock(ctx->writeMutex);
+                    av_interleaved_write_frame(ctx->formatContext, &pkt);
+                }
+                ctx->frameCount++;
+            }
+        }
+    } while (res == AMF_INPUT_FULL);
+
+    if (res != AMF_OK)
     {
         SetError("AMF SubmitInput failed");
         return -1;

@@ -18,6 +18,7 @@ namespace CinematicRecorder.UI
         private float realWorldCaptureTime;
         private string encodingModeUsed;
         private string outputFilePath;
+        private bool wasUnlimitedRecording; // NEW: Track if this was an unlimited recording
 
         public bool IsVisible => shouldShow;
 
@@ -33,13 +34,15 @@ namespace CinematicRecorder.UI
             hasInitStyles = true;
         }
 
+        // NEW: Added unlimited parameter
         public void ShowReport(
             int frames,
             float simSeconds,
             float outDuration,
             float realTimeSeconds,
             string encodingMode,
-            string filePath)
+            string filePath,
+            bool unlimited = false)
         {
             capturedFrames = frames;
             simulatedSeconds = simSeconds;
@@ -47,12 +50,13 @@ namespace CinematicRecorder.UI
             realWorldCaptureTime = realTimeSeconds;
             encodingModeUsed = encodingMode;
             outputFilePath = filePath;
+            wasUnlimitedRecording = unlimited;
 
             shouldShow = true;
 
             Debug.Log($"[CinematicRecorder] Final Report - Frames: {frames}, " +
                      $"SimTime: {simSeconds:F1}s, RealTime: {realTimeSeconds:F1}s, " +
-                     $"Mode: {encodingMode}, File: {filePath}");
+                     $"Mode: {encodingMode}, Unlimited: {unlimited}, File: {filePath}");
         }
 
         public void HideReport()
@@ -91,8 +95,9 @@ namespace CinematicRecorder.UI
             GUILayout.Label($"{simulatedSeconds:F2} sec", GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
+            // MODIFIED: Indicate if this was an unlimited recording
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Output Duration:", GUILayout.Width(130));
+            GUILayout.Label(wasUnlimitedRecording ? "Output Duration (Unlimited):" : "Output Duration:", GUILayout.Width(130));
             GUILayout.Label($"{outputDuration:F2} sec", GUILayout.Width(100));
             GUILayout.EndHorizontal();
 

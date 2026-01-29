@@ -74,8 +74,8 @@ namespace CinematicRecorder.Capture
             public int QualityPreset;        // 0=Speed, 1=Balanced, 2=Quality
             public int Codec;                // 0=H264, 1=HEVC (for future expansion)
             public int GopSize;              // Keyframe interval in frames
-            public int Reserved1;            // Padding for alignment/future use
-            public int Reserved2;            // Padding for alignment/future use
+            public int EnableVbaq;           // For banding in skies 0-1 toggle
+            public int FullRangeColor;       // For deep blacks (0-255 vs 16-235) 0-1 toggle
         }
 
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]

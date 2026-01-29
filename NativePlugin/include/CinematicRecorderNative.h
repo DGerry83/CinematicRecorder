@@ -19,8 +19,8 @@ typedef struct {
     int QualityPreset;        // 0=Speed, 1=Balanced, 2=Quality
     int Codec;                // 0=H264, 1=HEVC
     int GopSize;              // Keyframe interval in frames
-    int Reserved1;            // Padding for alignment/future use
-    int Reserved2;            // Padding for alignment/future use
+    int EnableVbaq;           // 0=Off, 1=On (Variance-Based Adaptive Quantization)
+    int Reserved2;            // Reserved
 } AmfEncoderSettings;
 
 // NEW: Set the Unity D3D11 device once (optional, can also use InitFromTexture)

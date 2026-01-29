@@ -16,6 +16,7 @@ namespace CinematicRecorder.Core
 
         private ApplicationLauncherButton toolbarButton;
         private SettingsDialog settingsDialog;
+        private RecordingControlsWindow recordingControlsWindow;
         private Texture2D toolbarIcon;
 
         void Awake()
@@ -89,6 +90,16 @@ namespace CinematicRecorder.Core
 
             if (toolbarButton != null)
                 ApplicationLauncher.Instance.RemoveModApplication(toolbarButton);
+
+            // Cleanup windows
+            if (settingsDialog != null)
+            {
+                settingsDialog.OnDialogDismissed -= OnDialogClosed;
+                if (settingsDialog.gameObject != null)
+                    Destroy(settingsDialog.gameObject);
+            }
+            if (recordingControlsWindow != null && recordingControlsWindow.gameObject != null)
+                Destroy(recordingControlsWindow.gameObject);
         }
 
         private void OnGUIApplicationLauncherReady()
@@ -116,30 +127,48 @@ namespace CinematicRecorder.Core
 
         private void OnToolbarButtonOn()
         {
-            // Button pressed to turn ON
+            // Button pressed to turn ON - show both windows
+
+            // Ensure SettingsDialog exists (DontDestroyOnLoad)
             if (settingsDialog == null)
             {
-                settingsDialog = gameObject.AddComponent<SettingsDialog>();
+                GameObject settingsGo = new GameObject("SettingsDialog");
+                DontDestroyOnLoad(settingsGo);
+                settingsDialog = settingsGo.AddComponent<SettingsDialog>();
+                // Position: (300, 60) - defined in SettingsDialog, but we can ensure it here if needed
                 settingsDialog.OnDialogDismissed += OnDialogClosed;
             }
             settingsDialog.Show();
+
+            // Ensure RecordingControlsWindow exists (DontDestroyOnLoad)
+            if (recordingControlsWindow == null)
+            {
+                GameObject controlsGo = new GameObject("RecordingControlsWindow");
+                DontDestroyOnLoad(controlsGo);
+                recordingControlsWindow = controlsGo.AddComponent<RecordingControlsWindow>();
+                // Position: (300, 480) - defined in RecordingControlsWindow
+            }
+            recordingControlsWindow.Show();
         }
 
         private void OnToolbarButtonOff()
         {
-            // Button pressed to turn OFF
+            // Button pressed to turn OFF - hide both windows
             if (settingsDialog != null)
             {
                 settingsDialog.Hide();
+            }
+            if (recordingControlsWindow != null)
+            {
+                recordingControlsWindow.Hide();
             }
         }
 
         // Called when dialog closes via escape or other means
         private void OnDialogClosed()
         {
-            // Unstick the toolbar button
             if (toolbarButton != null)
-                toolbarButton.SetFalse();
+                toolbarButton.SetFalse(false); 
         }
     }
 }

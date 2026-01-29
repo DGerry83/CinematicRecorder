@@ -14,6 +14,7 @@ namespace CinematicRecorder.UI
 
         private GUIStyle windowStyle;
         private bool stylesInitialized;
+        public bool IsVisible => renderDisplay;
 
         public event Action OnDialogDismissed;
 
@@ -84,33 +85,74 @@ namespace CinematicRecorder.UI
 
         private void DrawStatusSection()
         {
+            if (stopRequested && !DeterministicCaptureSession.IsRunning)
+            {
+                stopRequested = false;
+            }
+
             if (DeterministicCaptureSession.IsRunning && !stopRequested)
             {
+                // Check for unlimited mode
+                bool unlimited = DeterministicCaptureSession.IsUnlimitedMode;
+
                 GUIStyle style = new GUIStyle(HighLogic.Skin.label);
                 style.normal.textColor = Color.yellow;
                 style.fontStyle = FontStyle.Bold;
 
-                GUILayout.Label("● RECORDING", style);
+                if (unlimited)
+                {
+                    GUILayout.Label("● UNLIMITED RECORDING", style);
 
-                // Time progress
-                GUILayout.Label(
-                    $"{DeterministicCaptureSession.CapturedSeconds:F1}s / " +
-                    $"{DeterministicCaptureSession.TargetSeconds:F1}s");
+                    // Time progress - elapsed only
+                    GUILayout.Label($"{DeterministicCaptureSession.AccumulatedSimulatedSeconds:F1}s elapsed");
 
-                // Frame progress
-                GUILayout.Label(
-                    $"{DeterministicCaptureSession.CapturedFrames:N0} / " +
-                    $"{DeterministicCaptureSession.TargetFrames:N0} frames");
+                    // Frame progress - captured only
+                    GUILayout.Label($"{DeterministicCaptureSession.CapturedFrames:N0} frames");
 
-                // Calculate and display FPS + Time remaining
-                float fps = DeterministicCaptureSession.CaptureFPS;
-                int framesRemaining = DeterministicCaptureSession.TargetFrames -
-                    DeterministicCaptureSession.CapturedFrames;
-                float secondsRemaining = fps > 0.1f ? framesRemaining / fps : 0f;
-                TimeSpan remaining = TimeSpan.FromSeconds(secondsRemaining);
+                    float captureFps = DeterministicCaptureSession.CaptureFPS;
+                    float playbackFps = frameratePresets[SessionState.PlaybackFpsIndex];
+                    float ratio = playbackFps > 0.1f ? captureFps / playbackFps : 0f;
 
-                GUILayout.Label($"Capture Rate: {fps:F1} FPS");
-                GUILayout.Label($"Est. Remaining: {remaining:mm\\:ss}");
+                    GUIStyle fpsStyle = new GUIStyle(HighLogic.Skin.label);
+                    fpsStyle.fontStyle = FontStyle.Bold;
+
+                    // Apply gradient logic even for unlimited
+                    ApplyFpsColorGradient(fpsStyle, ratio);
+
+                    GUILayout.Label($"Capture Rate: {captureFps:F1} FPS", fpsStyle);
+                }
+                else
+                {
+                    GUILayout.Label("● RECORDING", style);
+
+                    // Time progress
+                    GUILayout.Label(
+                        $"{DeterministicCaptureSession.AccumulatedSimulatedSeconds:F1}s / " +
+                        $"{DeterministicCaptureSession.TargetSeconds:F1}s");
+
+                    // Frame progress
+                    GUILayout.Label(
+                        $"{DeterministicCaptureSession.CapturedFrames:N0} / " +
+                        $"{DeterministicCaptureSession.TargetFrames:N0} frames");
+
+                    // Calculate and display FPS + Time remaining
+                    float captureFps = DeterministicCaptureSession.CaptureFPS;
+                    int framesRemaining = DeterministicCaptureSession.TargetFrames -
+                        DeterministicCaptureSession.CapturedFrames;
+                    float secondsRemaining = captureFps > 0.1f ? framesRemaining / captureFps : 0f;
+                    TimeSpan remaining = TimeSpan.FromSeconds(secondsRemaining);
+
+                    float playbackFps = frameratePresets[SessionState.PlaybackFpsIndex];
+                    float ratio = playbackFps > 0.1f ? captureFps / playbackFps : 0f;
+
+                    GUIStyle fpsStyle = new GUIStyle(HighLogic.Skin.label);
+                    fpsStyle.fontStyle = FontStyle.Bold;
+
+                    ApplyFpsColorGradient(fpsStyle, ratio);
+
+                    GUILayout.Label($"Capture Rate: {captureFps:F1} FPS ({ratio * 100:F0}%)", fpsStyle);
+                    GUILayout.Label($"Est. Remaining: {remaining:mm\\:ss}");
+                }
             }
             else if (stopRequested)
             {
@@ -122,6 +164,54 @@ namespace CinematicRecorder.UI
             {
                 int fps = frameratePresets[SessionState.PlaybackFpsIndex];
                 GUILayout.Label($"Ready — {Screen.width}x{Screen.height} @ {fps} FPS");
+            }
+        }
+
+        // Helper method for consistent FPS coloring
+        private void ApplyFpsColorGradient(GUIStyle style, float ratio)
+        {
+            // Blood red for catastrophic/overnight encode scenarios (< 10% of target FPS)
+            if (ratio < 0.10f)
+            {
+                // Dark blood red (RGB: 0.5, 0, 0) - distinct from bright Color.red (1, 0, 0)
+                style.normal.textColor = new Color(0.5f, 0f, 0f);
+            }
+            else if (ratio < 0.30f) // 10% to 30%: Red to Orange (with bias)
+            {
+                float t = (ratio - 0.10f) / 0.20f;
+
+                // Power curve 0.5: rush from red to orange quickly
+                // At 15% (midpoint), you're already 70% toward orange (sqrt(0.5) ≈ 0.7)
+                t = Mathf.Pow(t, 0.5f);
+
+                style.normal.textColor = Color.Lerp(Color.red, new Color(1f, 0.5f, 0f), t);
+            }
+            else if (ratio < 0.60f) // 30% to 60%: Orange to Yellow (linger here)
+            {
+                float t = (ratio - 0.30f) / 0.30f;
+
+                // Power 2.0: Linger in orange, rush to yellow only at the end
+                t = Mathf.Pow(t, 2.0f);
+
+                style.normal.textColor = Color.Lerp(new Color(1f, 0.5f, 0f), Color.yellow, t);
+            }
+            else if (ratio < 0.95f) // 60% to 95%: Yellow to Green
+            {
+                float t = (ratio - 0.60f) / 0.35f;
+                style.normal.textColor = Color.Lerp(Color.yellow, Color.green, t);
+            }
+            else if (ratio <= 1.05f) // Sweet spot (95% - 105%)
+            {
+                style.normal.textColor = Color.green;
+            }
+            else if (ratio < 1.25f) // 105% - 125%: Green to Cyan
+            {
+                float t = (ratio - 1.05f) / 0.20f;
+                style.normal.textColor = Color.Lerp(Color.green, Color.cyan, t);
+            }
+            else // > 125%
+            {
+                style.normal.textColor = Color.cyan;
             }
         }
 
@@ -163,15 +253,20 @@ namespace CinematicRecorder.UI
             GUILayout.BeginHorizontal();
 
             if (GUILayout.Button("-5s", GUILayout.Width(50)))
-                SessionState.DurationSeconds = Mathf.Max(1f, SessionState.DurationSeconds - 5f);
+                SessionState.DurationSeconds = Mathf.Max(0f, SessionState.DurationSeconds - 5f); // MODIFIED: Allow 0
 
-            string text = GUILayout.TextField(
-                SessionState.DurationSeconds.ToString("0.0"),
-                GUILayout.Width(80));
+            // NEW: Display infinity symbol when duration is 0
+            string displayText;
+            if (SessionState.DurationSeconds <= 0)
+                displayText = "∞";
+            else
+                displayText = SessionState.DurationSeconds.ToString("0.0");
+
+            string text = GUILayout.TextField(displayText, GUILayout.Width(80));
 
             float parsed;
             if (float.TryParse(text, out parsed))
-                SessionState.DurationSeconds = Mathf.Clamp(parsed, 1f, 3600f);
+                SessionState.DurationSeconds = Mathf.Clamp(parsed, 0f, 3600f); // MODIFIED: Allow 0
 
             if (GUILayout.Button("+5s", GUILayout.Width(50)))
             {
