@@ -367,3 +367,4 @@ FodyWeavers.xsd
 /NativePlugin/ffmpeg
 /FolderList.txt
 /NativePlugin/build
+/dll_copy_config.txt
