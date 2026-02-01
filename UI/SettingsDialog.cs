@@ -7,10 +7,14 @@ namespace CinematicRecorder.UI
 {
     public class SettingsDialog : MonoBehaviour
     {
-        private Rect windowRect = new Rect(300, 60, 420, 500);
+        private Rect windowRect = new Rect(300, 60, 320, 500);
         private bool renderDisplay;
         private bool showEncodingSettings;
         private bool stopRequested;
+
+        //Window size cache
+        private float animWidth;
+        private float animHeight;
 
         private GUIStyle windowStyle;
         private bool stylesInitialized;
@@ -18,7 +22,9 @@ namespace CinematicRecorder.UI
 
         public event Action OnDialogDismissed;
 
-        private FinalReportWindow finalReportWindow;
+
+        private enum SettingsTab { Main, Advanced }
+        private SettingsTab currentTab = SettingsTab.Main;
 
         // Constants
         private readonly int[] frameratePresets = { 24, 30, 60, 120, 240 };
@@ -50,8 +56,16 @@ namespace CinematicRecorder.UI
         {
             if (!renderDisplay) return;
 
+            // Fixed width for both tabs - no more horizontal animation jitter
             float targetHeight = showEncodingSettings ? 620f : 440f;
+
+            // Gentle height animate for encoder expansion only (no width fighting)
             windowRect.height = Mathf.Lerp(windowRect.height, targetHeight, 0.25f);
+            // Snap height when close to avoid micro-lerp
+            if (Mathf.Abs(windowRect.height - targetHeight) < 0.5f) windowRect.height = targetHeight;
+
+            // Fixed width - no more horizontal fighting
+            windowRect.width = 420f;
 
             windowRect = GUILayout.Window(
                 12345,
@@ -61,15 +75,61 @@ namespace CinematicRecorder.UI
                 windowStyle);
         }
 
+        private float CalculateTargetHeight() => showEncodingSettings ? 620f : 360f;
+
+        private void AnimateDimensions(float targetW, float targetH)
+        {
+            // Slower lerp for symmetry (adjust 0.15f to taste)
+            animWidth = Mathf.Lerp(animWidth, targetW, 0.15f);
+            animHeight = Mathf.Lerp(animHeight, targetH, 0.15f);
+
+            // Snap to target when close to avoid micro-jitter
+            if (Mathf.Abs(animWidth - targetW) < 0.5f) animWidth = targetW;
+            if (Mathf.Abs(animHeight - targetH) < 0.5f) animHeight = targetH;
+        }
+
         private void DrawWindow(int id)
         {
             GUILayout.BeginVertical();
 
+            // Tab buttons row
+            GUILayout.BeginHorizontal();
+            GUIStyle tabStyle = new GUIStyle(HighLogic.Skin.button);
+            GUIStyle activeTabStyle = new GUIStyle(HighLogic.Skin.button);
+            activeTabStyle.normal.textColor = Color.green;
+            activeTabStyle.fontStyle = FontStyle.Bold;
+
+            if (GUILayout.Button("Main", currentTab == SettingsTab.Main ? activeTabStyle : tabStyle, GUILayout.Height(25)))
+                currentTab = SettingsTab.Main;
+
+            if (GUILayout.Button("Advanced", currentTab == SettingsTab.Advanced ? activeTabStyle : tabStyle, GUILayout.Height(25)))
+                currentTab = SettingsTab.Advanced;
+
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(10);
+
+            // Content based on selected tab
+            if (currentTab == SettingsTab.Main)
+            {
+                DrawMainTab();
+            }
+            else
+            {
+                DrawAdvancedTab();
+            }
+
+            GUILayout.EndVertical();
+            GUI.DragWindow();
+        }
+
+        private void DrawMainTab()
+        {
             DrawStatusSection();
             GUILayout.Space(10);
 
             DrawCaptureTimingSection();
-            GUILayout.Space(10);
+            GUILayout.Space(4);
 
             DrawDurationSection();
             GUILayout.Space(10);
@@ -78,9 +138,55 @@ namespace CinematicRecorder.UI
             GUILayout.Space(15);
 
             DrawRecordButton();
+        }
 
-            GUILayout.EndVertical();
-            GUI.DragWindow();
+        private void DrawAdvancedTab()
+        {
+            GUIStyle headerStyle = new GUIStyle(HighLogic.Skin.label);
+            headerStyle.fontStyle = FontStyle.Bold;
+            headerStyle.fontSize = 14;
+            GUILayout.Label("Advanced Options", headerStyle);
+            GUILayout.Space(20);
+
+            // Blue Noise Dithering - AMD Zero-Copy only
+            if (SessionState.SelectedEncoderTab == 0) // AMD selected
+            {
+                GUIStyle ditherStyle = new GUIStyle(HighLogic.Skin.toggle);
+                if (!SessionState.AmfUseBlueNoiseDither)
+                {
+                    ditherStyle.normal.textColor = Color.gray;
+                }
+
+                SessionState.AmfUseBlueNoiseDither = GUILayout.Toggle(
+                    SessionState.AmfUseBlueNoiseDither,
+                    " Blue Noise Dithering (AMD only)",
+                    ditherStyle
+                );
+
+                GUIStyle tooltipStyle = new GUIStyle(HighLogic.Skin.label);
+                tooltipStyle.fontSize = 11;
+                tooltipStyle.normal.textColor = Color.gray;
+                tooltipStyle.wordWrap = true;
+
+                if (SessionState.AmfUseBlueNoiseDither)
+                    GUILayout.Label("Reduces color banding in dark areas via GPU compute", tooltipStyle);
+                else
+                    GUILayout.Label("Uses fast GPU copy (may show banding in gradients)", tooltipStyle);
+            }
+            else
+            {
+                GUIStyle infoStyle = new GUIStyle(HighLogic.Skin.label);
+                infoStyle.normal.textColor = Color.gray;
+                infoStyle.wordWrap = true;
+                GUILayout.Label("Advanced options require AMD encoder to be selected.", infoStyle);
+            }
+
+            GUILayout.Space(20);
+
+            // Placeholder for future AO settings
+            GUIStyle placeholderStyle = new GUIStyle(HighLogic.Skin.label);
+            placeholderStyle.normal.textColor = Color.gray;
+            GUILayout.Label("(Post-processing effects will appear here)", placeholderStyle);
         }
 
         private void DrawStatusSection()
@@ -217,25 +323,35 @@ namespace CinematicRecorder.UI
 
         private void DrawCaptureTimingSection()
         {
+            GUILayout.BeginVertical();
+
+            // Capture FPS
             GUILayout.Label("Capture FPS", HighLogic.Skin.label);
-            DrawFpsSelector(
-                SessionState.SimFpsIndex,
-                v => SessionState.SimFpsIndex = v);
+            DrawFpsSelector(SessionState.SimFpsIndex, v => SessionState.SimFpsIndex = v);
 
-            GUILayout.Space(4);
+            GUILayout.Space(2);
 
-            SessionState.LockFps = GUILayout.Toggle(
-                SessionState.LockFps,
-                " Lock output FPS to capture FPS",
-                HighLogic.Skin.toggle);
-
-            GUILayout.Label("Playback FPS", HighLogic.Skin.label);
+            // Playback FPS label with Lock toggle on same line, closer to arrows
+            GUILayout.BeginHorizontal();
             GUI.enabled = !SessionState.LockFps;
+            GUILayout.Label("Playback FPS", HighLogic.Skin.label, GUILayout.Width(90));
+            GUI.enabled = true;
 
-            DrawFpsSelector(
-                SessionState.PlaybackFpsIndex,
-                v => SessionState.PlaybackFpsIndex = v);
+            // Green glowing style when active (mimicking radio button active state)
+            GUIStyle lockStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.LockFps)
+            {
+                lockStyle.normal.textColor = Color.green;
+                lockStyle.fontStyle = FontStyle.Bold;
+            }
 
+            // ExpandedWidth false keeps it tight to the text
+            SessionState.LockFps = GUILayout.Toggle(SessionState.LockFps, "Locked", lockStyle, GUILayout.Width(70), GUILayout.ExpandWidth(false));
+            GUILayout.EndHorizontal();
+
+            // Playback FPS selector (disable interaction when locked)
+            GUI.enabled = !SessionState.LockFps;
+            DrawFpsSelector(SessionState.PlaybackFpsIndex, v => SessionState.PlaybackFpsIndex = v);
             GUI.enabled = true;
 
             if (SessionState.LockFps)
@@ -244,6 +360,8 @@ namespace CinematicRecorder.UI
             float sim = frameratePresets[SessionState.SimFpsIndex];
             float play = frameratePresets[SessionState.PlaybackFpsIndex];
             GUILayout.Label($"Playback Speed: {(play / sim):0.##}×");
+
+            GUILayout.EndVertical();
         }
 
         private void DrawDurationSection()
@@ -369,6 +487,8 @@ namespace CinematicRecorder.UI
             }
 
             GUILayout.Space(10);
+
+            // REMOVED: Blue Noise Dithering section (moved to Advanced panel)
 
             // Speed preset (always visible)
             GUILayout.Label("Encoding Speed:", HighLogic.Skin.label);

@@ -341,14 +341,15 @@ namespace CinematicRecorder.Capture
                 var amfSettings = new AmfZeroCopyEncoder.AmfEncoderSettings
                 {
                     RateControlMode = SessionState.AmfRateControlMode,
-                    TargetBitrateKbps = SessionState.AmfTargetBitrate * 1000, // Convert Mbps to Kbps
+                    TargetBitrateKbps = SessionState.AmfTargetBitrate * 1000,
                     QpI = SessionState.AmfCqpValue,
-                    QpP = SessionState.AmfCqpValue + 2,  // Stagger like HardwareEncoder does
+                    QpP = SessionState.AmfCqpValue + 2,
                     QpB = SessionState.AmfCqpValue + 4,
                     QualityPreset = SessionState.AmfEncoderSpeed,
-                    Codec = 1,  // 0=H264, 1=HEVC - using HEVC for zero-copy path
-                    GopSize = playbackFps * 2,  // 2-second GOP matching HardwareEncoder
-                    EnableVbaq = 1, // VBAQ ON/OFF for helping skies look better
+                    Codec = 1,  // HEVC
+                    GopSize = playbackFps * 2,
+                    EnableVbaq = 1,
+                    UseBlueNoiseDither = SessionState.AmfUseBlueNoiseDither ? 1 : 0,  // NEW
                 };
 
                 if (!zeroCopyEncoder.Initialize(

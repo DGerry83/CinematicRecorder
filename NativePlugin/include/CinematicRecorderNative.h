@@ -20,7 +20,8 @@ typedef struct {
     int Codec;                // 0=H264, 1=HEVC
     int GopSize;              // Keyframe interval in frames
     int EnableVbaq;           // 0=Off, 1=On (Variance-Based Adaptive Quantization)
-    int Reserved2;            // Reserved
+    int UseBlueNoiseDither;   // NEW: 0 = CopyResource, 1 = Compute Dither
+    int Reserved2;            // Reserved (remains at end for padding/compatibility)
 } AmfEncoderSettings;
 
 // NEW: Set the Unity D3D11 device once (optional, can also use InitFromTexture)

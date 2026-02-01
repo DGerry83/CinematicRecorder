@@ -1,5 +1,4 @@
-﻿// File: HardwareEncoder.cs
-using FFmpeg.AutoGen;
+﻿using FFmpeg.AutoGen;
 using System;
 using System.Collections.Concurrent;
 using System.IO;

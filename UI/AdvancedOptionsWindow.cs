@@ -1,5 +1,4 @@
-﻿// File: UI/AdvancedOptionsWindow.cs
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace CinematicRecorder.UI
 {

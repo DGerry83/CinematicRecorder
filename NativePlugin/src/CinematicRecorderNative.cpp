@@ -1,4 +1,5 @@
 #include "CinematicRecorderNative.h"
+#include "EmbeddedResources.h"
 
 #include <string>
 #include <vector>
@@ -72,6 +73,15 @@ struct EncoderContext
     bool hevcMode = false;                  // true if using HEVC, false if H.264
     std::mutex writeMutex;
     AmfEncoderSettings settings;            // Store settings for reference
+    // NEW: Blue Noise Dithering Resources (Phase 3)
+    ID3D11ComputeShader* ditherShader = nullptr;
+    ID3D11Buffer*        constantBuffer = nullptr;
+    ID3D11Texture2D*     blueNoiseTexture = nullptr;
+    ID3D11ShaderResourceView* blueNoiseSRV = nullptr;
+    ID3D11UnorderedAccessView* encoderUAV[2] = {}; // UAVs for d3dTextures
+    
+    bool useBlueNoiseDither = false;
+    UINT frameCounter = 0;
 };
 
 // Forward declaration
@@ -106,7 +116,7 @@ static bool InitializeFFmpegMuxer(EncoderContext* ctx, const char* outputPath)
     par->width      = ctx->width;
     par->height     = ctx->height;
     par->format     = AV_PIX_FMT_YUV420P;
-    par->color_range = AVCOL_RANGE_MPEG;
+    par->color_range = AVCOL_RANGE_JPEG;
     par->color_primaries = AVCOL_PRI_BT709;
     par->color_trc       = AVCOL_TRC_IEC61966_2_1;
     par->color_space     = AVCOL_SPC_BT709;
@@ -140,6 +150,76 @@ static bool WriteHeader(EncoderContext* ctx)
 
     ctx->headerWritten = true;
     return true;
+}
+
+static bool CreateDitheringResources(EncoderContext* ctx) {
+    HRESULT hr;
+    D3D11_SUBRESOURCE_DATA initData = {};
+    
+    // 1. Create Compute Shader from embedded bytecode
+    hr = ctx->device->CreateComputeShader(
+        g_BlueNoiseDitherCS, 
+        sizeof(g_BlueNoiseDitherCS),
+        nullptr, 
+        &ctx->ditherShader
+    );
+    if (FAILED(hr)) {
+        OutputDebugStringA("[CR] Failed to create dither compute shader\n");
+        return false;
+    }
+
+    // 2. Create Constant Buffer (16 bytes: 4 uints)
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = 16; // width, height, frameIdx, flags
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    
+    hr = ctx->device->CreateBuffer(&cbDesc, nullptr, &ctx->constantBuffer);
+    if (FAILED(hr)) {
+        OutputDebugStringA("[CR] Failed to create constant buffer\n");
+        return false;
+    }
+
+    // 3. Blue Noise Texture (256x256 R8_UNORM)
+    D3D11_TEXTURE2D_DESC noiseDesc = {};
+    noiseDesc.Width = 256;
+    noiseDesc.Height = 256;
+    noiseDesc.MipLevels = 1;
+    noiseDesc.ArraySize = 1;
+    noiseDesc.Format = DXGI_FORMAT_R8_UNORM;
+    noiseDesc.SampleDesc.Count = 1;
+    noiseDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    noiseDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    
+    initData.pSysMem = g_BlueNoise256x256R8;
+    initData.SysMemPitch = 256; // 256 bytes per row
+    
+    hr = ctx->device->CreateTexture2D(&noiseDesc, &initData, &ctx->blueNoiseTexture);
+    if (FAILED(hr)) {
+        OutputDebugStringA("[CR] Failed to create blue noise texture\n");
+        return false;
+    }
+    
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    
+    hr = ctx->device->CreateShaderResourceView(ctx->blueNoiseTexture, &srvDesc, &ctx->blueNoiseSRV);
+    if (FAILED(hr)) return false;
+
+    return true;
+}
+
+static void DestroyDitheringResources(EncoderContext* ctx) {
+    for (int i = 0; i < 2; i++) {
+        if (ctx->encoderUAV[i]) { ctx->encoderUAV[i]->Release(); ctx->encoderUAV[i] = nullptr; }
+    }
+    if (ctx->blueNoiseSRV) { ctx->blueNoiseSRV->Release(); ctx->blueNoiseSRV = nullptr; }
+    if (ctx->blueNoiseTexture) { ctx->blueNoiseTexture->Release(); ctx->blueNoiseTexture = nullptr; }
+    if (ctx->constantBuffer) { ctx->constantBuffer->Release(); ctx->constantBuffer = nullptr; }
+    if (ctx->ditherShader) { ctx->ditherShader->Release(); ctx->ditherShader = nullptr; }
 }
 
 // NEW: Export to set Unity device once from C# (or use InitFromTexture)
@@ -467,7 +547,9 @@ CREncoderHandle CR_InitEncoder(
     desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | 
+                 D3D11_BIND_SHADER_RESOURCE | 
+                 D3D11_BIND_UNORDERED_ACCESS;  // Required for compute write
 
     for (int i = 0; i < 2; i++)
     {
@@ -486,6 +568,39 @@ CREncoderHandle CR_InitEncoder(
             SetError("CreateSurfaceFromDX11Native failed");
             delete ctx;
             return nullptr;
+        }
+    }
+
+    // Initialize Blue Noise dithering if requested
+    ctx->useBlueNoiseDither = (settings->UseBlueNoiseDither != 0);
+
+    if (ctx->useBlueNoiseDither) {
+        if (!CreateDitheringResources(ctx)) {
+            OutputDebugStringA("[CR] Blue Noise init failed, falling back to CopyResource\n");
+            ctx->useBlueNoiseDither = false;
+        } else {
+            // Create UAVs on the encoder textures for compute shader output
+            HRESULT hr;
+            for (int i = 0; i < 2; i++) {
+                D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+                uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+                uavDesc.Texture2D.MipSlice = 0;
+                
+                hr = ctx->device->CreateUnorderedAccessView(
+                    ctx->d3dTextures[i], &uavDesc, &ctx->encoderUAV[i]);
+                    
+                if (FAILED(hr)) {
+                    OutputDebugStringA("[CR] Failed to create encoder UAV\n");
+                    ctx->useBlueNoiseDither = false;
+                    DestroyDitheringResources(ctx);
+                    break;
+                }
+            }
+            
+            if (ctx->useBlueNoiseDither) {
+                OutputDebugStringA("[CR] Blue Noise dithering enabled\n");
+            }
         }
     }
 
@@ -587,7 +702,79 @@ int CR_EncodeFrame(
     ctx->bufferIndex = 1 - idx;
 
     // GPU copy Unity texture → encoder-owned texture
+    if (ctx->useBlueNoiseDither) {
+    // --- Path B: Blue Noise Compute Dither ---
+    
+    // 1. Update constant buffer (Resolution, FrameIndex, Flags)
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(ctx->context->Map(ctx->constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        struct DitherParams {
+            uint32_t width;
+            uint32_t height;
+            uint32_t frameIdx;
+            uint32_t flags;  // Bit 0 = BGRA swizzle
+        } params;
+        
+        params.width = ctx->width;
+        params.height = ctx->height;
+        params.frameIdx = ctx->frameCounter++;
+        // Detect BGRA from Unity texture descriptor
+        params.flags = (srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || 
+                       srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ? 1 : 0;
+        
+        memcpy(mapped.pData, &params, sizeof(params));
+        ctx->context->Unmap(ctx->constantBuffer, 0);
+    }
+    
+    // 2. Create temporary SRV for the incoming Unity texture
+    ID3D11ShaderResourceView* inputSRV = nullptr;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    // Match the format of the source, or use TYPELESS variant
+    srvDesc.Format = (srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || 
+                      srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) 
+                      ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB 
+                      : DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    
+    HRESULT hr = ctx->device->CreateShaderResourceView(unityTexture, &srvDesc, &inputSRV);
+    if (FAILED(hr)) {
+        // Fallback to copy if SRV creation fails
+        ctx->context->CopyResource(ctx->d3dTextures[idx], unityTexture);
+    } else {
+        // 3. Bind compute pipeline
+        ctx->context->CSSetShader(ctx->ditherShader, nullptr, 0);
+        ctx->context->CSSetConstantBuffers(0, 1, &ctx->constantBuffer);
+        
+        ID3D11ShaderResourceView* srvs[2] = { inputSRV, ctx->blueNoiseSRV };
+        ctx->context->CSSetShaderResources(0, 2, srvs);
+        
+        ID3D11UnorderedAccessView* uavs[1] = { ctx->encoderUAV[idx] };
+        ctx->context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+        
+        // 4. Dispatch (16x16 threads per group)
+        UINT dispatchX = (ctx->width + 15) / 16;
+        UINT dispatchY = (ctx->height + 15) / 16;
+        ctx->context->Dispatch(dispatchX, dispatchY, 1);
+        
+        // 5. CRITICAL: Unbind UAV so AMF can use texture as SRV/Input
+        ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+        ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+        
+        // Unbind SRVs and shader (clean state)
+        ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+        ctx->context->CSSetShaderResources(0, 2, nullSRVs);
+        ctx->context->CSSetShader(nullptr, nullptr, 0);
+        
+        // 6. Ensure GPU completes before AMF submits
+        ctx->context->Flush();
+        
+        inputSRV->Release();
+    }
+} else {
+    // --- Path A: Standard CopyResource ---
     ctx->context->CopyResource(ctx->d3dTextures[idx], unityTexture);
+}
 
  // Submit to AMF encoder - handle INPUT_FULL by draining until accepted
     AMF_RESULT res;
@@ -776,7 +963,9 @@ int CR_ShutdownEncoder(CREncoderHandle encoder)
             avio_closep(&ctx->formatContext->pb);
         avformat_free_context(ctx->formatContext);
     }
-
+    if (ctx->useBlueNoiseDither) {
+    DestroyDitheringResources(ctx);
+    }
     for (int i = 0; i < 2; i++)
     {
         if (ctx->amfSurfaces[i]) ctx->amfSurfaces[i] = nullptr;

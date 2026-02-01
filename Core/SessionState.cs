@@ -35,18 +35,20 @@ namespace CinematicRecorder.Core
         // ============================================================
 
         // Quality ↔ File Size slider (0–1)
-        public static float AmfQualitySlider { get; set; } = 0.7f;
+        public static float AmfQualitySlider { get; set; } = 0.5f;
 
         // 0 = CQP, 1 = VBR, 2 = CBR
-        public static int AmfRateControlMode { get; set; } = 1;
+        public static int AmfRateControlMode { get; set; } = 0;
 
         // Mbps (used for VBR / CBR)
         public static int AmfTargetBitrate { get; set; } = 80;
 
         // 0 = Speed, 1 = Balanced, 2 = Quality
-        public static int AmfEncoderSpeed { get; set; } = 1;
+        public static int AmfEncoderSpeed { get; set; } = 2;
 
         public static bool AmfShowAdvanced { get; set; } = false;
+
+        public static bool AmfUseBlueNoiseDither { get; set; } = true; // Default ON for quality
 
         // Derived QP (16–28, lower = better quality)
         public static int AmfCqpValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, AmfQualitySlider));
@@ -55,17 +57,17 @@ namespace CinematicRecorder.Core
         // NVENC (NVIDIA HEVC) SETTINGS
         // ============================================================
 
-        public static float NvencQualitySlider { get; set; } = 0.7f;
+        public static float NvencQualitySlider { get; set; } = 0.5f;
 
         // 0 = CQ, 1 = VBR, 2 = CBR
-        public static int NvencRateControlMode { get; set; } = 1;
+        public static int NvencRateControlMode { get; set; } = 0;
 
         // Mbps
         public static int NvencTargetBitrate { get; set; } = 80;
 
         // 0 = Speed, 1 = Balanced, 2 = Quality
         // (maps cleanly to NVENC presets internally)
-        public static int NvencPreset { get; set; } = 1;
+        public static int NvencPreset { get; set; } = 2;
 
         public static bool NvencShowAdvanced { get; set; } = false;
 
@@ -76,7 +78,7 @@ namespace CinematicRecorder.Core
         // CPU (x264) SETTINGS
         // ============================================================
 
-        public static float CpuQualitySlider { get; set; } = 0.7f;
+        public static float CpuQualitySlider { get; set; } = 0.5f;
 
         // 0 = CRF, 1 = VBR, 2 = CBR
         public static int CpuRateControlMode { get; set; } = 0;

@@ -127,20 +127,6 @@ namespace CinematicRecorder.UI
 
             // NEW: Speed Ramps foldout (moved from AdvancedOptionsWindow)
             DrawSpeedRampsFoldout();
-            GUILayout.Space(8);
-
-            // Advanced button - opens empty window for future use
-            if (GUILayout.Button("Advanced...", GUILayout.Height(25)))
-            {
-                var adv = FindObjectOfType<AdvancedOptionsWindow>();
-                if (adv == null)
-                {
-                    var go = new GameObject("AdvancedOptionsWindow");
-                    DontDestroyOnLoad(go);
-                    adv = go.AddComponent<AdvancedOptionsWindow>();
-                }
-                adv.Toggle();
-            }
 
             GUILayout.EndVertical();
             GUI.DragWindow();

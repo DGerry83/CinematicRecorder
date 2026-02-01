@@ -66,16 +66,17 @@ namespace CinematicRecorder.Capture
         [StructLayout(LayoutKind.Sequential)]
         public struct AmfEncoderSettings
         {
-            public int RateControlMode;      // 0=CQP, 1=VBR, 2=CBR
-            public int TargetBitrateKbps;    // Kilobits per second (for VBR/CBR)
-            public int QpI;                  // QP for I-frames (CQP mode)
-            public int QpP;                  // QP for P-frames  
-            public int QpB;                  // QP for B-frames
-            public int QualityPreset;        // 0=Speed, 1=Balanced, 2=Quality
-            public int Codec;                // 0=H264, 1=HEVC (for future expansion)
-            public int GopSize;              // Keyframe interval in frames
-            public int EnableVbaq;           // For banding in skies 0-1 toggle
-            public int FullRangeColor;       // For deep blacks (0-255 vs 16-235) 0-1 toggle
+            public int RateControlMode;
+            public int TargetBitrateKbps;
+            public int QpI;
+            public int QpP;
+            public int QpB;
+            public int QualityPreset;
+            public int Codec;
+            public int GopSize;
+            public int EnableVbaq;
+            public int UseBlueNoiseDither;   // NEW: 0 = disabled, 1 = enabled
+            public int Reserved2;
         }
 
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]

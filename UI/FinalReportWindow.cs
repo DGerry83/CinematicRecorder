@@ -1,5 +1,4 @@
-﻿// File: UI/FinalReportWindow.cs
-using System;
+﻿using System;
 using UnityEngine;
 
 namespace CinematicRecorder.UI
