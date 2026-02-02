@@ -1,7 +1,6 @@
 @echo off
 setlocal
 
-:: Create output directories
 if not exist build mkdir build
 if not exist build\intermediate mkdir build\intermediate
 
@@ -15,12 +14,14 @@ cl ^
   /O2 ^
   /DNDEBUG ^
   /Iinclude ^
+  /Invenc ^
   /Iamf ^
   /Iamf\public\include ^
   /Iamf\public\common ^
   /Iffmpeg\include ^
   /Fobuild\intermediate\ ^
   src\CinematicRecorderNative.cpp ^
+  src\NvencEncoder.cpp ^
   amf\public\common\AMFFactory.cpp ^
   amf\public\common\Thread.cpp ^
   amf\public\common\Windows\ThreadWindows.cpp ^
@@ -39,5 +40,4 @@ if errorlevel 1 (
 )
 
 echo Release build successful: build\CinematicRecorderNative.dll
-echo Intermediate files in: build\intermediate\
 endlocal
