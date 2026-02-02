@@ -52,6 +52,7 @@
     <Compile Include="Capture\CaptureRunner.cs" />
     <Compile Include="Capture\FrameCapture.cs" />
     <Compile Include="Capture\HardwareEncoder.cs" />
+    <Compile Include="Capture\NvencZeroCopyEncoder.cs" />
     <Compile Include="Capture\OfflineCaptureController.cs" />
     <Compile Include="Capture\OfflineFrameRenderer.cs" />
     <Compile Include="Core\CameraPanelConfig.cs" />

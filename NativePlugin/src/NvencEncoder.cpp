@@ -627,3 +627,93 @@ void NvencEncoder::Shutdown() {
     m_initialized = false;
     LogDebug("Shutdown complete");
 }
+
+// =============================================================================
+// C Exports for C# Interop (NVENC)
+// =============================================================================
+
+// Link to global error buffer defined in CinematicRecorderNative.cpp (AMF module)
+extern thread_local char g_errorBuffer[1024];
+
+extern "C" {
+
+__declspec(dllexport) void* CR_InitNvencEncoder(
+    ID3D11Device* unityDevice,
+    ID3D11Texture2D* textureHint,
+    int width,
+    int height,
+    int fps,
+    const char* outputPath,
+    const NvencEncoderSettings* settings)
+{
+    if (!settings) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Null settings pointer", _TRUNCATE);
+        return nullptr;
+    }
+    
+    NvencEncoder* encoder = new NvencEncoder();
+    if (!encoder->Initialize(unityDevice, textureHint, width, height, fps, outputPath, *settings)) {
+        strcpy_s(g_errorBuffer, sizeof(g_errorBuffer), encoder->GetError());
+        delete encoder;
+        return nullptr;
+    }
+    
+    return encoder;
+}
+
+__declspec(dllexport) void* CR_InitNvencEncoderFromTexture(
+    ID3D11Texture2D* texture,
+    int width,
+    int height,
+    int fps,
+    const char* outputPath,
+    const NvencEncoderSettings* settings)
+{
+    if (!texture) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Null D3D11 texture", _TRUNCATE);
+        return nullptr;
+    }
+    
+    ID3D11Device* device = nullptr;
+    texture->GetDevice(&device);
+    if (!device) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Failed to get device from texture", _TRUNCATE);
+        return nullptr;
+    }
+    
+    void* result = CR_InitNvencEncoder(device, texture, width, height, fps, outputPath, settings);
+    device->Release();
+    return result;
+}
+
+__declspec(dllexport) int CR_EncodeNvencFrame(
+    void* encoderHandle,
+    ID3D11Texture2D* texture,
+    long long frameIndex)
+{
+    if (!encoderHandle) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Null encoder handle", _TRUNCATE);
+        return -1;
+    }
+    
+    NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
+    if (!encoder->EncodeFrame(texture, frameIndex)) {
+        strcpy_s(g_errorBuffer, sizeof(g_errorBuffer), encoder->GetError());
+        return -1;
+    }
+    
+    return 0;
+}
+
+__declspec(dllexport) int CR_ShutdownNvencEncoder(void* encoderHandle)
+{
+    if (!encoderHandle)
+        return 0;
+        
+    NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
+    encoder->Shutdown();
+    delete encoder;
+    return 0;
+}
+
+} // extern "C"

@@ -19,6 +19,8 @@ namespace CinematicRecorder.Capture
         private AmfZeroCopyEncoder zeroCopyEncoder;
         private bool usingZeroCopyPath;
         private GraphicsFence prevFence;
+        private NvencZeroCopyEncoder nvencZeroCopyEncoder;
+        private bool usingNvencPath;
 
         // Sim speed tracking (rolling window)
         private const int SimSpeedWindowFrames = 5;
@@ -228,12 +230,22 @@ namespace CinematicRecorder.Capture
 
             yield return new WaitForEndOfFrame();
 
-            // Encode previous frame (frameIndex - 1) 
+            // Encode previous frame
             if (frameIndex > 0)
             {
                 Graphics.WaitOnAsyncGraphicsFence(prevFence);
                 IntPtr nativeTexPtr = renderTextures[encodeIdx].GetNativeTexturePtr();
-                zeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+
+                // Route to active zero-copy encoder
+                if (usingNvencPath && nvencZeroCopyEncoder != null)
+                {
+                    nvencZeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                }
+                else if (usingZeroCopyPath && zeroCopyEncoder != null) // AMF
+                {
+                    zeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                }
+
                 actualCapturedFrames++;
             }
 
@@ -329,56 +341,124 @@ namespace CinematicRecorder.Capture
 
         private void SetupEncoder()
         {
-            usingZeroCopyPath = useGpuZeroCopy;
-
-            if (usingZeroCopyPath)
+            if (!useGpuZeroCopy)
             {
-                IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();
-
-                zeroCopyEncoder = new AmfZeroCopyEncoder();
-
-                // Build AMF settings from SessionState
-                var amfSettings = new AmfZeroCopyEncoder.AmfEncoderSettings
-                {
-                    RateControlMode = SessionState.AmfRateControlMode,
-                    TargetBitrateKbps = SessionState.AmfTargetBitrate * 1000,
-                    QpI = SessionState.AmfCqpValue,
-                    QpP = SessionState.AmfCqpValue + 2,
-                    QpB = SessionState.AmfCqpValue + 4,
-                    QualityPreset = SessionState.AmfEncoderSpeed,
-                    Codec = 1,  // HEVC
-                    GopSize = playbackFps * 2,
-                    EnableVbaq = 1,
-                    UseBlueNoiseDither = SessionState.AmfUseBlueNoiseDither ? 1 : 0,  // NEW
-                };
-
-                if (!zeroCopyEncoder.Initialize(
-                    width,
-                    height,
-                    playbackFps,
-                    outputPath,
-                    firstTexturePtr,
-                    amfSettings))  // Pass the settings struct
-                {
-                    UnityEngine.Debug.LogError("[OfflineCapture] Zero-copy encoder failed to init, " +
-                        "falling back to standard hardware encoder");
-                    usingZeroCopyPath = false;
-                }
-                else
-                {
-                    UnityEngine.Debug.Log("[OfflineCapture] Using GPU Zero-Copy encoding path with " +
-                        $"RC={amfSettings.RateControlMode}, Bitrate={amfSettings.TargetBitrateKbps}kbps");
-
-                    if (camera != null)
-                        camera.targetTexture = null;
-
-                    return;
-                }
+                // CPU/Software path only
+                InitCpuEncoder();
+                return;
             }
 
-            // Standard path (existing behavior)
+            // GPU Zero-Copy Priority: NVENC -> AMF -> CPU
+
+            // Priority 1: NVENC (NVIDIA)
+            if (TryInitNvenc())
+            {
+                Debug.Log("[OfflineCapture] Using NVENC Zero-Copy path");
+                return;
+            }
+
+            // Priority 2: AMF (AMD) - existing fallback
+            if (TryInitAmf())
+            {
+                Debug.Log("[OfflineCapture] Using AMF Zero-Copy path");
+                return;
+            }
+
+            // Priority 3: Standard hardware encoder (FFmpeg fallback)
+            Debug.Log("[OfflineCapture] GPU zero-copy unavailable, attempting standard hardware encoder...");
+            if (encoder.Initialize(width, height, playbackFps, outputPath))
+            {
+                usingZeroCopyPath = false;
+                return;
+            }
+
+            // Final fallback: CPU
+            Debug.LogWarning("[OfflineCapture] All hardware encoders failed, falling back to CPU");
+            InitCpuEncoder();
+        }
+
+        private bool TryInitNvenc()
+        {
+            // Quick check: Only try NVENC if we have a chance (avoid log spam on AMD systems)
+            // This checks for nvEncodeAPI64.dll presence via native code, but we can also check here
+            // by attempting a dummy load, or just let the native code handle it gracefully.
+
+            nvencZeroCopyEncoder = new NvencZeroCopyEncoder();
+
+            var settings = new NvencZeroCopyEncoder.NvencEncoderSettings
+            {
+                RateControlMode = SessionState.NvencRateControlMode,
+                TargetBitrateKbps = SessionState.NvencTargetBitrate,
+                QpI = SessionState.NvencCqValue,
+                QpP = SessionState.NvencCqValue,  // NVENC CQP uses same QP for I/P usually, or P+2
+                QpB = SessionState.NvencCqValue + 2,
+                QualityPreset = SessionState.NvencPreset, // 0,1,2 maps to P1,P4,P7
+                Codec = 1, // HEVC primary
+                GopSize = playbackFps * 2,
+                Reserved1 = 0,
+                Reserved2 = 0
+            };
+
+            IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();
+
+            if (!nvencZeroCopyEncoder.Initialize(width, height, playbackFps, outputPath, firstTexturePtr, settings))
+            {
+                Debug.LogWarning("[OfflineCapture] NVENC initialization failed (expected on non-NVIDIA systems)");
+                nvencZeroCopyEncoder.Dispose();
+                nvencZeroCopyEncoder = null;
+                return false;
+            }
+
+            usingNvencPath = true;
+            usingZeroCopyPath = true; // Mark that we're using a zero-copy path
+
+            if (camera != null)
+                camera.targetTexture = null;
+
+            return true;
+        }
+
+        private bool TryInitAmf()
+        {
+            // Refactored from original SetupEncoder() AMF logic
+            zeroCopyEncoder = new AmfZeroCopyEncoder();
+
+            var amfSettings = new AmfZeroCopyEncoder.AmfEncoderSettings
+            {
+                RateControlMode = SessionState.AmfRateControlMode,
+                TargetBitrateKbps = SessionState.AmfTargetBitrate * 1000,
+                QpI = SessionState.AmfCqpValue,
+                QpP = SessionState.AmfCqpValue + 2,
+                QpB = SessionState.AmfCqpValue + 4,
+                QualityPreset = SessionState.AmfEncoderSpeed,
+                Codec = 1,
+                GopSize = playbackFps * 2,
+                EnableVbaq = 1,
+                UseBlueNoiseDither = SessionState.AmfUseBlueNoiseDither ? 1 : 0,
+            };
+
+            IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();
+
+            if (!zeroCopyEncoder.Initialize(width, height, playbackFps, outputPath, firstTexturePtr, amfSettings))
+            {
+                zeroCopyEncoder.Dispose();
+                zeroCopyEncoder = null;
+                return false;
+            }
+
+            usingZeroCopyPath = true;
+            if (camera != null)
+                camera.targetTexture = null;
+
+            return true;
+        }
+
+        private void InitCpuEncoder()
+        {
             if (!encoder.Initialize(width, height, playbackFps, outputPath))
-                throw new Exception("Failed to initialize encoder");
+                throw new Exception("Failed to initialize CPU encoder");
+            usingZeroCopyPath = false;
+            usingNvencPath = false;
         }
 
         private void FinalizeEncoder()
@@ -390,19 +470,33 @@ namespace CinematicRecorder.Capture
                 captureBuffer = null;
             }
 
-            if (usingZeroCopyPath && zeroCopyEncoder != null)
+            // NVENC cleanup
+            if (usingNvencPath && nvencZeroCopyEncoder != null)
+            {
+                nvencZeroCopyEncoder.Shutdown();
+                nvencZeroCopyEncoder.Dispose();
+                nvencZeroCopyEncoder = null;
+                usingNvencPath = false;
+                Debug.Log("[OfflineCapture] NVENC encoder finalized");
+            }
+
+            // AMF cleanup (existing)
+            if (usingZeroCopyPath && zeroCopyEncoder != null && !usingNvencPath) // Check !usingNvencPath to avoid double dispose if logic overlaps
             {
                 zeroCopyEncoder.Shutdown();
                 zeroCopyEncoder.Dispose();
                 zeroCopyEncoder = null;
-                UnityEngine.Debug.Log("[OfflineCapture] Zero-copy encoder finalized");
+                Debug.Log("[OfflineCapture] AMF encoder finalized");
             }
-            else if (encoder != null)
+
+            // Standard encoder cleanup
+            if (!usingZeroCopyPath && encoder != null)
             {
                 encoder.RequestStop();
                 encoder.Dispose();
             }
 
+            // Texture cleanup (existing code)
             if (renderTextures != null)
             {
                 for (int i = 0; i < 2; i++)

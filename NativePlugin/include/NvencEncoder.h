@@ -29,6 +29,7 @@ public:
                     const NvencEncoderSettings& settings);
     bool EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex);
     void Shutdown();
+    const char* GetError() const { return m_errorBuffer; }
     const char* GetLastError() const { return m_errorBuffer; }
 
 private:
