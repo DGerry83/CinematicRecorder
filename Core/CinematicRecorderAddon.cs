@@ -1,4 +1,5 @@
 ﻿using CinematicRecorder.Capture;
+using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
 using FFmpeg.AutoGen;
 using KSP.UI.Screens;
@@ -81,6 +82,10 @@ namespace CinematicRecorder.Core
                 UnityEngine.Debug.LogWarning("[CinematicRecorder] Icon not found, using white texture");
                 toolbarIcon = Texture2D.whiteTexture;
             }
+            // Init Camera Panel Config
+            GameObject configObj = new GameObject("CameraPanelConfig");
+            DontDestroyOnLoad(configObj);
+            configObj.AddComponent<CameraPanelConfig>();
         }
 
         void OnDestroy()
