@@ -27,7 +27,7 @@ namespace CinematicRecorder.Capture
         private int framesSinceSpeedSample = 0;
         private float realTimeAtLastSample;
 
-        // NEW: Dynamic simulation state
+        // Dynamic simulation state
         private float simFrameDelta;  // Current physics step size, updated each frame
         private int frameIndex;       // Sequential counter for encoder (0, 1, 2...)
         private float startTime;
@@ -100,7 +100,7 @@ namespace CinematicRecorder.Capture
             // Enable override IMMEDIATELY so we can go below 0.02s
             TimeWarp_FixedDeltaTime_Patch.IsOverridden = true;
 
-            // RAMP IN: Linear ramp from current physics step to target
+            // Linear ramp from current physics step to target
             float currentDelta = Time.fixedDeltaTime;
             float targetSimFps = DeterministicCaptureSession.GetCurrentSimulationFps();
             float targetDelta = 1f / targetSimFps;
@@ -145,10 +145,10 @@ namespace CinematicRecorder.Capture
         private IEnumerator RunCaptureLoop()
         {
             framesSinceSpeedSample = 0;
-            // NEW: Check unlimited mode for loop condition
+            // Check unlimited mode for loop condition
             bool isUnlimited = DeterministicCaptureSession.IsUnlimitedMode;
 
-            // MODIFIED: While-loop supports both unlimited and limited modes
+            // While-loop supports both unlimited and limited modes
             while (true)
             {
                 // Check stop request first (works for both modes)
@@ -158,17 +158,17 @@ namespace CinematicRecorder.Capture
                     break;
                 }
 
-                // MODIFIED: For limited mode, check if we've reached target duration
+                // For limited mode, check if we've reached target duration
                 if (!isUnlimited && DeterministicCaptureSession.AccumulatedSimulatedSeconds > DeterministicCaptureSession.TargetSeconds + 0.0001f)
                     break;
 
-                // NEW: Step 1 - Update time scale ramping (smooth transitions)
+                // Step 1 - Update time scale ramping (smooth transitions)
                 DeterministicCaptureSession.UpdateTimeScale();
 
-                // NEW: Step 2 - Calculate current simulation FPS based on time scale
+                // Step 2 - Calculate current simulation FPS based on time scale
                 float currentSimFps = DeterministicCaptureSession.GetCurrentSimulationFps();
 
-                // NEW: Step 3 - Update physics timestep for THIS frame
+                // Step 3 - Update physics timestep for THIS frame
                 simFrameDelta = 1f / currentSimFps;
                 Time.fixedDeltaTime = simFrameDelta;
                 Time.maximumDeltaTime = simFrameDelta;
@@ -193,7 +193,7 @@ namespace CinematicRecorder.Capture
                     yield return CaptureFrameStandard();
                 }
 
-                // NEW: Step 5 - Increment accumulated simulated time
+                // Step 5 - Increment accumulated simulated time
                 DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
 
                 // Step 6 - Update progress (using accumulated time for seconds)
@@ -481,7 +481,7 @@ namespace CinematicRecorder.Capture
             }
 
             // AMF cleanup (existing)
-            if (usingZeroCopyPath && zeroCopyEncoder != null && !usingNvencPath) // Check !usingNvencPath to avoid double dispose if logic overlaps
+            if (usingZeroCopyPath && zeroCopyEncoder != null && !usingNvencPath)
             {
                 zeroCopyEncoder.Shutdown();
                 zeroCopyEncoder.Dispose();

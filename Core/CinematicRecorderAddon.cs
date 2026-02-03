@@ -24,7 +24,7 @@ namespace CinematicRecorder.Core
         {
             Instance = this;
 
-            // CRITICAL: Set FFmpeg path immediately and verify
+            // Set FFmpeg path immediately and verify
             string pluginPath = Path.GetDirectoryName(typeof(CinematicRecorderAddon).Assembly.Location);
             string ffmpegPath = Path.Combine(pluginPath, "..", "PluginData", "FFmpeg");
             ffmpegPath = Path.GetFullPath(ffmpegPath); // Resolve the ..

@@ -75,7 +75,7 @@ namespace CinematicRecorder.Capture
             public int Codec;
             public int GopSize;
             public int EnableVbaq;
-            public int UseBlueNoiseDither;   // NEW: 0 = disabled, 1 = enabled
+            public int UseBlueNoiseDither;   // 0 = disabled, 1 = enabled
             public int Reserved2;
         }
 
@@ -88,11 +88,11 @@ namespace CinematicRecorder.Capture
         [DllImport("kernel32", SetLastError = true)]
         private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
 
-        // NEW: Import for explicit device setting (alternative to InitFromTexture)
+        // Import for explicit device setting (alternative to InitFromTexture)
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern void CR_SetUnityD3D11Device(IntPtr device);
 
-        // MODIFIED: Removed device parameter from import (now global)
+        // Removed device parameter from import (now global)
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern IntPtr CR_InitEncoder(
             int width,
@@ -123,8 +123,7 @@ namespace CinematicRecorder.Capture
 
         public bool IsInitialized => _isInitialized;
 
-        // NEW: Optional explicit device initialization (call once before first encoder init)
-        // You can get the native device pointer from Unity's Rendering.GraphicsDevice interfaces
+        // Optional explicit device initialization (call once before first encoder init)
         public static bool InitializeDevice(IntPtr d3d11DevicePtr)
         {
             if (d3d11DevicePtr == IntPtr.Zero)
@@ -153,7 +152,7 @@ namespace CinematicRecorder.Capture
             int fps,
             string outputPath,
             IntPtr d3d11TexturePtr,
-            AmfEncoderSettings settings)  // <-- Added parameter
+            AmfEncoderSettings settings)
         {
             if (_isInitialized)
                 return true;
@@ -177,7 +176,7 @@ namespace CinematicRecorder.Capture
                     height,
                     fps,
                     outputPath,
-                    ref settings);  // <-- Pass settings here
+                    ref settings); 
 
                 if (_encoderHandle == IntPtr.Zero)
                 {

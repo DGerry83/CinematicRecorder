@@ -1,11 +1,19 @@
 ﻿using System;
+using System.IO;
 using UnityEngine;
+using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
     public class FinalReportWindow : MonoBehaviour
     {
-        private Rect windowRect = new Rect(320, 480, 400, 240);
+        private Rect windowRect = new Rect(
+            CinematicUIResources.Windows.FinalReport.DEFAULT_X,
+            CinematicUIResources.Windows.FinalReport.DEFAULT_Y,
+            CinematicUIResources.Windows.FinalReport.WIDTH,
+            CinematicUIResources.Windows.FinalReport.HEIGHT
+        );
+
         private GUIStyle windowStyle;
         private bool hasInitStyles = false;
         private bool shouldShow = false;
@@ -17,7 +25,7 @@ namespace CinematicRecorder.UI
         private float realWorldCaptureTime;
         private string encodingModeUsed;
         private string outputFilePath;
-        private bool wasUnlimitedRecording; // NEW: Track if this was an unlimited recording
+        private bool wasUnlimitedRecording;
 
         public bool IsVisible => shouldShow;
 
@@ -29,11 +37,10 @@ namespace CinematicRecorder.UI
         private void InitStyles()
         {
             if (hasInitStyles) return;
-            windowStyle = new GUIStyle(HighLogic.Skin.window);
+            windowStyle = CinematicUIResources.Styles.Window();
             hasInitStyles = true;
         }
 
-        // NEW: Added unlimited parameter
         public void ShowReport(
             int frames,
             float simSeconds,
@@ -53,9 +60,7 @@ namespace CinematicRecorder.UI
 
             shouldShow = true;
 
-            Debug.Log($"[CinematicRecorder] Final Report - Frames: {frames}, " +
-                     $"SimTime: {simSeconds:F1}s, RealTime: {realTimeSeconds:F1}s, " +
-                     $"Mode: {encodingMode}, Unlimited: {unlimited}, File: {filePath}");
+            Debug.Log(string.Format(Report.FinalReportLog, frames, simSeconds, realTimeSeconds, encodingMode, unlimited, filePath));
         }
 
         public void HideReport()
@@ -67,67 +72,78 @@ namespace CinematicRecorder.UI
         {
             if (!shouldShow) return;
 
-            windowRect = GUILayout.Window(12346, windowRect, OnWindow,
-                "Recording Complete", windowStyle);
+            windowRect = GUILayout.Window(
+                CinematicUIResources.Windows.IDs.FinalReport,
+                windowRect,
+                OnWindow,
+                Report.WindowTitle,
+                windowStyle
+            );
         }
 
         private void OnWindow(int windowId)
         {
             GUILayout.BeginVertical();
 
-            // Summary Stats
-            GUIStyle headerStyle = new GUIStyle(HighLogic.Skin.label);
-            headerStyle.fontStyle = FontStyle.Bold;
-            headerStyle.fontSize = 14;
+            GUIStyle headerStyle = CinematicUIResources.Styles.Header();
 
-            GUILayout.Label("Capture Summary", headerStyle);
-            GUILayout.Space(10);
+            GUILayout.Label(Report.SummaryHeader, headerStyle);
+            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
             // Stats grid
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Frames Captured:", GUILayout.Width(130));
+            GUILayout.Label(Report.FramesCaptured, GUILayout.Width(130));
             GUILayout.Label(capturedFrames.ToString("N0"), GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Simulated Time:", GUILayout.Width(130));
-            GUILayout.Label($"{simulatedSeconds:F2} sec", GUILayout.Width(100));
-            GUILayout.EndHorizontal();
-
-            // MODIFIED: Indicate if this was an unlimited recording
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(wasUnlimitedRecording ? "Output Duration (Unlimited):" : "Output Duration:", GUILayout.Width(130));
-            GUILayout.Label($"{outputDuration:F2} sec", GUILayout.Width(100));
+            GUILayout.Label(Report.SimulatedTime, GUILayout.Width(130));
+            GUILayout.Label(simulatedSeconds.ToString("F2") + Report.SecondsUnit, GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Real Capture Time:", GUILayout.Width(130));
-            GUILayout.Label($"{FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime))}", GUILayout.Width(150));
+            GUILayout.Label(wasUnlimitedRecording ? Report.OutputDurationUnlimited : Report.OutputDuration, GUILayout.Width(130));
+            GUILayout.Label(outputDuration.ToString("F2") + Report.SecondsUnit, GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Encoding Mode:", GUILayout.Width(130));
+            GUILayout.Label(Report.RealCaptureTime, GUILayout.Width(130));
+            GUILayout.Label(FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime)), GUILayout.Width(150));
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Report.EncodingMode, GUILayout.Width(130));
             GUILayout.Label(encodingModeUsed);
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(10);
+            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // File path (clickable to open folder)
-            GUILayout.Label("Output File:", HighLogic.Skin.label);
-            string displayPath = outputFilePath;
-            if (displayPath.Length > 45)
-                displayPath = "..." + displayPath.Substring(displayPath.Length - 42);
+            // File path with Open Folder button
+            GUILayout.Label(Report.FilenameLabel, HighLogic.Skin.label);
+
+            GUILayout.BeginHorizontal();
+
+            // Display relative path from GameData if possible, otherwise truncate
+            string displayPath = GetDisplayPath(outputFilePath);
             GUI.enabled = false;
             GUILayout.TextField(displayPath, HighLogic.Skin.textField);
             GUI.enabled = true;
 
-            GUILayout.Space(20);
+            // Open Folder button
+            if (GUILayout.Button(Report.OpenFolder, GUILayout.Width(90), GUILayout.Height(25)))
+            {
+                OpenContainingFolder();
+            }
+
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
 
             // Centered Okay button
             GUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button("Okay", HighLogic.Skin.button, GUILayout.Width(100), GUILayout.Height(30)))
+            if (GUILayout.Button(Common.Okay, HighLogic.Skin.button, GUILayout.Width(100), GUILayout.Height(30)))
             {
                 shouldShow = false;
             }
@@ -138,6 +154,46 @@ namespace CinematicRecorder.UI
             GUILayout.EndVertical();
 
             GUI.DragWindow();
+        }
+
+        /// <summary>
+        /// Returns just the filename without any path
+        /// </summary>
+        private string GetDisplayPath(string fullPath)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return string.Empty;
+            return Path.GetFileName(fullPath);
+        }
+
+        /// <summary>
+        /// Opens the file explorer to the directory containing the output file
+        /// </summary>
+        private void OpenContainingFolder()
+        {
+            try
+            {
+                string folderPath = Path.GetDirectoryName(outputFilePath);
+
+                if (!string.IsNullOrEmpty(folderPath) && Directory.Exists(folderPath))
+                {
+                    // Use Unity's cross-platform URL opener with file protocol
+                    // Convert backslashes to forward slashes for URL format
+                    string url = "file:///" + folderPath.Replace("\\", "/");
+                    Application.OpenURL(url);
+
+                    Debug.Log(string.Format(Report.OpeningFolderLog, folderPath));
+                }
+                else
+                {
+                    Debug.Log(string.Format(Report.CannotOpenFolderLog, folderPath));
+                    ScreenMessages.PostScreenMessage(Report.FolderNotFound, 3f, ScreenMessageStyle.UPPER_CENTER);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log(string.Format(Report.FailedToOpenFolderLog, ex.Message));
+                ScreenMessages.PostScreenMessage(Report.FailedToOpenFolder, 3f, ScreenMessageStyle.UPPER_CENTER);
+            }
         }
 
         private string FormatTimeSpan(TimeSpan ts)

@@ -113,16 +113,6 @@ namespace CinematicRecorder.Core
             DurationSeconds = 10f;
         }
 
-        public static string GetQualityLabel(float sliderValue)
-        {
-            int qp = Mathf.RoundToInt(Mathf.Lerp(24f, 0f, sliderValue));
-
-            if (qp <= 8) return "Near Lossless (QP " + qp + ")";
-            if (qp <= 14) return "Master Quality (QP " + qp + ")";
-            if (qp <= 20) return "High Quality (QP " + qp + ")";
-            return "Compressed (QP " + qp + ")";
-        }
-
         public static int ValidateRateControlMode(int mode)
         {
             if (mode > 1) return 1; // Force VBR if somehow CBR was selected

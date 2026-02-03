@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
@@ -8,7 +9,13 @@ namespace CinematicRecorder.UI
     /// </summary>
     public class AdvancedOptionsWindow : MonoBehaviour
     {
-        private Rect windowRect = new Rect(610, 480, 280, 120);
+        private Rect windowRect = new Rect(
+            CinematicUIResources.Windows.AdvancedOptions.DEFAULT_X,
+            CinematicUIResources.Windows.AdvancedOptions.DEFAULT_Y,
+            CinematicUIResources.Windows.AdvancedOptions.WIDTH,
+            CinematicUIResources.Windows.AdvancedOptions.HEIGHT
+        );
+
         private GUIStyle windowStyle;
         private bool stylesInitialized = false;
         private bool shouldShow = false;
@@ -21,7 +28,7 @@ namespace CinematicRecorder.UI
         private void InitStyles()
         {
             if (stylesInitialized) return;
-            windowStyle = new GUIStyle(HighLogic.Skin.window);
+            windowStyle = CinematicUIResources.Styles.Window();
             stylesInitialized = true;
         }
 
@@ -30,10 +37,10 @@ namespace CinematicRecorder.UI
             if (!shouldShow) return;
 
             windowRect = GUILayout.Window(
-                12348,
+                CinematicUIResources.Windows.IDs.AdvancedOptions,
                 windowRect,
                 DrawWindow,
-                "Advanced Options",
+                Settings.AdvancedOptionsHeader,
                 windowStyle);
         }
 
@@ -41,8 +48,7 @@ namespace CinematicRecorder.UI
         {
             GUILayout.BeginVertical();
 
-            GUIStyle labelStyle = new GUIStyle(HighLogic.Skin.label);
-            labelStyle.alignment = TextAnchor.MiddleCenter;
+            GUIStyle labelStyle = CinematicUIResources.Styles.Label(Color.white, alignment: TextAnchor.MiddleCenter);
             GUILayout.FlexibleSpace();
             GUILayout.Label("Advanced recording options\nwill appear here in future versions.", labelStyle);
             GUILayout.FlexibleSpace();

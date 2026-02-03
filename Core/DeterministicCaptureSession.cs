@@ -13,7 +13,6 @@ namespace CinematicRecorder.Core
         public static bool IsRunning { get; private set; }
         public static bool StopRequested { get; private set; }
 
-        // NEW: Unlimited mode flag
         public static bool IsUnlimitedMode { get; private set; }
 
         // UI Fields
@@ -28,7 +27,6 @@ namespace CinematicRecorder.Core
             {
                 if (!IsRunning) return _targetFramesBacking;
 
-                // NEW: If unlimited, just return captured frames (no target)
                 if (IsUnlimitedMode) return CapturedFrames;
 
                 // Dynamic: current capture + (remaining time at current sim rate)
@@ -44,9 +42,9 @@ namespace CinematicRecorder.Core
         public static int PlaybackFPS { get; internal set; }
         public static float PlaybackSpeed { get; internal set; }
 
-        // ============================================================
-        // NEW: Time Scale Management (Kraken Time API)
-        // ============================================================
+        // =======================
+        // Time Scale Management
+        // =======================
 
         public enum TransitionDirection { None, Slowing, Resuming }
 
@@ -80,9 +78,9 @@ namespace CinematicRecorder.Core
         private static float rampDuration;
         private static float rampElapsed;
 
-        // ============================================================
-        // NEW: Public Events for UI Subscription
-        // ============================================================
+        // ===================================
+        // Public Events for UI Subscription
+        // ===================================
 
         /// <summary>Fired when recording begins</summary>
         public static event Action OnRecordingStarted;
@@ -109,7 +107,7 @@ namespace CinematicRecorder.Core
             IsRunning = true;
             StopRequested = false;
 
-            // NEW: Determine unlimited mode and set targets accordingly
+            // Determine unlimited mode and set targets accordingly
             IsUnlimitedMode = durationSeconds <= 0;
             if (IsUnlimitedMode)
             {
@@ -130,7 +128,7 @@ namespace CinematicRecorder.Core
             CapturedFrames = 0;
             CaptureFPS = 0f;
 
-            // NEW: Initialize Time Scale State
+            // Initialize Time Scale State
             OriginalSimulationFps = simulationFps;
             CurrentTimeScale = 1.0f;
             TargetTimeScale = 1.0f;
@@ -177,15 +175,15 @@ namespace CinematicRecorder.Core
 
             var captureRunner = runner.AddComponent<CaptureRunner>();
 
-            // NEW: Fire recording started event
+            // Fire recording started event
             OnRecordingStarted?.Invoke();
 
             captureRunner.StartCoroutine(RunAndCleanup(controller, runner));
         }
 
-        // ============================================================
-        // NEW: Public API Methods for Mod Access
-        // ============================================================
+        // ====================================
+        // Public API Methods for Mod Access
+        // ====================================
 
         /// <summary>Request 10,000 FPS Kraken time (1% speed)</summary>
         public static void RequestKrakenTime() =>
@@ -221,9 +219,9 @@ namespace CinematicRecorder.Core
             }
         }
 
-        // ============================================================
-        // NEW: Internal Time Scale Update Logic
-        // ============================================================
+        // ==================================
+        // Internal Time Scale Update Logic
+        // ==================================
 
         /// <summary>Call each physics frame to interpolate time scale</summary>
         internal static void UpdateTimeScale()
@@ -278,7 +276,7 @@ namespace CinematicRecorder.Core
             if (!IsRunning)
                 return;
 
-            // NEW: Silently ignore extension requests in unlimited mode
+            // Silently ignore extension requests in unlimited mode
             if (IsUnlimitedMode)
                 return;
 
@@ -306,7 +304,7 @@ namespace CinematicRecorder.Core
 
             // Capture final stats BEFORE reset
             int finalFrames = CapturedFrames;
-            float finalSimSeconds = AccumulatedSimulatedSeconds; // MODIFIED: Use accumulated instead of CapturedSeconds
+            float finalSimSeconds = AccumulatedSimulatedSeconds; // Use accumulated instead of CapturedSeconds
             float finalRealSeconds = (float)realWorldTimer.Elapsed.TotalSeconds;
 
             // Output duration is based on playback FPS
@@ -329,9 +327,9 @@ namespace CinematicRecorder.Core
                 finalRealSeconds,
                 encodingMode,
                 outputPath,
-                IsUnlimitedMode); // NEW: Pass unlimited flag
+                IsUnlimitedMode); // Pass unlimited flag
 
-            // NEW: Fire stopped event before cleanup
+            // Fire stopped event before cleanup
             OnRecordingStopped?.Invoke();
 
             EndSession();
@@ -347,7 +345,7 @@ namespace CinematicRecorder.Core
             float realWorldSeconds,
             string encodingMode,
             string outputPath,
-            bool wasUnlimited) // NEW: Parameter to indicate unlimited recording
+            bool wasUnlimited) // Parameter to indicate unlimited recording
         {
             FinalReportWindow report = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
 
@@ -365,14 +363,14 @@ namespace CinematicRecorder.Core
                 realWorldSeconds,
                 encodingMode,
                 outputPath,
-                wasUnlimited); // NEW: Pass flag
+                wasUnlimited); // Pass flag
         }
 
         public static void EndSession()
         {
             IsRunning = false;
             StopRequested = false;
-            IsUnlimitedMode = false; // NEW: Reset unlimited flag
+            IsUnlimitedMode = false; // Reset unlimited flag
 
             CapturedSeconds = 0f;
             CapturedFrames = 0;
@@ -383,7 +381,7 @@ namespace CinematicRecorder.Core
             realWorldTimer?.Stop();
             realWorldTimer = null;
 
-            // NEW: Reset time scale state
+            // Reset time scale state
             CurrentTimeScale = 1.0f;
             TargetTimeScale = 1.0f;
             IsTransitioning = false;
