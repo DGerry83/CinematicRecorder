@@ -102,29 +102,47 @@ namespace CinematicRecorder.UI
                         DogfightOffsetY = slot.ctSettings.DogfightOffsetY,
                         DogfightChasePlaneMode = slot.ctSettings.DogfightChasePlaneMode,
                         DogfightTargetId = slot.ctSettings.DogfightTargetId,
-                        ManualPosition = slot.ctSettings.ManualPosition,
-                        AutoZoom = slot.ctSettings.AutoZoom,
-                        ManualFOV = slot.ctSettings.ManualFOV,
+
+                        // Geographic positioning (NEW)
+                        UseGeographicPosition = slot.ctSettings.UseGeographicPosition,
+                        Latitude = slot.ctSettings.Latitude,
+                        Longitude = slot.ctSettings.Longitude,
+                        Altitude = slot.ctSettings.Altitude,
+                        BodyName = slot.ctSettings.BodyName,
+
+                        // Positioning modes
                         AutoFlybyPosition = slot.ctSettings.AutoFlybyPosition,
+                        AutoLandingPosition = slot.ctSettings.AutoLandingPosition,
                         ManualOffset = slot.ctSettings.ManualOffset,
                         ManualOffsetForward = slot.ctSettings.ManualOffsetForward,
                         ManualOffsetRight = slot.ctSettings.ManualOffsetRight,
                         ManualOffsetUp = slot.ctSettings.ManualOffsetUp,
-                        AutoLandingPosition = slot.ctSettings.AutoLandingPosition,
-                        UsePresetOffset = slot.ctSettings.UsePresetOffset,
-                        PresetOffset = slot.ctSettings.PresetOffset,
+
+                        // Target tracking
                         HasTarget = slot.ctSettings.HasTarget,
+                        TargetSelf = slot.ctSettings.TargetSelf,
                         TargetPartPersistentId = slot.ctSettings.TargetPartPersistentId,
                         TargetCoM = slot.ctSettings.TargetCoM,
+
+                        // Camera settings
                         MaintainInitialVelocity = slot.ctSettings.MaintainInitialVelocity,
                         UseOrbital = slot.ctSettings.UseOrbital,
+                        AutoZoom = slot.ctSettings.AutoZoom,
+                        ManualFOV = slot.ctSettings.ManualFOV,
+                        InitialVelocity = slot.ctSettings.InitialVelocity,
+
+                        // Additional settings
+                        SaveRotation = slot.ctSettings.SaveRotation,
+                        FmPivotMode = slot.ctSettings.FmPivotMode,
+                        PathingSecondarySmoothing = slot.ctSettings.PathingSecondarySmoothing,
+
+                        // Pathing
                         SelectedPathIndex = slot.ctSettings.SelectedPathIndex,
                         PathTimeScale = slot.ctSettings.PathTimeScale,
                         CurrentKeyframeIndex = slot.ctSettings.CurrentKeyframeIndex,
                         IsPlayingPath = slot.ctSettings.IsPlayingPath,
                         UseRealTime = slot.ctSettings.UseRealTime,
-                        PathStartTime = slot.ctSettings.PathStartTime,
-                        TargetSelf = slot.ctSettings.TargetSelf
+                        PathStartTime = slot.ctSettings.PathStartTime
                     } : null
                 });
             }

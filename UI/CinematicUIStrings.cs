@@ -155,6 +155,10 @@
             public const string CTModePathing = "Pathing";
             public const string CTDisplayDogfightFree = "Dogfight (Free)";
             public const string CTDisplayDogfightTarget = "Dogfight (Target)";
+            public const string AutoZoomHeader = "Auto-Zoom";
+            public const string ConsistentFramingToggle = " Consistent Framing";
+            public const string PaddingLabel = "Padding: {0:F1}x";
+            public const string PaddingTooltip = "0.5x = tight fit, 1.5x = normal, 3.0x = wide";
         }
 
         public static class Report

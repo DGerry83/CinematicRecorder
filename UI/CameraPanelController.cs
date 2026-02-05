@@ -2,6 +2,7 @@
 using CinematicRecorder.Integration;
 using static CinematicRecorder.UI.CinematicUIStrings;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
@@ -25,6 +26,11 @@ namespace CinematicRecorder.UI
         private int pendingUnassignSlot = -1;
         private string presetNameBuffer = "";
 
+        // Explicit activation tracking
+        private int _activeSlotIndex = -1;
+        private bool _wasCameraToolsActive = false;
+        private ToolModes _lastCameraToolsMode = ToolModes.StationaryCamera;
+
         // Zoom State
         private float zoomIntentSlider = 0f;
         private float zoomSmoothVelocity = 0f;
@@ -41,6 +47,7 @@ namespace CinematicRecorder.UI
         private Action pendingCameraAction;
         private bool useFadeOnSwap = true;
         private float fadeDurationSlider = 0.5f;
+        private bool _cameraSwitchPending = false;
 
         // External Dependencies
         private readonly MonoBehaviour host;
@@ -78,6 +85,16 @@ namespace CinematicRecorder.UI
             }
         }
 
+        private void OnPresetLoaded(CameraPanelPreset preset)
+        {
+            if (preset?.buttonAssignments != null && preset.buttonAssignments.Count == CinematicUIResources.Layout.Camera.TOTAL_SLOTS)
+            {
+                cameraSlots.Clear();
+                cameraSlots.AddRange(preset.buttonAssignments);
+                presetNameBuffer = preset.presetName;
+            }
+        }
+
         public void InitializeStyles()
         {
             if (cameraPanelStylesInitialized) return;
@@ -105,12 +122,15 @@ namespace CinematicRecorder.UI
         {
             GameEvents.onVesselWillDestroy.Add(OnVesselWillDestroy);
             GameEvents.onGameSceneLoadRequested.Add(OnGameSceneLoadRequested);
+            // NEW: Detect vessel changes to clear active slot (Step 5)
+            GameEvents.onVesselChange.Add(OnVesselChange);
         }
 
         private void UnsubscribeFromEvents()
         {
             GameEvents.onVesselWillDestroy.Remove(OnVesselWillDestroy);
             GameEvents.onGameSceneLoadRequested.Remove(OnGameSceneLoadRequested);
+            GameEvents.onVesselChange.Remove(OnVesselChange);
         }
 
         private void OnVesselWillDestroy(Vessel v)
@@ -124,19 +144,15 @@ namespace CinematicRecorder.UI
         private void OnGameSceneLoadRequested(GameScenes scene)
         {
             HullCamBridge.ClearHullCamStaticState();
+            _activeSlotIndex = -1;
+            _wasCameraToolsActive = false;
         }
 
-        private void OnPresetLoaded(CameraPanelPreset preset)
+        // NEW: Clear active slot when vessel changes (Step 5)
+        private void OnVesselChange(Vessel v)
         {
-            if (preset?.buttonAssignments != null && preset.buttonAssignments.Count == CinematicUIResources.Layout.Camera.TOTAL_SLOTS)
-            {
-                cameraSlots.Clear();
-                cameraSlots.AddRange(preset.buttonAssignments);
-                presetNameBuffer = preset.presetName;
-
-                // Notify parent to update window position if needed
-                // Parent can read preset.panelX/panelY from preset if desired
-            }
+            _activeSlotIndex = -1;
+            _wasCameraToolsActive = false;
         }
         #endregion
 
@@ -172,12 +188,46 @@ namespace CinematicRecorder.UI
 
             screenFadeAlpha += Time.unscaledDeltaTime * fadeSpeed;
 
-            if (screenFadeAlpha >= 1f)
+            if (screenFadeAlpha >= 1f && pendingCameraAction != null)
             {
                 screenFadeAlpha = 1f;
                 pendingCameraAction?.Invoke();
                 pendingCameraAction = null;
+                _cameraSwitchPending = true;
+            }
+            else if (_cameraSwitchPending)
+            {
+                _cameraSwitchPending = false;
                 fadeSpeed = -Mathf.Abs(fadeSpeed);
+
+                if (_activeSlotIndex >= 0 && _activeSlotIndex < cameraSlots.Count && cameraSlots[_activeSlotIndex].isCameraToolsSlot)
+                {
+                    var slot = cameraSlots[_activeSlotIndex];
+                    if (slot.ctSettings != null)
+                    {
+                        var adapter = CameraToolsAdapter.Instance;
+                        if (slot.ctSettings.UseConsistentAutoZoom)
+                        {
+                            adapter.ApplyConsistentAutoZoom(true, slot.ctSettings.ZoomPadding);
+                        }
+                        else if (slot.ctSettings.AutoZoom)
+                        {
+                            Vessel v = FlightGlobals.ActiveVessel;
+                            if (v != null && FlightCamera.fetch != null)
+                            {
+                                Vector3 targetPos = (slot.ctSettings.HasTarget && !slot.ctSettings.TargetSelf)
+                                    ? adapter.CamTarget?.transform.position ?? v.CoM
+                                    : v.CoM;
+                                float distance = Vector3.Distance(FlightCamera.fetch.transform.position, targetPos);
+                                float margin = 30f;
+                                float nativeFOV = (7000f / (distance + 100f)) - 14f + margin;
+                                nativeFOV = Mathf.Clamp(nativeFOV, 2f, 60f);
+
+                                adapter.EnforceAutoZoomFOVImmediate(nativeFOV);
+                            }
+                        }
+                    }
+                }
             }
             else if (screenFadeAlpha <= 0f && fadeSpeed < 0)
             {
@@ -255,20 +305,24 @@ namespace CinematicRecorder.UI
 
             GUILayout.FlexibleSpace();
 
-            bool hasActiveCam = HullCamBridge.IsAnyCameraActive() || CameraToolsBridge.IsActive();
+            var adapter = CameraToolsAdapter.Instance;
+            bool hasActiveCam = HullCamBridge.IsAnyCameraActive() || adapter.IsActive;
             GUI.enabled = hasActiveCam;
             if (GUILayout.Button(CameraController.ReturnToMain, GUILayout.Height(CinematicUIResources.Layout.SpeedControl.BUTTON_HEIGHT)))
             {
                 TriggerSwitchWithFade(() =>
                 {
-                    if (CameraToolsBridge.IsActive())
+                    if (adapter.IsActive)
                     {
-                        CameraToolsBridge.Revert();
+                        adapter.Revert();
                     }
                     else if (HullCamBridge.IsAnyCameraActive())
                     {
                         HullCamBridge.RestoreMain();
                     }
+                    // Clear explicit activation and tracking on revert
+                    _activeSlotIndex = -1;
+                    _wasCameraToolsActive = false;
                 });
             }
             GUI.enabled = true;
@@ -276,9 +330,18 @@ namespace CinematicRecorder.UI
 
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // RIGHT: Instructions + Assign Current
+            // RIGHT: Instructions OR Auto-Zoom Controls (Step 5)
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Camera.GRID_TEXT_COLUMN_WIDTH));
-            DrawInstructions();
+
+            // Show auto-zoom controls if a CameraTools slot is explicitly active
+            if (_activeSlotIndex >= 0 && cameraSlots[_activeSlotIndex].isCameraToolsSlot)
+            {
+                DrawAutoZoomControls(_activeSlotIndex);
+            }
+            else
+            {
+                DrawInstructions();
+            }
 
             GUILayout.FlexibleSpace();
 
@@ -315,7 +378,8 @@ namespace CinematicRecorder.UI
         private void DrawCameraButton(int index, Vessel currentVessel)
         {
             CameraSlot slot = cameraSlots[index];
-            CameraSlot.SlotStatus status = slot.GetStatus(currentVessel);
+            // NEW: Pass explicit activation state (Step 4/5)
+            CameraSlot.SlotStatus status = slot.GetStatus(currentVessel, index == _activeSlotIndex);
             int styleIndex = GetStyleIndexForStatus(status, slot.isCameraToolsSlot);
             string buttonLabel = (index + 1).ToString();
 
@@ -344,6 +408,7 @@ namespace CinematicRecorder.UI
             }
         }
 
+        // NEW: Draw Instructions (unchanged)
         private void DrawInstructions()
         {
             GUIStyle header = CinematicUIResources.Styles.Header();
@@ -355,6 +420,78 @@ namespace CinematicRecorder.UI
             GUILayout.Label(CameraController.ControlLeftClick, small);
             GUILayout.Label(CameraController.ControlRightClick, small);
             GUILayout.Label(CameraController.ControlAssignCurrent, small);
+        }
+
+        // NEW: Auto-Zoom Controls UI (Step 5)
+        private void DrawAutoZoomControls(int slotIndex)
+        {
+            CameraSlot slot = cameraSlots[slotIndex];
+            if (slot.ctSettings == null) return;
+
+            GUIStyle header = CinematicUIResources.Styles.Header();
+            GUILayout.Label(CameraController.AutoZoomHeader, header);
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+            // Consistent Framing Toggle
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (slot.ctSettings.UseConsistentAutoZoom)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newUseConsistent = GUILayout.Toggle(slot.ctSettings.UseConsistentAutoZoom,
+                CameraController.ConsistentFramingToggle, toggleStyle);
+
+            if (newUseConsistent != slot.ctSettings.UseConsistentAutoZoom)
+            {
+                slot.ctSettings.UseConsistentAutoZoom = newUseConsistent;
+                // Immediately apply to CameraTools
+                if (newUseConsistent)
+                {
+                    CameraToolsAdapter.Instance.ApplyConsistentAutoZoom(true, slot.ctSettings.ZoomPadding);
+                }
+                else
+                {
+                    // Re-enable native auto-zoom if it was enabled in settings
+                    CameraToolsAdapter.Instance.ApplyConsistentAutoZoom(false, slot.ctSettings.ZoomPadding);
+                    if (slot.ctSettings.AutoZoom)
+                    {
+                        CameraToolsAdapter.Instance.AutoZoomStationary = true;
+                    }
+                }
+            }
+
+            // Padding Slider (only show if consistent framing is enabled)
+            if (slot.ctSettings.UseConsistentAutoZoom)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUILayout.Label(string.Format(CameraController.PaddingLabel, slot.ctSettings.ZoomPadding),
+                    HighLogic.Skin.label);
+
+                float newPadding = GUILayout.HorizontalSlider(slot.ctSettings.ZoomPadding, 0.5f, 3.0f);
+                if (!Mathf.Approximately(newPadding, slot.ctSettings.ZoomPadding))
+                {
+                    slot.ctSettings.ZoomPadding = newPadding;
+                    // Update immediately
+                    CameraToolsAdapter.Instance.ApplyConsistentAutoZoom(true, newPadding);
+                }
+
+                GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+                GUILayout.Label(CameraController.PaddingTooltip, helpStyle);
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
+
+            // Show current FOV if CameraTools is active
+            var adapter = CameraToolsAdapter.Instance;
+            if (adapter.IsActive && adapter.CurrentMode == ToolModes.StationaryCamera)
+            {
+                GUIStyle infoStyle = CinematicUIResources.Styles.Label(CinematicUIResources.Colors.INFO_ORANGE,
+                    fontSize: CinematicUIResources.Typography.INFO);
+                GUILayout.Label(string.Format("Current FOV: {0:F1}°", adapter.ManualFOV), infoStyle);
+            }
         }
 
         private void DrawZoomControlsIfActive()
@@ -443,6 +580,14 @@ namespace CinematicRecorder.UI
                 if (activePreset != null) showDeleteConfirm = true;
             }
             GUI.enabled = true;
+
+            // REMOVED: LOG CAM button (Step 5)
+            /*
+            if (GUILayout.Button("LOG CAM", GUILayout.Width(60)))
+            {
+                CameraToolsAdapter.Instance.LogCurrentCameraState("DebugCheck");
+            }
+            */
 
             GUILayout.FlexibleSpace();
 
@@ -537,6 +682,9 @@ namespace CinematicRecorder.UI
                 if (GUILayout.Button(Common.Yes, GUILayout.Height(CinematicUIResources.Layout.Dialog.BUTTON_HEIGHT)))
                 {
                     ClearSlot(slotIndex);
+                    // NEW: Clear active slot if unassigning the active one (Step 5)
+                    if (_activeSlotIndex == slotIndex)
+                        _activeSlotIndex = -1;
                     pendingUnassignSlot = -1;
                 }
 
@@ -553,6 +701,7 @@ namespace CinematicRecorder.UI
         private void OnButtonClicked(int index)
         {
             CameraSlot slot = cameraSlots[index];
+            var adapter = CameraToolsAdapter.Instance;
 
             if (slot.isCameraToolsSlot)
             {
@@ -567,23 +716,20 @@ namespace CinematicRecorder.UI
                     if (slot.ctSettings.SelectedPathIndex < 0)
                     {
                         ScreenMessages.PostScreenMessage("Cannot activate - invalid path index", 2f);
-                        return; // Exit here, don't fade
+                        return;
                     }
-                    if (!CameraToolsBridge.PathExists(slot.ctSettings.SelectedPathIndex))
+                    if (!adapter.PathExists(slot.ctSettings.SelectedPathIndex))
                     {
                         ScreenMessages.PostScreenMessage("Saved path no longer exists", 2f);
-                        return; // Exit here, don't fade
+                        return;
                     }
                 }
 
-                Debug.Log($"[CamPanel] Activating CT slot {index}: Mode={slot.ctSettings.Mode}, Pos={slot.ctSettings.ManualPosition}");
-
                 TriggerSwitchWithFade(() =>
                 {
-                    // CRITICAL: Force full revert to clear CameraTools internal state
-                    if (CameraToolsBridge.IsActive())
+                    if (adapter.IsActive)
                     {
-                        CameraToolsBridge.Revert();
+                        adapter.Revert();
                     }
 
                     if (HullCamBridge.IsAnyCameraActive())
@@ -591,14 +737,45 @@ namespace CinematicRecorder.UI
                         HullCamBridge.ClearHullCamStaticState();
                     }
 
-                    CameraToolsBridge.ActivateMode(slot.ctSettings.Mode, slot.ctSettings);
+                    adapter.ActivateMode(slot.ctSettings.Mode, slot.ctSettings);
+
+                    if (adapter.HasPendingGeographicRestoration())
+                    {
+                        adapter.PostActivationPositionFixup();
+                    }
+
+                    _activeSlotIndex = index;
+
+                    adapter.AutoZoomStationary = false;
+
+                    if (slot.ctSettings.UseConsistentAutoZoom)
+                    {
+                        adapter.ApplyConsistentAutoZoom(true, slot.ctSettings.ZoomPadding);
+                    }
+                    else if (slot.ctSettings.AutoZoom)
+                    {
+                        Vessel currentVessel = FlightGlobals.ActiveVessel;
+                        if (currentVessel != null && FlightCamera.fetch != null)
+                        {
+                            Vector3 cameraPos = FlightCamera.fetch.transform.position;
+                            Vector3 targetPos = (slot.ctSettings.HasTarget && !slot.ctSettings.TargetSelf)
+                                ? adapter.CamTarget?.transform.position ?? currentVessel.CoM
+                                : currentVessel.CoM;
+
+                            float distance = Vector3.Distance(cameraPos, targetPos);
+                            float margin = 30f;
+                            float nativeFOV = (7000f / (distance + 100f)) - 14f + margin;
+                            nativeFOV = Mathf.Clamp(nativeFOV, 2f, 60f);
+
+                            adapter.EnforceAutoZoomFOVImmediate(nativeFOV);
+                        }
+                    }
                 });
                 return;
             }
 
-            // Existing HullCam handling
-            Vessel currentVessel = FlightGlobals.ActiveVessel;
-            CameraSlot.SlotStatus status = slot.GetStatus(currentVessel);
+            Vessel currentVesselExt = FlightGlobals.ActiveVessel;
+            CameraSlot.SlotStatus status = slot.GetStatus(currentVesselExt);
 
             switch (status)
             {
@@ -609,7 +786,7 @@ namespace CinematicRecorder.UI
                     return;
                 case CameraSlot.SlotStatus.Assigned:
                 case CameraSlot.SlotStatus.Remote:
-                    ActivateSlotCamera(slot, currentVessel);
+                    ActivateSlotCamera(slot, currentVesselExt, index);
                     break;
                 case CameraSlot.SlotStatus.Unavailable:
                     ScreenMessages.PostScreenMessage(CameraController.CameraUnavailable, 2f);
@@ -617,21 +794,33 @@ namespace CinematicRecorder.UI
             }
         }
 
-        private void ActivateSlotCamera(CameraSlot slot, Vessel currentVessel)
+        /// <summary>
+        /// Coroutine helper that executes the given action on the next frame.
+        /// </summary>
+        private IEnumerator ExecuteNextFrame(System.Action action)
+        {
+            yield return null;
+            action?.Invoke();
+        }
+
+        private void ActivateSlotCamera(CameraSlot slot, Vessel currentVessel, int slotIndex)
         {
             object cam = HullCamBridge.ResolveCameraSlot(slot, currentVessel);
+            var adapter = CameraToolsAdapter.Instance;
+
             if (cam != null && cam != HullCamBridge.GetCurrentCamera())
             {
                 zoomIntentSlider = 0f;
                 TriggerSwitchWithFade(() =>
                 {
-                    // One-step switch: Release CT if active, don't revert to stock
-                    if (CameraToolsBridge.IsActive())
+                    if (adapter.IsActive)
                     {
-                        CameraToolsBridge.ReleaseControlWithoutReverting();
+                        adapter.ReleaseControlWithoutReverting();
                     }
 
                     HullCamBridge.Activate(cam);
+
+                    _activeSlotIndex = slotIndex;
                 });
             }
         }
@@ -650,17 +839,19 @@ namespace CinematicRecorder.UI
 
         private void AssignCurrentToSlot(int index)
         {
+            var adapter = CameraToolsAdapter.Instance;
+
             // Check if CameraTools is currently active first
-            if (CameraToolsBridge.IsAvailable && CameraToolsBridge.IsActive())
+            if (adapter.IsAvailable && adapter.IsActive)
             {
-                var settings = CameraToolsBridge.CaptureCurrentSettings();
+                var settings = adapter.CaptureSettings();
                 if (settings != null)
                 {
                     // VALIDATION: Ensure Pathing mode has a valid path selected
                     if (settings.Mode == ToolModes.Pathing && settings.SelectedPathIndex < 0)
                     {
                         ScreenMessages.PostScreenMessage("Cannot save: No path selected in CameraTools", 2f);
-                        return; // Don't save invalid path reference
+                        return;
                     }
 
                     cameraSlots[index] = new CameraSlot
@@ -744,7 +935,6 @@ namespace CinematicRecorder.UI
         private void UpdateMonitoring()
         {
             if (!HullCamBridge.IsAvailable) return;
-            // Tracking only - HullCam handles camera death internally
             _ = HullCamBridge.GetCurrentCamera();
         }
 
@@ -765,6 +955,72 @@ namespace CinematicRecorder.UI
         public void ProcessZoomLateUpdate()
         {
             if (!showCameraPanel) return;
+
+            var adapter = CameraToolsAdapter.Instance;
+
+            // External deactivation detection - only when not fading
+            if (!isFading && pendingCameraAction == null && _activeSlotIndex >= 0)
+            {
+                if (cameraSlots[_activeSlotIndex].isCameraToolsSlot)
+                {
+                    if (_wasCameraToolsActive && !adapter.IsActive)
+                    {
+                        _activeSlotIndex = -1;
+                    }
+                    else if (adapter.IsActive && adapter.CurrentMode != cameraSlots[_activeSlotIndex].ctSettings.Mode)
+                    {
+                        _activeSlotIndex = -1;
+                    }
+                }
+                else if (!cameraSlots[_activeSlotIndex].isCameraToolsSlot)
+                {
+                    if (_wasCameraToolsActive && !HullCamBridge.IsAnyCameraActive())
+                    {
+                        _activeSlotIndex = -1;
+                    }
+                }
+            }
+
+            _wasCameraToolsActive = adapter.IsActive;
+            if (adapter.IsActive)
+                _lastCameraToolsMode = adapter.CurrentMode;
+
+            // ENFORCEMENT: Always enforce FOV when we have an active CT slot.
+            // During fade-to-black: _activeSlotIndex still points to OLD slot, keeping old camera stable.
+            // At peak black: _activeSlotIndex updates to NEW slot inside the lambda.
+            // During fade-from-black: _activeSlotIndex points to NEW slot, keeping new camera stable.
+            if (_activeSlotIndex >= 0 && _activeSlotIndex < cameraSlots.Count && cameraSlots[_activeSlotIndex].isCameraToolsSlot)
+            {
+                var slot = cameraSlots[_activeSlotIndex];
+                if (slot.ctSettings != null && adapter.IsActive)
+                {
+                    if (slot.ctSettings.UseConsistentAutoZoom)
+                    {
+                        adapter.ApplyConsistentAutoZoom(true, slot.ctSettings.ZoomPadding);
+                    }
+                    else if (slot.ctSettings.AutoZoom)
+                    {
+                        Vessel vessel = FlightGlobals.ActiveVessel;
+                        if (vessel != null && FlightCamera.fetch != null)
+                        {
+                            Vector3 cameraPos = FlightCamera.fetch.transform.position;
+                            Vector3 targetPos = (slot.ctSettings.HasTarget && !slot.ctSettings.TargetSelf)
+                                ? adapter.CamTarget?.transform.position ?? vessel.CoM
+                                : vessel.CoM;
+
+                            float distance = Vector3.Distance(cameraPos, targetPos);
+                            float margin = 30f;
+                            float nativeFOV = (7000f / (distance + 100f)) - 14f + margin;
+                            nativeFOV = Mathf.Clamp(nativeFOV, 2f, 60f);
+
+                            adapter.ManualFOV = nativeFOV;
+                            FlightCamera.fetch.SetFoV(nativeFOV);
+                        }
+                    }
+                }
+            }
+
+            // HullCam zoom logic (unchanged)
             if (!HullCamBridge.IsAvailable) return;
 
             var activeCam = HullCamBridge.GetCurrentCamera();

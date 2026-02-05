@@ -79,28 +79,51 @@ namespace CinematicRecorder.Core
                         DogfightOffsetY = s.ctSettings.DogfightOffsetY,
                         DogfightChasePlaneMode = s.ctSettings.DogfightChasePlaneMode,
                         DogfightTargetId = s.ctSettings.DogfightTargetId,
-                        ManualPosition = s.ctSettings.ManualPosition,
-                        AutoZoom = s.ctSettings.AutoZoom,
-                        ManualFOV = s.ctSettings.ManualFOV,
+
+                        // Geographic positioning (NEW)
+                        UseGeographicPosition = s.ctSettings.UseGeographicPosition,
+                        Latitude = s.ctSettings.Latitude,
+                        Longitude = s.ctSettings.Longitude,
+                        Altitude = s.ctSettings.Altitude,
+                        BodyName = s.ctSettings.BodyName,
+
+                        // Positioning modes
                         AutoFlybyPosition = s.ctSettings.AutoFlybyPosition,
+                        AutoLandingPosition = s.ctSettings.AutoLandingPosition,
                         ManualOffset = s.ctSettings.ManualOffset,
                         ManualOffsetForward = s.ctSettings.ManualOffsetForward,
                         ManualOffsetRight = s.ctSettings.ManualOffsetRight,
                         ManualOffsetUp = s.ctSettings.ManualOffsetUp,
-                        AutoLandingPosition = s.ctSettings.AutoLandingPosition,
-                        UsePresetOffset = s.ctSettings.UsePresetOffset,
-                        PresetOffset = s.ctSettings.PresetOffset,
+
+                        // Target tracking
                         HasTarget = s.ctSettings.HasTarget,
+                        TargetSelf = s.ctSettings.TargetSelf,
                         TargetPartPersistentId = s.ctSettings.TargetPartPersistentId,
                         TargetCoM = s.ctSettings.TargetCoM,
+
+                        // Camera settings
                         MaintainInitialVelocity = s.ctSettings.MaintainInitialVelocity,
                         UseOrbital = s.ctSettings.UseOrbital,
+                        AutoZoom = s.ctSettings.AutoZoom,
+                        ManualFOV = s.ctSettings.ManualFOV,
+                        InitialVelocity = s.ctSettings.InitialVelocity,
+
+                        // Additional settings
+                        SaveRotation = s.ctSettings.SaveRotation,
+                        FmPivotMode = s.ctSettings.FmPivotMode,
+                        PathingSecondarySmoothing = s.ctSettings.PathingSecondarySmoothing,
+
+                        // Pathing
                         SelectedPathIndex = s.ctSettings.SelectedPathIndex,
                         PathTimeScale = s.ctSettings.PathTimeScale,
                         CurrentKeyframeIndex = s.ctSettings.CurrentKeyframeIndex,
                         IsPlayingPath = s.ctSettings.IsPlayingPath,
                         UseRealTime = s.ctSettings.UseRealTime,
-                        PathStartTime = s.ctSettings.PathStartTime
+                        PathStartTime = s.ctSettings.PathStartTime,
+
+                        // NEW: Consistent Auto-Zoom settings (Step 3)
+                        UseConsistentAutoZoom = s.ctSettings.UseConsistentAutoZoom,
+                        ZoomPadding = s.ctSettings.ZoomPadding
                     } : null
                 }).ToList();
             }
@@ -175,7 +198,7 @@ namespace CinematicRecorder.Core
                         slotNode.AddValue("vesselId", slot.vesselId ?? "");
                         slotNode.AddValue("allowAny", slot.allowAnyVessel);
 
-                        // NEW: CameraTools support
+                        // CameraTools support
                         slotNode.AddValue("isCameraTools", slot.isCameraToolsSlot);
 
                         if (slot.isCameraToolsSlot && slot.ctSettings != null)
@@ -192,16 +215,20 @@ namespace CinematicRecorder.Core
                             ctNode.AddValue("dogfightChasePlane", slot.ctSettings.DogfightChasePlaneMode);
                             ctNode.AddValue("dogfightTargetId", slot.ctSettings.DogfightTargetId ?? "");
 
-                            // Stationary position (Vector3 serializes as "x,y,z")
-                            ctNode.AddValue("manualPos", slot.ctSettings.ManualPosition);
+                            // Positioning mode flags
+                            ctNode.AddValue("useGeographicPosition", slot.ctSettings.UseGeographicPosition);
                             ctNode.AddValue("autoFlyby", slot.ctSettings.AutoFlybyPosition);
+                            ctNode.AddValue("autoLanding", slot.ctSettings.AutoLandingPosition);
                             ctNode.AddValue("manualOffset", slot.ctSettings.ManualOffset);
                             ctNode.AddValue("manualOffsetFwd", slot.ctSettings.ManualOffsetForward);
                             ctNode.AddValue("manualOffsetRight", slot.ctSettings.ManualOffsetRight);
                             ctNode.AddValue("manualOffsetUp", slot.ctSettings.ManualOffsetUp);
-                            ctNode.AddValue("autoLanding", slot.ctSettings.AutoLandingPosition);
-                            ctNode.AddValue("usePresetOffset", slot.ctSettings.UsePresetOffset);
-                            ctNode.AddValue("presetOffset", slot.ctSettings.PresetOffset);
+
+                            // Geographic coordinates (THE FIX)
+                            ctNode.AddValue("latitude", slot.ctSettings.Latitude);
+                            ctNode.AddValue("longitude", slot.ctSettings.Longitude);
+                            ctNode.AddValue("altitude", slot.ctSettings.Altitude);
+                            ctNode.AddValue("bodyName", slot.ctSettings.BodyName ?? "");
 
                             // Target tracking
                             ctNode.AddValue("hasTarget", slot.ctSettings.HasTarget);
@@ -209,15 +236,24 @@ namespace CinematicRecorder.Core
                             ctNode.AddValue("targetPartId", slot.ctSettings.TargetPartPersistentId);
                             ctNode.AddValue("targetCoM", slot.ctSettings.TargetCoM);
 
-                            // Velocity/orbit settings
+                            // Velocity/orbit tracking
                             ctNode.AddValue("maintainVel", slot.ctSettings.MaintainInitialVelocity);
                             ctNode.AddValue("useOrbital", slot.ctSettings.UseOrbital);
 
-                            // Zoom/FOV
+                            // Zoom/FOV settings
                             ctNode.AddValue("autoZoom", slot.ctSettings.AutoZoom);
                             ctNode.AddValue("manualFOV", slot.ctSettings.ManualFOV);
 
-                            // Pathing
+                            // Additional settings
+                            ctNode.AddValue("saveRotation", slot.ctSettings.SaveRotation);
+                            ctNode.AddValue("fmPivotMode", slot.ctSettings.FmPivotMode.ToString());
+                            ctNode.AddValue("pathingSecondarySmoothing", slot.ctSettings.PathingSecondarySmoothing);
+
+                            // Initial velocity (Vector3)
+                            Vector3 initVel = slot.ctSettings.InitialVelocity;
+                            ctNode.AddValue("initialVelocity", $"{initVel.x},{initVel.y},{initVel.z}");
+
+                            // Pathing parameters
                             ctNode.AddValue("pathIndex", slot.ctSettings.SelectedPathIndex);
                             ctNode.AddValue("pathTimeScale", slot.ctSettings.PathTimeScale);
                             ctNode.AddValue("keyframeIndex", slot.ctSettings.CurrentKeyframeIndex);
@@ -225,6 +261,9 @@ namespace CinematicRecorder.Core
                             ctNode.AddValue("useRealTime", slot.ctSettings.UseRealTime);
                             ctNode.AddValue("pathStartTime", slot.ctSettings.PathStartTime);
 
+                            // NEW: Consistent Auto-Zoom settings (Step 3)
+                            ctNode.AddValue("useConsistentAutoZoom", slot.ctSettings.UseConsistentAutoZoom);
+                            ctNode.AddValue("zoomPadding", slot.ctSettings.ZoomPadding);
                         }
                     }
                 }
@@ -277,7 +316,6 @@ namespace CinematicRecorder.Core
                         bool allowAny;
                         bool.TryParse(slotNode.GetValue("allowAny") ?? "False", out allowAny);
 
-                        // NEW: Check for CameraTools flag (default false for legacy support)
                         bool isCT;
                         bool.TryParse(slotNode.GetValue("isCameraTools") ?? "False", out isCT);
 
@@ -291,7 +329,6 @@ namespace CinematicRecorder.Core
                             isCameraToolsSlot = isCT
                         };
 
-                        // NEW: Load CameraTools settings if present
                         if (isCT)
                         {
                             ConfigNode ctNode = slotNode.GetNode("CT_SETTINGS");
@@ -314,40 +351,20 @@ namespace CinematicRecorder.Core
                                 bool.TryParse(ctNode.GetValue("dogfightChasePlane") ?? "False", out slot.ctSettings.DogfightChasePlaneMode);
                                 slot.ctSettings.DogfightTargetId = ctNode.GetValue("dogfightTargetId") ?? "";
 
-                                // Stationary positioning - World position offset from CoM
-                                string posStr = ctNode.GetValue("manualPos");
-                                if (!string.IsNullOrEmpty(posStr))
-                                {
-                                    string[] parts = posStr.Split(',');
-                                    if (parts.Length == 3)
-                                    {
-                                        float x, y, z;
-                                        if (float.TryParse(parts[0], out x) && float.TryParse(parts[1], out y) && float.TryParse(parts[2], out z))
-                                            slot.ctSettings.ManualPosition = new Vector3(x, y, z);
-                                    }
-                                }
-
-                                // Stationary positioning mode flags
+                                // Positioning mode flags
+                                bool.TryParse(ctNode.GetValue("useGeographicPosition") ?? "False", out slot.ctSettings.UseGeographicPosition);
                                 bool.TryParse(ctNode.GetValue("autoFlyby") ?? "False", out slot.ctSettings.AutoFlybyPosition);
+                                bool.TryParse(ctNode.GetValue("autoLanding") ?? "False", out slot.ctSettings.AutoLandingPosition);
                                 bool.TryParse(ctNode.GetValue("manualOffset") ?? "False", out slot.ctSettings.ManualOffset);
                                 float.TryParse(ctNode.GetValue("manualOffsetFwd") ?? "500", out slot.ctSettings.ManualOffsetForward);
                                 float.TryParse(ctNode.GetValue("manualOffsetRight") ?? "50", out slot.ctSettings.ManualOffsetRight);
                                 float.TryParse(ctNode.GetValue("manualOffsetUp") ?? "5", out slot.ctSettings.ManualOffsetUp);
-                                bool.TryParse(ctNode.GetValue("autoLanding") ?? "False", out slot.ctSettings.AutoLandingPosition);
-                                bool.TryParse(ctNode.GetValue("usePresetOffset") ?? "False", out slot.ctSettings.UsePresetOffset);
 
-                                // Preset offset world position (for "Click to Set Position" mode)
-                                string presetPosStr = ctNode.GetValue("presetOffset");
-                                if (!string.IsNullOrEmpty(presetPosStr))
-                                {
-                                    string[] parts = presetPosStr.Split(',');
-                                    if (parts.Length == 3)
-                                    {
-                                        float x, y, z;
-                                        if (float.TryParse(parts[0], out x) && float.TryParse(parts[1], out y) && float.TryParse(parts[2], out z))
-                                            slot.ctSettings.PresetOffset = new Vector3(x, y, z);
-                                    }
-                                }
+                                // Geographic coordinates (THE FIX)
+                                double.TryParse(ctNode.GetValue("latitude") ?? "0", out slot.ctSettings.Latitude);
+                                double.TryParse(ctNode.GetValue("longitude") ?? "0", out slot.ctSettings.Longitude);
+                                double.TryParse(ctNode.GetValue("altitude") ?? "0", out slot.ctSettings.Altitude);
+                                slot.ctSettings.BodyName = ctNode.GetValue("bodyName") ?? "";
 
                                 // Target tracking
                                 bool.TryParse(ctNode.GetValue("hasTarget") ?? "False", out slot.ctSettings.HasTarget);
@@ -363,6 +380,31 @@ namespace CinematicRecorder.Core
                                 bool.TryParse(ctNode.GetValue("autoZoom") ?? "False", out slot.ctSettings.AutoZoom);
                                 float.TryParse(ctNode.GetValue("manualFOV") ?? "60", out slot.ctSettings.ManualFOV);
 
+                                // Additional settings
+                                bool.TryParse(ctNode.GetValue("saveRotation") ?? "False", out slot.ctSettings.SaveRotation);
+
+                                string pivotModeStr = ctNode.GetValue("fmPivotMode") ?? "Camera";
+                                FMPivotMode pivotMode;
+                                if (Enum.TryParse(pivotModeStr, out pivotMode))
+                                    slot.ctSettings.FmPivotMode = pivotMode;
+                                else
+                                    slot.ctSettings.FmPivotMode = FMPivotMode.Camera;
+
+                                float.TryParse(ctNode.GetValue("pathingSecondarySmoothing") ?? "0", out slot.ctSettings.PathingSecondarySmoothing);
+
+                                // Parse InitialVelocity (Vector3)
+                                string initialVelStr = ctNode.GetValue("initialVelocity");
+                                if (!string.IsNullOrEmpty(initialVelStr))
+                                {
+                                    string[] parts = initialVelStr.Split(',');
+                                    if (parts.Length == 3)
+                                    {
+                                        float x, y, z;
+                                        if (float.TryParse(parts[0], out x) && float.TryParse(parts[1], out y) && float.TryParse(parts[2], out z))
+                                            slot.ctSettings.InitialVelocity = new Vector3(x, y, z);
+                                    }
+                                }
+
                                 // Pathing parameters
                                 int.TryParse(ctNode.GetValue("pathIndex") ?? "-1", out slot.ctSettings.SelectedPathIndex);
                                 float.TryParse(ctNode.GetValue("pathTimeScale") ?? "1", out slot.ctSettings.PathTimeScale);
@@ -370,6 +412,10 @@ namespace CinematicRecorder.Core
                                 bool.TryParse(ctNode.GetValue("isPlaying") ?? "False", out slot.ctSettings.IsPlayingPath);
                                 bool.TryParse(ctNode.GetValue("useRealTime") ?? "True", out slot.ctSettings.UseRealTime);
                                 float.TryParse(ctNode.GetValue("pathStartTime") ?? "0", out slot.ctSettings.PathStartTime);
+
+                                // NEW: Consistent Auto-Zoom settings (Step 3)
+                                bool.TryParse(ctNode.GetValue("useConsistentAutoZoom") ?? "False", out slot.ctSettings.UseConsistentAutoZoom);
+                                float.TryParse(ctNode.GetValue("zoomPadding") ?? "1.5", out slot.ctSettings.ZoomPadding);
                             }
                         }
 

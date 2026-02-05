@@ -62,7 +62,9 @@
     <Compile Include="Core\SessionState.cs" />
     <Compile Include="Core\TimeWarpPatch.cs" />
     <Compile Include="Integration\CameraSlot.cs" />
+    <Compile Include="Integration\CameraToolsAdapter.cs" />
     <Compile Include="Integration\CameraToolsBridge.cs" />
+    <Compile Include="Integration\CameraToolsTypes.cs" />
     <Compile Include="Integration\HullCamBridge.cs" />
     <Compile Include="Patches\HullCamPatches.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
