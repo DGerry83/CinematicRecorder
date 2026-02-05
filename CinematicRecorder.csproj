@@ -61,6 +61,7 @@
     <Compile Include="Core\HarmonyBootstrap.cs" />
     <Compile Include="Core\SessionState.cs" />
     <Compile Include="Core\TimeWarpPatch.cs" />
+    <Compile Include="Core\ZoomControlService.cs" />
     <Compile Include="Integration\CameraSlot.cs" />
     <Compile Include="Integration\CameraToolsAdapter.cs" />
     <Compile Include="Integration\CameraToolsBridge.cs" />
@@ -71,6 +72,8 @@
     <Compile Include="UI\AdvancedOptionsWindow.cs" />
     <Compile Include="UI\CameraPanelController.cs" />
     <Compile Include="UI\CameraPanelPreset.cs" />
+    <Compile Include="UI\CameraSlotManager.cs" />
+    <Compile Include="UI\CameraTransitionCoordinator.cs" />
     <Compile Include="UI\CinematicUIResources.cs" />
     <Compile Include="UI\CinematicUIStrings.cs" />
     <Compile Include="UI\FinalReportWindow.cs" />
