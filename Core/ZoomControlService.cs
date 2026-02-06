@@ -19,9 +19,6 @@ namespace CinematicRecorder.Core
         private float currentFoV = 60f;
         private object zoomControlledCamera = null;
 
-        // External dependencies
-        private readonly CameraToolsAdapter ctAdapter;
-
         public float CurrentFoV => currentFoV;
         public float TargetFoV => targetFoV;
         public float ZoomIntent { get => zoomIntentSlider; set => zoomIntentSlider = Mathf.Clamp(value, -1f, 1f); }
@@ -30,7 +27,6 @@ namespace CinematicRecorder.Core
 
         public ZoomControlService()
         {
-            ctAdapter = CameraToolsAdapter.Instance;
         }
 
         /// <summary>
@@ -50,16 +46,22 @@ namespace CinematicRecorder.Core
         {
             if (!HullCamBridge.IsAvailable) return;
 
-            var activeCam = HullCamBridge.GetCurrentCamera();
-            if (activeCam == null)
+            // Access active camera through manager
+            ICamera cam = CinematicCameraManager.Instance.ActiveCamera;
+            var hullCam = cam as HullCamController;
+
+            if (hullCam == null)
             {
                 zoomControlledCamera = null;
                 return;
             }
 
-            InitializeZoomForCamera(activeCam);
-            ProcessZoomIntent(activeCam, deltaTime);
-            ApplyZoom(activeCam);
+            object hullCamModule = HullCamBridge.GetCurrentCamera();
+            if (hullCamModule == null) return;
+
+            InitializeZoomForCamera(hullCamModule);
+            ProcessZoomIntent(hullCamModule, deltaTime);
+            ApplyZoom(hullCamModule);
             DecayZoomIntent(deltaTime);
         }
 
@@ -67,14 +69,18 @@ namespace CinematicRecorder.Core
         /// Enforces FOV for CameraTools stationary cameras based on slot settings.
         /// Call from LateUpdate when a CameraTools slot is active.
         /// </summary>
-        public void EnforceCameraToolsZoom(CameraSlot activeSlot)
+        public void EnforceCameraToolsZoom(CameraSlot activeSlot, CameraToolsCameraController controller)
         {
-            if (activeSlot?.ctSettings == null || !ctAdapter.IsActive) return;
+            if (activeSlot?.ctSettings == null || controller == null) return;
             if (activeSlot.ctSettings.Mode != ToolModes.StationaryCamera) return;
+
+            // Check if active camera is CT
+            ICamera activeCam = CinematicCameraManager.Instance.ActiveCamera;
+            if (!(activeCam is CameraToolsCamera)) return;
 
             if (activeSlot.ctSettings.UseConsistentAutoZoom)
             {
-                ctAdapter.ApplyConsistentAutoZoom(true, activeSlot.ctSettings.ZoomPadding);
+                controller.ApplyConsistentAutoZoom(true, activeSlot.ctSettings.ZoomPadding);
             }
             else if (activeSlot.ctSettings.AutoZoom)
             {
@@ -83,15 +89,16 @@ namespace CinematicRecorder.Core
                 {
                     Vector3 cameraPos = FlightCamera.fetch.transform.position;
                     Vector3 targetPos = (activeSlot.ctSettings.HasTarget && !activeSlot.ctSettings.TargetSelf)
-                        ? ctAdapter.CamTarget?.transform.position ?? vessel.CoM
+                        ? controller.CamTarget?.transform.position ?? vessel.CoM
                         : vessel.CoM;
 
                     float distance = Vector3.Distance(cameraPos, targetPos);
-                    float margin = 30f;
+                    // Use reflection provider directly for the margin field
+                    float margin = CameraToolsReflectionProvider.GetFloat(CameraToolsReflectionProvider.AutoZoomMarginStationaryField, 30f);
                     float nativeFOV = (7000f / (distance + 100f)) - 14f + margin;
                     nativeFOV = Mathf.Clamp(nativeFOV, 2f, 60f);
 
-                    ctAdapter.ManualFOV = nativeFOV;
+                    controller.ManualFOV = nativeFOV;
                     FlightCamera.fetch.SetFoV(nativeFOV);
                 }
             }

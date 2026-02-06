@@ -227,24 +227,43 @@ namespace CinematicRecorder.UI
             }
 
             var slot = cameraSlots[_activeSlotIndex];
-            var adapter = CameraToolsAdapter.Instance;
+            ICamera activeCam = CinematicCameraManager.Instance.ActiveCamera;
 
             if (slot.isCameraToolsSlot)
             {
-                if (_wasCameraToolsActive && !adapter.IsActive)
+                // Check if CT camera was active but is no longer
+                bool wasCTActive = activeCam is CameraToolsCamera;
+                if (!wasCTActive && _wasCameraToolsActive)
                 {
                     SetActiveSlot(-1);
                 }
-                else if (adapter.IsActive && adapter.CurrentMode != slot.ctSettings.Mode)
+                else if (activeCam is CameraToolsCamera ctCam)
                 {
-                    SetActiveSlot(-1);
+                    // Check if mode changed
+                    if (ctCam.GetSettings().Mode != slot.ctSettings.Mode)
+                    {
+                        SetActiveSlot(-1);
+                    }
                 }
             }
-            else if (!slot.isCameraToolsSlot)
+            else
             {
-                if (_wasCameraToolsActive && !HullCamBridge.IsAnyCameraActive())
+                // HullCam check
+                if (_wasCameraToolsActive && !(activeCam is HullCamController))
                 {
-                    SetActiveSlot(-1);
+                    // CT was active, now nothing or something else
+                    if (!HullCamBridge.IsAnyCameraActive())
+                    {
+                        SetActiveSlot(-1);
+                    }
+                }
+                else if (!_wasCameraToolsActive && activeCam == null)
+                {
+                    // HullCam was active, now nothing
+                    if (!HullCamBridge.IsAnyCameraActive())
+                    {
+                        SetActiveSlot(-1);
+                    }
                 }
             }
 
@@ -253,10 +272,12 @@ namespace CinematicRecorder.UI
 
         private void UpdateTrackingState()
         {
-            var adapter = CameraToolsAdapter.Instance;
-            _wasCameraToolsActive = adapter.IsActive;
-            if (adapter.IsActive)
-                _lastCameraToolsMode = adapter.CurrentMode;
+            ICamera activeCam = CinematicCameraManager.Instance.ActiveCamera;
+            _wasCameraToolsActive = activeCam is CameraToolsCamera;
+            if (_wasCameraToolsActive)
+            {
+                _lastCameraToolsMode = ((CameraToolsCamera)activeCam).GetSettings().Mode;
+            }
         }
 
         public void HandleVesselChange()
