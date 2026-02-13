@@ -15,6 +15,7 @@ namespace CinematicRecorder.UI
         private readonly CameraTransitionCoordinator transitionCoordinator;
         private readonly ZoomControlService zoomService;
         private readonly CinematicCameraManager cameraManager;
+        private readonly CameraToolsCameraController ctController;
         #endregion
 
         #region UI State
@@ -25,6 +26,17 @@ namespace CinematicRecorder.UI
         private bool showDeleteConfirm = false;
         private int pendingUnassignSlot = -1;
         private string presetNameBuffer = "";
+        private bool _showOverwriteDialog = false;
+        private string _pendingOverwritePresetName;
+        private CameraPanelConfig _pendingOverwriteScenario;
+        private int _lastCTSlotIndex = -1;
+
+        private enum ZoomMode { Rate, Target }
+        private ZoomMode currentZoomMode = ZoomMode.Rate;
+        private float targetDuration = 0f;
+        private ZoomCurve targetZoomCurve = ZoomCurve.Linear;
+        private bool targetIsConsistentFraming = false;
+        private float targetFOVValue = 60f;
         #endregion
 
         #region Cached Layout State (IMGUI Safety)
@@ -58,6 +70,7 @@ namespace CinematicRecorder.UI
             slotManager = new CameraSlotManager();
             transitionCoordinator = new CameraTransitionCoordinator();
             zoomService = new ZoomControlService();
+            ctController = new CameraToolsCameraController();
             cameraManager = CinematicCameraManager.Instance;
 
             InitializeStyles();
@@ -114,7 +127,6 @@ namespace CinematicRecorder.UI
         {
             if (v == FlightGlobals.ActiveVessel)
             {
-                // Always clear HullCam static state when vessel destroyed, regardless of tracking
                 HullCamBridge.ClearHullCamStaticState();
                 cameraManager.ClearActiveSlot();
             }
@@ -154,7 +166,6 @@ namespace CinematicRecorder.UI
                 return;
             }
 
-            // Cache structural state
             _cachedCamActive = cameraManager.HasActiveCamera;
             _cachedHasCurrentCam = HullCamBridge.GetCurrentCamera() != null;
             _cachedCTAvailable = new CameraToolsCameraController().IsAvailable;
@@ -192,11 +203,15 @@ namespace CinematicRecorder.UI
 
         public void DrawFadeOverlay()
         {
-            transitionCoordinator.UpdateFade();
+            // Update real-time fade when not in deterministic mode
+            if (!DeterministicCaptureSession.IsRunning)
+            {
+                transitionCoordinator.UpdateFade();
+            }
+            // Note: Deterministic fade is updated in ProcessZoomLateUpdate (per physics step)
 
             if (!transitionCoordinator.IsFading) return;
 
-            // Execute post-peak actions for CameraTools (consistent zoom)
             if (transitionCoordinator.IsCompletingSwitch)
             {
                 var activeSlot = slotManager.ActiveSlot;
@@ -205,14 +220,13 @@ namespace CinematicRecorder.UI
                     var ctCam = cameraManager.ActiveCamera as CameraToolsCamera;
                     if (ctCam != null)
                     {
-                        var controller = new CameraToolsCameraController();
                         if (activeSlot.ctSettings.UseConsistentAutoZoom)
                         {
-                            controller.ApplyConsistentAutoZoom(true, activeSlot.ctSettings.ZoomPadding);
+                            ctController.ApplyConsistentAutoZoom(true, activeSlot.ctSettings.ZoomPadding);
                         }
                         else if (activeSlot.ctSettings.AutoZoom)
                         {
-                            ApplyNativeAutoZoom(activeSlot, controller);
+                            ApplyNativeAutoZoom(activeSlot, ctController);
                         }
                     }
                 }
@@ -227,31 +241,138 @@ namespace CinematicRecorder.UI
         {
             DrawDeleteDialog();
             DrawUnassignDialog();
+            DrawOverwriteDialog(); 
         }
 
+        /// <summary>
+        /// Simplified zoom processing - delegates all execution to services/controllers.
+        /// Handles deterministic fade updates when in recording mode.
+        /// </summary>
         public void ProcessZoomLateUpdate()
         {
             if (!showCameraPanel) return;
 
-            slotManager.CheckExternalDeactivation();
-
-            // REMOVED: cameraManager.ProcessPendingFixups(); 
-            // This was causing the delayed FOV change
-
-            // Use live lookup for active slot
-            var activeSlot = slotManager.ActiveSlot;
-            if (activeSlot != null && activeSlot.isCameraToolsSlot)
+            // Handle deterministic fade updates (per physics step) when recording
+            if (DeterministicCaptureSession.IsRunning && transitionCoordinator.IsFading)
             {
-                var ctCam = cameraManager.ActiveCamera as CameraToolsCamera;
-                if (ctCam != null && activeSlot.ctSettings.UseConsistentAutoZoom)
-                {
-                    // Continuous update for consistent framing while active
-                    var controller = new CameraToolsCameraController();
-                    controller.ApplyConsistentAutoZoom(true, activeSlot.ctSettings.ZoomPadding);
-                }
+                transitionCoordinator.UpdateDeterministicFade();
             }
 
-            zoomService.UpdateHullCamZoom(Time.deltaTime);
+            slotManager.CheckExternalDeactivation();
+            var activeSlot = slotManager.ActiveSlot;
+
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                HandleDeterministicZoom(activeSlot);
+            }
+            else
+            {
+                HandleRealTimeZoom(activeSlot);
+            }
+        }
+
+        private void HandleDeterministicZoom(CameraSlot activeSlot)
+        {
+            var detZoom = DeterministicCaptureSession.ActiveZoomController;
+            if (detZoom == null) return;
+
+            bool isHullCam = cameraManager.ActiveCamera is HullCamController;
+            bool isCT = cameraManager.ActiveCamera is CameraToolsCamera;
+
+            // Sync consistent framing state FROM controller TO UI (for hand-off detection)
+            if (detZoom.UseConsistentAutoZoom)
+            {
+                if (isCT && activeSlot?.ctSettings != null)
+                    activeSlot.ctSettings.UseConsistentAutoZoom = true;
+                else if (isHullCam)
+                    zoomService.UseConsistentAutoZoom = true;
+            }
+
+            if (currentZoomMode == ZoomMode.Rate)
+            {
+                // ALWAYS pass rate input in Rate mode, regardless of consistent framing setting
+                // Consistent framing check happens inside OnPhysicsStepped if UseConsistentAutoZoom is true
+                detZoom.SetRateInput(zoomService.ZoomIntent);
+                detZoom.UseConsistentAutoZoom = zoomService.UseConsistentAutoZoom;
+                detZoom.ConsistentZoomPadding = zoomService.ConsistentZoomPadding;
+                zoomService.DecayZoomIntent(Time.deltaTime);
+            }
+            else // Target mode
+            {
+                // Interrupt target zoom with rate slider
+                if (Mathf.Abs(zoomService.ZoomIntent) > 0.1f)
+                {
+                    detZoom.Interrupt(new RateBasedZoomStrategy(60f));
+                    detZoom.SetRateInput(zoomService.ZoomIntent);
+                    zoomService.DecayZoomIntent(Time.deltaTime);
+                }
+            }
+        }
+
+
+        private void HandleRealTimeZoom(CameraSlot activeSlot)
+        {
+            ICamera activeCam = cameraManager.ActiveCamera;
+            bool isCT = activeCam is CameraToolsCamera;
+            bool isHullCam = activeCam is HullCamController;
+
+            // For CT: Check both slot settings (saved state) AND controller (active transition state)
+            // This catches instant transitions that set controller.UseConsistentAutoZoom immediately
+            bool ctConsistentEnabled = (activeSlot?.ctSettings?.UseConsistentAutoZoom ?? false) ||
+                                       (isCT && ctController.UseConsistentAutoZoom);
+            bool hullConsistentEnabled = zoomService.UseConsistentAutoZoom;
+
+            if (currentZoomMode == ZoomMode.Rate)
+            {
+                if (isHullCam)
+                {
+                    if (hullConsistentEnabled)
+                        zoomService.ApplyConsistentFramingToHullCam();
+                    else
+                    {
+                        zoomService.SetRateInput(zoomService.ZoomIntent);
+                        zoomService.Update();
+                    }
+                    zoomService.DecayZoomIntent(Time.deltaTime);
+                }
+                else if (isCT)
+                {
+                    if (ctConsistentEnabled)
+                        ctController.ApplyConsistentFraming();
+                    else
+                        ctController.UpdateRate(zoomService.ZoomIntent);
+
+                    zoomService.DecayZoomIntent(Time.deltaTime);
+                }
+            }
+            else // Target mode
+            {
+                if (isHullCam)
+                {
+                    if (hullConsistentEnabled)
+                        zoomService.ApplyConsistentFramingToHullCam();
+                    else
+                        zoomService.Update();
+                }
+                else if (isCT)
+                {
+                    if (ctConsistentEnabled)
+                    {
+                        ctController.ApplyConsistentFraming();
+                    }
+                    else
+                    {
+                        bool hadStrategy = ctController.HasActiveStrategy;
+                        ctController.UpdateTarget();
+
+                        // Handoff: When consistent transition completes, copy to slot settings
+                        if (hadStrategy && !ctController.HasActiveStrategy && ctController.UseConsistentAutoZoom && activeSlot?.ctSettings != null)
+                        {
+                            activeSlot.ctSettings.UseConsistentAutoZoom = true;
+                        }
+                    }
+                }
+            }
         }
         #endregion
 
@@ -316,18 +437,21 @@ namespace CinematicRecorder.UI
 
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // Original logic: Check if ANY camera is active (managed or unmanaged)
-            bool ctActive = new CameraToolsCameraController().IsActive;
+            bool ctActive = ctController.IsActive;
             bool hullCamActive = HullCamBridge.IsAnyCameraActive();
             bool hasActiveCam = ctActive || hullCamActive;
             GUI.enabled = hasActiveCam;
             if (GUILayout.Button(CameraController.ReturnToMain, GUILayout.Height(CinematicUIResources.Layout.SpeedControl.BUTTON_HEIGHT)))
             {
-                // Use transition coordinator for fade
+                // Capture state before switching away from CT
+                CaptureCTStateIfActive();
+
                 BeginCameraSwitch(() =>
                 {
+                    // Use the manager's ReturnToMain which now properly uses API DeactivateCamera
                     cameraManager.ReturnToMain(immediate: true);
                     slotManager.ClearActiveSlot();
+                    _lastCTSlotIndex = -1;
                 });
             }
             GUI.enabled = true;
@@ -335,15 +459,51 @@ namespace CinematicRecorder.UI
 
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // RIGHT: Get fresh slot reference here for this frame
+            // RIGHT: Consistent Framing controls for BOTH camera types
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Camera.GRID_TEXT_COLUMN_WIDTH));
 
-            var activeSlot = slotManager.ActiveSlot;
-            bool showAutoZoom = activeSlot != null && activeSlot.isCameraToolsSlot && activeSlot.ctSettings != null;
-
-            if (showAutoZoom)
+            ICamera activeCam = cameraManager.ActiveCamera;
+            if (activeCam is CameraToolsCamera)
             {
-                DrawAutoZoomControls(activeSlot);
+                var activeSlot = slotManager.ActiveSlot;
+                if (activeSlot?.ctSettings != null)
+                {
+                    DrawConsistentFramingControls(
+                        activeSlot.ctSettings.UseConsistentAutoZoom,
+                        activeSlot.ctSettings.ZoomPadding,
+                        activeCam.FieldOfView,
+                        (newVal) => {
+                            activeSlot.ctSettings.UseConsistentAutoZoom = newVal;
+                            ctController.UseConsistentAutoZoom = newVal;
+                            if (newVal) ctController.ApplyConsistentFraming();
+                        },
+                        (newVal) => {
+                            activeSlot.ctSettings.ZoomPadding = newVal;
+                            ctController.ConsistentZoomPadding = newVal;
+                            if (activeSlot.ctSettings.UseConsistentAutoZoom) ctController.ApplyConsistentFraming();
+                        }
+                    );
+                }
+                else
+                {
+                    DrawInstructions();
+                }
+            }
+            else if (activeCam is HullCamController)
+            {
+                DrawConsistentFramingControls(
+                    zoomService.UseConsistentAutoZoom,
+                    zoomService.ConsistentZoomPadding,
+                    zoomService.CurrentFoV,
+                    (newVal) => {
+                        zoomService.UseConsistentAutoZoom = newVal;
+                        if (newVal) zoomService.ApplyConsistentFramingToHullCam();
+                    },
+                    (newVal) => {
+                        zoomService.ConsistentZoomPadding = newVal;
+                        if (zoomService.UseConsistentAutoZoom) zoomService.ApplyConsistentFramingToHullCam();
+                    }
+                );
             }
             else
             {
@@ -362,6 +522,58 @@ namespace CinematicRecorder.UI
 
             GUILayout.EndHorizontal();
             GUILayout.EndVertical();
+        }
+
+        private void DrawConsistentFramingControls(
+            bool useConsistent,
+            float padding,
+            float currentFOV,
+            Action<bool> onToggleChanged,
+            Action<float> onPaddingChanged)
+        {
+            GUIStyle header = CinematicUIResources.Styles.Header();
+            GUILayout.Label(CameraController.AutoZoomHeader, header);
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (useConsistent)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newUseConsistent = GUILayout.Toggle(
+                useConsistent,
+                CameraController.ConsistentFramingToggle,
+                toggleStyle
+            );
+
+            if (newUseConsistent != useConsistent)
+            {
+                onToggleChanged(newUseConsistent);
+            }
+
+            if (useConsistent)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUILayout.Label(string.Format(CameraController.PaddingLabel, padding),
+                    HighLogic.Skin.label);
+
+                float newPadding = GUILayout.HorizontalSlider(padding, 0.5f, 3.0f);
+                if (!Mathf.Approximately(newPadding, padding))
+                {
+                    onPaddingChanged(newPadding);
+                }
+
+                GUILayout.Label(CameraController.PaddingTooltip, CinematicUIResources.Styles.Help());
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
+
+            GUIStyle infoStyle = CinematicUIResources.Styles.Label(CinematicUIResources.Colors.INFO_ORANGE,
+                fontSize: CinematicUIResources.Typography.INFO);
+            GUILayout.Label(string.Format(CameraController.CurrentFOVFormat, currentFOV), infoStyle);
         }
 
         private void DrawGrid()
@@ -420,105 +632,85 @@ namespace CinematicRecorder.UI
             GUILayout.Label(CameraController.ControlAssignCurrent, small);
         }
 
-        private void DrawAutoZoomControls(CameraSlot slot)
-        {
-            var settings = slot?.ctSettings;
-            if (settings == null) return;
-
-            bool useConsistent = settings.UseConsistentAutoZoom;
-
-            // Check if THIS specific slot is the currently active CT camera
-            bool isThisSlotActive = (slotManager.ActiveSlot == slot) &&
-                                   (cameraManager.ActiveCamera is CameraToolsCamera);
-
-            float currentFOV = settings.ManualFOV;
-            if (isThisSlotActive && cameraManager.ActiveCamera != null)
-            {
-                currentFOV = cameraManager.ActiveCamera.FieldOfView;
-            }
-
-            GUIStyle header = CinematicUIResources.Styles.Header();
-            GUILayout.Label(CameraController.AutoZoomHeader, header);
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-
-            // Consistent Framing Toggle - ALWAYS SHOW if CT slot
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (useConsistent)
-            {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newUseConsistent = GUILayout.Toggle(
-                useConsistent,
-                CameraController.ConsistentFramingToggle,
-                toggleStyle
-            );
-
-            if (newUseConsistent != settings.UseConsistentAutoZoom)
-            {
-                settings.UseConsistentAutoZoom = newUseConsistent;
-
-                // Apply immediately if this camera is currently active
-                if (isThisSlotActive)
-                {
-                    var controller = new CameraToolsCameraController();
-                    if (newUseConsistent)
-                    {
-                        controller.ApplyConsistentAutoZoom(true, settings.ZoomPadding);
-                    }
-                    else if (settings.AutoZoom)
-                    {
-                        CameraToolsReflectionProvider.SetBool(CameraToolsReflectionProvider.AutoZoomStationaryField, true);
-                    }
-                }
-            }
-
-            // Padding controls - show if consistent zoom enabled
-            if (settings.UseConsistentAutoZoom)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUILayout.Label(string.Format(CameraController.PaddingLabel, settings.ZoomPadding),
-                    HighLogic.Skin.label);
-
-                float newPadding = GUILayout.HorizontalSlider(settings.ZoomPadding, 0.5f, 3.0f);
-                if (!Mathf.Approximately(newPadding, settings.ZoomPadding))
-                {
-                    settings.ZoomPadding = newPadding;
-
-                    // Apply immediately if this is the active camera
-                    if (isThisSlotActive)
-                    {
-                        var controller = new CameraToolsCameraController();
-                        controller.ApplyConsistentAutoZoom(true, newPadding);
-                    }
-                }
-
-                GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-                GUILayout.Label(CameraController.PaddingTooltip, helpStyle);
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
-
-            // Live FOV display if active
-            if (isThisSlotActive)
-            {
-                GUIStyle infoStyle = CinematicUIResources.Styles.Label(CinematicUIResources.Colors.INFO_ORANGE,
-                    fontSize: CinematicUIResources.Typography.INFO);
-                GUILayout.Label(string.Format("Current FOV: {0:F1}°", currentFOV), infoStyle);
-            }
-            else
-            {
-                GUILayout.Label(" ");
-            }
-        }
-
         private void DrawZoomControls()
         {
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
             GUILayout.BeginVertical(GUI.skin.box);
 
+            // Mode Toggle - Fixed Layout
+            GUILayout.BeginHorizontal();
+
+            // Rate Mode Toggle (left side, fixed width)
+            GUIStyle modeStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (currentZoomMode == ZoomMode.Rate)
+            {
+                modeStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                modeStyle.fontStyle = FontStyle.Bold;
+            }
+            bool wantRateMode = GUILayout.Toggle(currentZoomMode == ZoomMode.Rate, CameraController.RateModeToggle, modeStyle, GUILayout.Width(85f));
+
+            // Small gap between buttons
+            GUILayout.Space(10f);
+
+            // Target Mode Toggle (left side, fixed width)
+            GUIStyle targetStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (currentZoomMode == ZoomMode.Target)
+            {
+                targetStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                targetStyle.fontStyle = FontStyle.Bold;
+            }
+            bool wantTargetMode = GUILayout.Toggle(currentZoomMode == ZoomMode.Target, CameraController.TargetModeToggle, targetStyle, GUILayout.Width(85f));
+
+            // Fill remaining space to the right (pushes buttons to left)
+            GUILayout.FlexibleSpace();
+
+            GUILayout.EndHorizontal();
+
+            // Update mode if changed - cancel active strategies on switch
+            if (wantRateMode && currentZoomMode != ZoomMode.Rate)
+            {
+                zoomService.CancelActiveZoom();
+                ctController.CancelActiveZoom();
+
+                // Also cancel deterministic strategies if in capture mode
+                if (DeterministicCaptureSession.IsRunning)
+                {
+                    DeterministicCaptureSession.ActiveZoomController?.Clear();
+                }
+
+                currentZoomMode = ZoomMode.Rate;
+            }
+            else if (wantTargetMode && currentZoomMode != ZoomMode.Target)
+            {
+                zoomService.CancelActiveZoom();
+                ctController.CancelActiveZoom();
+
+                // Also cancel deterministic strategies if in capture mode
+                if (DeterministicCaptureSession.IsRunning)
+                {
+                    DeterministicCaptureSession.ActiveZoomController?.Clear();
+                }
+
+                zoomService.ZoomIntent = 0f;
+                currentZoomMode = ZoomMode.Target;
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+            if (currentZoomMode == ZoomMode.Rate)
+            {
+                DrawRateModeControls();
+            }
+            else
+            {
+                DrawTargetModeControls();
+            }
+
+            GUILayout.EndVertical();
+        }
+
+        private void DrawRateModeControls()
+        {
             GUILayout.Label(CameraController.ZoomControlLabel, HighLogic.Skin.label);
 
             GUILayout.BeginHorizontal();
@@ -534,34 +726,138 @@ namespace CinematicRecorder.UI
             float maxFov = cameraManager.GetMaxFOV();
             GUILayout.Label(string.Format(CameraController.FOVFormat, zoomService.CurrentFoV, maxFov), HighLogic.Skin.label);
 
-            GUILayout.BeginHorizontal();
             if (GUILayout.Button(CameraController.ResetZoom, GUILayout.Width(CinematicUIResources.Layout.Zoom.RESET_BUTTON_WIDTH)))
             {
-                zoomService.ResetZoom(maxFov);
+                if (DeterministicCaptureSession.IsRunning)
+                {
+                    var detZoom = DeterministicCaptureSession.ActiveZoomController;
+                    if (detZoom != null)
+                        detZoom.Interrupt(new InstantZoomStrategy(maxFov));
+                }
+                else
+                {
+                    zoomService.ResetZoom(maxFov);
+                    ctController.ResetZoom();
+                }
             }
+        }
 
-            GUILayout.FlexibleSpace();
-
-            GUIStyle autoStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (zoomService.AutoDistanceTracking)
+        private void DrawTargetModeControls()
+        {
+            // Target Consistent Framing checkbox
+            bool newConsistentTarget = GUILayout.Toggle(targetIsConsistentFraming, CameraController.TargetConsistentFramingToggle);
+            if (newConsistentTarget != targetIsConsistentFraming)
             {
-                autoStyle.normal.textColor = CinematicUIResources.Colors.AUTO_TRACK_BLUE;
-                autoStyle.fontStyle = FontStyle.Bold;
+                targetIsConsistentFraming = newConsistentTarget;
             }
-            zoomService.AutoDistanceTracking = GUILayout.Toggle(zoomService.AutoDistanceTracking, CameraController.AutoDistanceToggle, autoStyle);
 
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+            // Target FOV input (hidden if using consistent framing)
+            if (!targetIsConsistentFraming)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(CameraController.TargetFOVLabel, GUILayout.Width(80f));
+                string targetStr = GUILayout.TextField(targetFOVValue.ToString("F1"), GUILayout.Width(60f));
+                if (float.TryParse(targetStr, out float parsedTarget))
+                {
+                    targetFOVValue = Mathf.Clamp(parsedTarget, 2f, 120f);
+                }
+                GUILayout.Label("°", GUILayout.Width(20f));
+                GUILayout.EndHorizontal();
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            }
+
+            // Duration slider (0.0 - 5.0 seconds)
+            GUILayout.Label(string.Format(CameraController.DurationLabel, targetDuration), HighLogic.Skin.label);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("0.0", GUILayout.Width(30f));
+            targetDuration = GUILayout.HorizontalSlider(targetDuration, 0f, 5f);
+            GUILayout.Label("5.0", GUILayout.Width(30f));
             GUILayout.EndHorizontal();
 
-            if (zoomService.AutoDistanceTracking)
-            {
-                GUIStyle distStyle = CinematicUIResources.Styles.Label(
-                    CinematicUIResources.Colors.INFO_ORANGE,
-                    fontSize: CinematicUIResources.Typography.HELP
-                );
-                GUILayout.Label(CameraController.AutoDistanceTooltip, distStyle);
-            }
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
 
-            GUILayout.EndVertical();
+            // Curve selection
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(CameraController.CurveLabel, GUILayout.Width(50f));
+            string[] curveOptions = new string[]
+            {
+                CameraController.CurveLinear,
+                CameraController.CurveEaseIn,
+                CameraController.CurveEaseOut,
+                CameraController.CurveEaseInOut
+            };
+            int selectedCurve = (int)targetZoomCurve;
+            selectedCurve = GUILayout.SelectionGrid(selectedCurve, curveOptions, 2);
+            targetZoomCurve = (ZoomCurve)selectedCurve;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+            // Go button
+            GUIStyle goStyle = CinematicUIResources.Styles.ColoredButton(
+                CinematicUIResources.Colors.GLOW_GREEN,
+                Color.black,
+                FontStyle.Bold
+            );
+
+            if (GUILayout.Button(CameraController.GoButton, goStyle, GUILayout.Height(30f)))
+            {
+                ExecuteTargetZoom();
+            }
+        }
+
+        private void ExecuteTargetZoom()
+        {
+            if (!targetIsConsistentFraming && targetFOVValue <= 0)
+                targetFOVValue = cameraManager.GetCurrentFOV();
+
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                var detZoom = DeterministicCaptureSession.ActiveZoomController;
+                if (detZoom == null) return;
+
+                if (targetIsConsistentFraming)
+                {
+                    detZoom.QueueConsistentFramingTransition(targetDuration, targetZoomCurve, zoomService.ConsistentZoomPadding);
+                }
+                else
+                {
+                    if (targetDuration < 0.001f)
+                        detZoom.Interrupt(new InstantZoomStrategy(targetFOVValue));
+                    else
+                        detZoom.Interrupt(new TargetBasedZoomStrategy(targetFOVValue, targetDuration, targetZoomCurve));
+                }
+            }
+            else
+            {
+                ICamera activeCam = cameraManager.ActiveCamera;
+
+                if (targetIsConsistentFraming)
+                {
+                    if (activeCam is CameraToolsCamera ctCam)
+                    {
+                        ctController.QueueConsistentTransition(targetDuration, targetZoomCurve);
+                        // For instant, update slot immediately so UI reflects it next frame
+                        if (targetDuration < 0.001f && slotManager.ActiveSlot?.ctSettings != null)
+                        {
+                            slotManager.ActiveSlot.ctSettings.UseConsistentAutoZoom = true;
+                        }
+                    }
+                    else if (activeCam is HullCamController)
+                    {
+                        zoomService.QueueConsistentTransition(targetDuration, targetZoomCurve);
+                    }
+                }
+                else
+                {
+                    if (activeCam is CameraToolsCamera)
+                        ctController.QueueTargetZoom(targetFOVValue, targetDuration, targetZoomCurve);
+                    else if (activeCam is HullCamController)
+                        zoomService.QueueTargetZoom(targetFOVValue, targetDuration, targetZoomCurve);
+                }
+            }
         }
 
         private void DrawProfilesInterface()
@@ -695,7 +991,12 @@ namespace CinematicRecorder.UI
         #region Camera Interaction
         private void OnButtonClicked(int index)
         {
+            Debug.Log($"[FOV Debug] === CLICK START === index={index}, _lastCTSlotIndex={_lastCTSlotIndex}");
+
+            // Capture current CT state before switching away
+            
             var slot = slotManager.GetSlot(index);
+            Debug.Log($"[FOV Debug] Switching to slot {index}, isCT={slot?.isCameraToolsSlot}");
 
             if (slot?.isCameraToolsSlot == true)
             {
@@ -708,56 +1009,53 @@ namespace CinematicRecorder.UI
                         ScreenMessages.PostScreenMessage("Cannot activate - invalid path index", 2f);
                         return;
                     }
-                    var controller = new CameraToolsCameraController();
-                    if (!controller.PathExists(slot.ctSettings.SelectedPathIndex))
+                    if (!ctController.PathExists(slot.ctSettings.SelectedPathIndex))
                     {
                         ScreenMessages.PostScreenMessage("Saved path no longer exists", 2f);
                         return;
                     }
                 }
+                if (_lastCTSlotIndex >= 0 && _lastCTSlotIndex != index)
+                {
+                    CaptureCTStateIfActive();
+                }
 
                 BeginCameraSwitch(() =>
                 {
-                    // CRITICAL: Set active slot FIRST so UI updates immediately
-                    slotManager.SetActiveSlot(index);
+                    ctController.UseConsistentAutoZoom = slot.ctSettings.UseConsistentAutoZoom;
+                    ctController.ConsistentZoomPadding = slot.ctSettings.ZoomPadding;
+                    ctController.CancelActiveZoom();
 
-                    // Activate the camera
+                    slotManager.SetActiveSlot(index);
+                    _lastCTSlotIndex = index;
+                    Debug.Log($"[FOV Debug] Set _lastCTSlotIndex = {index}");
+
                     cameraManager.SwitchToCamera(slot, immediate: true);
 
-                    // Apply zoom settings immediately for snap (no interpolation)
                     if (slot.ctSettings.UseConsistentAutoZoom)
                     {
-                        var controller = new CameraToolsCameraController();
-                        // Immediate snap, no lerp
-                        controller.EnforceAutoZoomFOVImmediate(
-                            controller.CalculateConsistentAutoZoom(
-                                FlightGlobals.ActiveVessel,
-                                FlightCamera.fetch.transform.position,
-                                slot.ctSettings.ZoomPadding
-                            )
-                        );
+                        ctController.ApplyConsistentFraming();
                     }
                     else if (slot.ctSettings.AutoZoom)
                     {
-                        var controller = new CameraToolsCameraController();
-                        ApplyNativeAutoZoom(slot, controller);
+                        ApplyNativeAutoZoom(slot, ctController);
                     }
 
-                    // Force position fixup if geographic (immediate, not deferred)
                     var ctCam = cameraManager.ActiveCamera as CameraToolsCamera;
                     if (ctCam != null && slot.ctSettings.UseGeographicPosition)
                     {
-                        var controller = new CameraToolsCameraController();
-                        if (controller.HasPendingGeographicRestoration())
+                        if (ctController.HasPendingGeographicRestoration())
                         {
-                            controller.PostActivationPositionFixup();
+                            ctController.PostActivationPositionFixup();
                         }
                     }
                 });
                 return;
             }
 
-            // HullCam handling
+            _lastCTSlotIndex = -1;
+            Debug.Log($"[FOV Debug] Reset _lastCTSlotIndex to -1 (HullCam/non-CT)");
+
             Vessel vessel = FlightGlobals.ActiveVessel;
             CameraSlot.SlotStatus status = slot.GetStatus(vessel);
 
@@ -780,31 +1078,71 @@ namespace CinematicRecorder.UI
                     ScreenMessages.PostScreenMessage(CameraController.CameraUnavailable, 2f);
                     break;
             }
+
+            Debug.Log($"[FOV Debug] === CLICK END ===");
         }
 
         private void BeginCameraSwitch(Action cameraAction)
         {
-            transitionCoordinator.BeginTransition(cameraAction);
+            // Determine if we should use deterministic fading based on session state
+            bool useDeterministic = DeterministicCaptureSession.IsRunning;
+            transitionCoordinator.BeginTransition(cameraAction, useDeterministic);
+        }
+        private void CaptureCTStateIfActive()
+        {
+            if (_lastCTSlotIndex >= 0)
+            {
+                var slot = slotManager.GetSlot(_lastCTSlotIndex);
+                if (slot?.isCameraToolsSlot == true && ctController.IsAvailable && ctController.IsActive)
+                {
+                    // Use API to get current FOV instead of reflection
+                    float currentFOV = CameraToolsAPIManager.GetActualFOV();
+
+                    if (currentFOV > 0)
+                    {
+                        // Clone then modify to avoid mutating stored reference
+                        var newSettings = slot.ctSettings.Clone();
+                        newSettings.ManualFOV = currentFOV;
+                        newSettings.UseConsistentAutoZoom = ctController.UseConsistentAutoZoom;
+                        newSettings.ZoomPadding = ctController.ConsistentZoomPadding;
+
+                        // Re-assign to trigger property setter cloning
+                        slot.ctSettings = newSettings;
+
+                        UnityEngine.Debug.Log($"[FOV Capture] Slot {_lastCTSlotIndex}: Updated ManualFOV to {currentFOV:F1} via API");
+                    }
+                }
+            }
         }
 
         private void AssignCurrentToSlot(int index)
         {
-            // Check CameraTools first via CameraManager capability check
-            var ctController = new CameraToolsCameraController();
             if (ctController.IsAvailable && ctController.IsActive)
             {
                 var settings = ctController.CaptureCurrentSettings();
                 if (settings != null)
                 {
+                    // Sync playback timing preference from Advanced Options
+                    settings.LockPathingToPlaybackRate = SessionState.CameraPathPlaybackTiming;
+
+                    // Also sync deterministic control flag if currently recording
+                    settings.UseDeterministicControl = DeterministicCaptureSession.IsRunning;
+
+                    UnityEngine.Debug.Log($"[AssignCurrentToSlot] Slot {index}: Capturing CT {settings.Mode} " +
+                        $"(PathIndex: {settings.SelectedPathIndex}, UsePlaybackTiming: {settings.LockPathingToPlaybackRate})");
+
                     if (slotManager.AssignCameraToolsToSlot(index, settings))
                     {
                         ScreenMessages.PostScreenMessage(string.Format(CameraController.SavedCameraToolsFormat, settings.GetDisplayName()), 2f);
                     }
                     return;
                 }
+                else
+                {
+                    UnityEngine.Debug.LogError($"[AssignCurrentToSlot] Failed to capture CT settings for slot {index}");
+                }
             }
 
-            // HullCam assignment
             if (!ValidateAssignmentPrerequisites(out object currentCam, out Vessel vessel)) return;
             if (slotManager.AssignHullCamToSlot(index, currentCam, vessel))
             {
@@ -854,10 +1192,7 @@ namespace CinematicRecorder.UI
             float nativeFOV = (7000f / (distance + 100f)) - 14f + margin;
             nativeFOV = Mathf.Clamp(nativeFOV, 2f, 60f);
 
-            // IMMEDIATE SNAP - bypass CameraTools' 0.1f lerp
             controller.EnforceAutoZoomFOVImmediate(nativeFOV);
-
-            // Force FlightCamera to accept it immediately
             FlightCamera.fetch.SetFoV(nativeFOV);
         }
         #endregion
@@ -871,35 +1206,136 @@ namespace CinematicRecorder.UI
                 ? GetDefaultPresetName()
                 : presetNameBuffer;
 
-            nameToSave = GetUniquePresetName(nameToSave);
+            // Check if this exact name exists
+            var existingNames = scenario.GetPresetNames();
 
-            scenario.SavePreset(nameToSave, false, new List<CameraSlot>(slotManager.Slots),
+            if (existingNames.Contains(nameToSave))
+            {
+                // Prompt for overwrite
+                ShowOverwriteDialog(nameToSave, scenario);
+                return;
+            }
+
+            // Check for auto-generated [i] variants and find next available
+            string uniqueName = GetUniquePresetName(nameToSave, existingNames);
+
+            // If GetUniquePresetName modified the name (added [i]), use it directly
+            // Otherwise use the original
+            if (uniqueName != nameToSave)
+            {
+                SavePresetWithName(scenario, uniqueName);
+                presetNameBuffer = uniqueName;
+            }
+            else
+            {
+                SavePresetWithName(scenario, nameToSave);
+                presetNameBuffer = nameToSave;
+            }
+        }
+
+        private void ShowOverwriteDialog(string presetName, CameraPanelConfig scenario)
+        {
+            // Store state for dialog callback
+            _pendingOverwritePresetName = presetName;
+            _pendingOverwriteScenario = scenario;
+            _showOverwriteDialog = true;
+        }
+
+        private void DrawOverwriteDialog()
+        {
+            if (!_showOverwriteDialog) return;
+
+            Rect dialogRect = new Rect(
+                parentWindowRect.x + CinematicUIResources.Layout.Dialog.OFFSET_X,
+                parentWindowRect.y + CinematicUIResources.Layout.Dialog.OFFSET_Y,
+                CinematicUIResources.Layout.Dialog.WIDTH + 100, // Wider for two buttons
+                CinematicUIResources.Layout.Dialog.HEIGHT
+            );
+
+            GUI.ModalWindow(99997, dialogRect, (id) =>
+            {
+                GUILayout.Label(string.Format(CameraController.OverwriteConfirm, _pendingOverwritePresetName));
+                GUILayout.Space(CinematicUIResources.Spacing.SECTION);
+
+                GUILayout.BeginHorizontal();
+
+                // Overwrite button
+                if (GUILayout.Button(CameraController.OverwriteYes, GUILayout.Height(CinematicUIResources.Layout.Dialog.BUTTON_HEIGHT)))
+                {
+                    // Overwrite existing
+                    SavePresetWithName(_pendingOverwriteScenario, _pendingOverwritePresetName);
+                    presetNameBuffer = _pendingOverwritePresetName;
+                    _showOverwriteDialog = false;
+                }
+
+                // Create New button - generates [i] variant
+                if (GUILayout.Button(CameraController.OverwriteNo, GUILayout.Height(CinematicUIResources.Layout.Dialog.BUTTON_HEIGHT)))
+                {
+                    var existingNames = _pendingOverwriteScenario.GetPresetNames();
+                    string newName = GetUniquePresetName(_pendingOverwritePresetName, existingNames);
+                    SavePresetWithName(_pendingOverwriteScenario, newName);
+                    presetNameBuffer = newName;
+                    _showOverwriteDialog = false;
+                }
+
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+                // Cancel button
+                if (GUILayout.Button(Common.Cancel, GUILayout.Height(CinematicUIResources.Layout.Dialog.BUTTON_HEIGHT)))
+                {
+                    _showOverwriteDialog = false;
+                }
+            }, CameraController.ConfirmOverwriteTitle);
+        }
+
+        private void SavePresetWithName(CameraPanelConfig scenario, string name)
+        {
+            scenario.SavePreset(name, false, new List<CameraSlot>(slotManager.Slots),
                 parentWindowRect.x, parentWindowRect.y);
-            presetNameBuffer = nameToSave;
+        }
+
+        private string GetUniquePresetName(string baseName, List<string> existingNames)
+        {
+            // If base name doesn't exist, use it as-is
+            if (!existingNames.Contains(baseName))
+                return baseName;
+
+            // Parse existing [i] suffix if present in baseName
+            string rootName = baseName;
+            int existingIndex = 0;
+
+            // Check if baseName already ends with [i] pattern
+            int bracketStart = baseName.LastIndexOf('[');
+            int bracketEnd = baseName.LastIndexOf(']');
+
+            if (bracketStart > 0 && bracketEnd > bracketStart && bracketEnd == baseName.Length - 1)
+            {
+                string numStr = baseName.Substring(bracketStart + 1, bracketEnd - bracketStart - 1);
+                if (int.TryParse(numStr, out int parsedNum))
+                {
+                    rootName = baseName.Substring(0, bracketStart);
+                    existingIndex = parsedNum;
+                }
+            }
+
+            // Find next available [i] starting from existingIndex + 1
+            int counter = existingIndex + 1;
+            string candidate;
+
+            do
+            {
+                candidate = $"{rootName}[{counter}]";
+                counter++;
+            } while (existingNames.Contains(candidate));
+
+            return candidate;
         }
 
         private string GetDefaultPresetName()
         {
             return _cachedVessel?.vesselName ?? CameraController.Preset;
-        }
-
-        private string GetUniquePresetName(string baseName)
-        {
-            var scenario = CameraPanelConfig.Instance;
-            if (scenario == null) return baseName;
-
-            var existing = scenario.GetPresetNames();
-            if (!existing.Contains(baseName)) return baseName;
-
-            int counter = 1;
-            string candidate;
-            do
-            {
-                candidate = string.Format(CameraController.PresetNameUniqueFormat, baseName, counter);
-                counter++;
-            } while (existing.Contains(candidate));
-
-            return candidate;
         }
 
         private void EnsurePresetNameBuffer()

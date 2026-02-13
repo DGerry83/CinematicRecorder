@@ -55,46 +55,7 @@ namespace CinematicRecorder.UI
                     vesselId = s.vesselId,
                     allowAnyVessel = s.allowAnyVessel,
                     isCameraToolsSlot = s.isCameraToolsSlot,
-                    ctSettings = s.ctSettings != null ? new CameraToolsSettings
-                    {
-                        Mode = s.ctSettings.Mode,
-                        DogfightDistance = s.ctSettings.DogfightDistance,
-                        DogfightOffsetX = s.ctSettings.DogfightOffsetX,
-                        DogfightOffsetY = s.ctSettings.DogfightOffsetY,
-                        DogfightChasePlaneMode = s.ctSettings.DogfightChasePlaneMode,
-                        DogfightTargetId = s.ctSettings.DogfightTargetId,
-                        UseGeographicPosition = s.ctSettings.UseGeographicPosition,
-                        Latitude = s.ctSettings.Latitude,
-                        Longitude = s.ctSettings.Longitude,
-                        Altitude = s.ctSettings.Altitude,
-                        BodyName = s.ctSettings.BodyName,
-                        AutoFlybyPosition = s.ctSettings.AutoFlybyPosition,
-                        AutoLandingPosition = s.ctSettings.AutoLandingPosition,
-                        ManualOffset = s.ctSettings.ManualOffset,
-                        ManualOffsetForward = s.ctSettings.ManualOffsetForward,
-                        ManualOffsetRight = s.ctSettings.ManualOffsetRight,
-                        ManualOffsetUp = s.ctSettings.ManualOffsetUp,
-                        HasTarget = s.ctSettings.HasTarget,
-                        TargetSelf = s.ctSettings.TargetSelf,
-                        TargetPartPersistentId = s.ctSettings.TargetPartPersistentId,
-                        TargetCoM = s.ctSettings.TargetCoM,
-                        MaintainInitialVelocity = s.ctSettings.MaintainInitialVelocity,
-                        UseOrbital = s.ctSettings.UseOrbital,
-                        AutoZoom = s.ctSettings.AutoZoom,
-                        ManualFOV = s.ctSettings.ManualFOV,
-                        InitialVelocity = s.ctSettings.InitialVelocity,
-                        SaveRotation = s.ctSettings.SaveRotation,
-                        FmPivotMode = s.ctSettings.FmPivotMode,
-                        PathingSecondarySmoothing = s.ctSettings.PathingSecondarySmoothing,
-                        SelectedPathIndex = s.ctSettings.SelectedPathIndex,
-                        PathTimeScale = s.ctSettings.PathTimeScale,
-                        CurrentKeyframeIndex = s.ctSettings.CurrentKeyframeIndex,
-                        IsPlayingPath = s.ctSettings.IsPlayingPath,
-                        UseRealTime = s.ctSettings.UseRealTime,
-                        PathStartTime = s.ctSettings.PathStartTime,
-                        UseConsistentAutoZoom = s.ctSettings.UseConsistentAutoZoom,
-                        ZoomPadding = s.ctSettings.ZoomPadding
-                    } : null
+                    ctSettings = s.ctSettings  // Property setter handles Clone()
                 }));
 
                 OnSlotsChanged?.Invoke();
@@ -179,13 +140,17 @@ namespace CinematicRecorder.UI
                 return false;
             }
 
+            // CRITICAL FIX: Create new slot with cloned settings (property setter handles cloning)
             cameraSlots[index] = new CameraSlot
             {
                 buttonID = string.Format(CameraController.ButtonIdFormat, index),
                 isCameraToolsSlot = true,
-                ctSettings = settings,
+                ctSettings = settings,  // Property setter will call Clone()
                 cameraName = settings.GetDisplayName()
             };
+
+            UnityEngine.Debug.Log($"[AssignCameraToolsToSlot] Slot {index} assigned CT {settings.Mode} " +
+                $"(Hash: {cameraSlots[index].ctSettings.GetHashCode()}, PathIndex: {settings.SelectedPathIndex})");
 
             OnSlotsChanged?.Invoke();
             return true;

@@ -196,6 +196,9 @@ namespace CinematicRecorder.Capture
                 // Step 5 - Increment accumulated simulated time
                 DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
 
+                // Step 5.5 - Invoke Physics Stepped Event
+                DeterministicCaptureSession.InvokeOnPhysicsStepped(simFrameDelta);
+
                 // Step 6 - Update progress (using accumulated time for seconds)
                 DeterministicCaptureSession.UpdateProgress(
                     actualCapturedFrames,

@@ -112,6 +112,12 @@
             public const string CaptureRateFormat = "Capture Rate: {0:F1} FPS";
             public const string CaptureRatePercentFormat = "Capture Rate: {0:F1} FPS ({1:F0}%)";
             public const string EstimatedRemainingFormat = "Est. Remaining: {0:mm\\:ss}";
+
+            // Advanced Camera Settings Panel
+            public const string AdvancedCameraButton = "Adv. Camera";
+            public const string AdvancedCameraHeader = "Advanced Camera Settings";
+            public const string PathPlaybackTimingToggle = " Use playback timing";
+            public const string PathPlaybackTimingTooltip = "Keeps path timing constant during slow-mo";
         }
 
         public static class CameraController
@@ -159,6 +165,25 @@
             public const string ConsistentFramingToggle = " Consistent Framing";
             public const string PaddingLabel = "Padding: {0:F1}x";
             public const string PaddingTooltip = "0.5x = tight fit, 1.5x = normal, 3.0x = wide";
+            public const string CurrentFOVFormat = "Current FOV: {0:F1}°";
+
+            public const string RateModeToggle = "Rate Mode";
+            public const string TargetModeToggle = "Target Mode";
+            public const string TargetFOVLabel = "Target FOV:";
+            public const string ApproachRateLabel = "Approach Rate:";
+            public const string CurveLabel = "Curve:";
+            public const string GoButton = "Go";
+            public const string CurveLinear = "Linear";
+            public const string CurveEaseIn = "Ease In";
+            public const string CurveEaseOut = "Ease Out";
+            public const string CurveEaseInOut = "Ease In/Out";
+            public const string TargetConsistentFramingToggle = " Target Consistent Framing";
+            public const string DurationLabel = "Duration: {0:F1}s";
+
+            public const string OverwriteConfirm = "Overwrite existing preset '{0}'?";
+            public const string OverwriteYes = "Overwrite";
+            public const string OverwriteNo = "Create New";
+            public const string ConfirmOverwriteTitle = "Confirm Overwrite";
         }
 
         public static class Report

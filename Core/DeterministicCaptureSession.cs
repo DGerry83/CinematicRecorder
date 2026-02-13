@@ -1,10 +1,11 @@
-﻿using System;
-using System.IO;
+﻿using CinematicRecorder.Capture;
+using CinematicRecorder.Integration;
+using CinematicRecorder.UI;
+using System;
 using System.Collections;
 using System.Diagnostics;
+using System.IO;
 using UnityEngine;
-using CinematicRecorder.Capture;
-using CinematicRecorder.UI;
 
 namespace CinematicRecorder.Core
 {
@@ -14,6 +15,10 @@ namespace CinematicRecorder.Core
         public static bool StopRequested { get; private set; }
 
         public static bool IsUnlimitedMode { get; private set; }
+
+        
+        /// <summary>Fired every physics step during deterministic capture. Parameter = physics delta time for this step.</summary>
+        public static event Action<float> OnPhysicsStepped;
 
         // UI Fields
         public static float CaptureFPS { get; internal set; }
@@ -66,6 +71,9 @@ namespace CinematicRecorder.Core
         /// <summary>Accumulated simulated seconds (replaces frame count for progress)</summary>
         public static float AccumulatedSimulatedSeconds { get; internal set; } = 0f;
 
+        /// <summary>Active deterministic zoom controller during capture. Null when not running.</summary>
+        public static SimulationTimeZoomController ActiveZoomController { get; private set; }
+
         // Time Scale Constants
         public const float KRAKEN_TIME_FPS = 10000f;
         public const float KRAKEN_TIME_THRESHOLD = 0.015f;
@@ -93,6 +101,19 @@ namespace CinematicRecorder.Core
 
         // Internal state
         private static Stopwatch realWorldTimer;
+
+        public static void InvokeOnPhysicsStepped(float physicsDeltaTime)
+        {
+            OnPhysicsStepped?.Invoke(physicsDeltaTime);
+
+            // Drive CameraTools deterministic camera updates if available
+            // CameraTools uses the physicsDeltaTime or playbackDeltaTime based on LockPathingToPlaybackRate setting
+            if (CameraToolsAPIManager.IsAvailable)
+            {
+                float playbackDt = 1.0f / PlaybackFPS;
+                CameraToolsAPIManager.PhysicsStepUpdate(physicsDeltaTime, playbackDt);
+            }
+        }
 
         public static void Run(
             int simulationFps,
@@ -175,10 +196,64 @@ namespace CinematicRecorder.Core
 
             var captureRunner = runner.AddComponent<CaptureRunner>();
 
+            ActiveZoomController = runner.AddComponent<SimulationTimeZoomController>();
+
+            TakeControlOfActivePathingCamera(playbackFps);
             // Fire recording started event
             OnRecordingStarted?.Invoke();
 
             captureRunner.StartCoroutine(RunAndCleanup(controller, runner));
+        }
+
+        /// <summary>
+        /// If a CameraTools pathing camera is already active when recording starts,
+        /// enable deterministic control and capture current path progress without jumping.
+        /// </summary>
+        private static void TakeControlOfActivePathingCamera(int playbackFps)
+        {
+            if (!CameraToolsAPIManager.IsAvailable)
+                return;
+
+            // Check if CT is active and in pathing mode
+            if (!CameraToolsAPIManager.IsCameraActive())
+                return;
+
+            var currentMode = CameraToolsAPIManager.GetToolMode();
+            if (currentMode != ToolModes.Pathing)
+                return;
+
+            // Get current state - this populates internal _lastState for helper methods
+            var state = CameraToolsAPIManager.GetCurrentState();
+            if (state == null)
+                return;
+
+            // Get state values via API helper methods (state is object, not typed)
+            bool isPlayingPath = CameraToolsAPIManager.GetIsPlayingPathFromState();
+            float currentPathTime = CameraToolsAPIManager.GetCurrentPathTime();
+
+            UnityEngine.Debug.Log($"[DeterministicCaptureSession] Taking control of active pathing camera. " +
+                $"IsPlaying: {isPlayingPath}, CurrentTime: {currentPathTime}s");
+
+            // Step 2: Configure timing mode based on slot settings
+            bool usePlaybackTiming = false;
+            var activeSlot = CinematicCameraManager.Instance.ActiveSlot;
+            if (activeSlot?.isCameraToolsSlot == true && activeSlot.ctSettings != null)
+            {
+                usePlaybackTiming = activeSlot.ctSettings.LockPathingToPlaybackRate;
+            }
+
+            CameraToolsAPIManager.SetLockPathingToPlaybackRate(usePlaybackTiming);
+
+            // Step 3: Enable deterministic control - captures current elapsed time if playing
+            CameraToolsAPIManager.SetCinematicRecorderControl(enabled: true, deterministicMode: true);
+
+            UnityEngine.Debug.Log("[DeterministicCaptureSession] Deterministic control enabled for pathing camera");
+
+            // Step 4: Only start playback if not already playing
+            if (!isPlayingPath)
+            {
+                CameraToolsAPIManager.StartPathPlayback();
+            }
         }
 
         // ====================================
@@ -380,6 +455,8 @@ namespace CinematicRecorder.Core
 
             realWorldTimer?.Stop();
             realWorldTimer = null;
+
+            ActiveZoomController = null;
 
             // Reset time scale state
             CurrentTimeScale = 1.0f;

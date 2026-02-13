@@ -48,6 +48,12 @@ namespace CinematicRecorder.UI
                 public const float WIDTH = 355f;
                 public const float HEIGHT_INITIAL = 220f;
                 public const float HEIGHT_BASE = 140f;
+
+                // Advanced Camera Settings panel
+                public const float ADVANCED_PANEL_WIDTH = 260f;
+                public const float ADVANCED_MARGIN = 20f;
+                public const float ADVANCED_TOGGLE_WIDTH = 100f;
+                public const float ADVANCED_TOGGLE_HEIGHT = 28f;
             }
 
             public static class FinalReport

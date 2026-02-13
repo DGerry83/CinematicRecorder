@@ -9,8 +9,7 @@ namespace CinematicRecorder.Integration
 {
     /// <summary>
     /// Low-level reflection provider for CameraTools.
-    /// Caches all FieldInfo/MethodInfo bindings and provides raw getters/setters.
-    /// No domain logic - pure reflection infrastructure.
+    /// Uses public field access for API v2.0+ exposed fields and reflection for remaining members.
     /// </summary>
     public static class CameraToolsReflectionProvider
     {
@@ -26,7 +25,7 @@ namespace CinematicRecorder.Integration
         // Static fields
         private static FieldInfo _fetchField;
 
-        // Public instance fields
+        // Public instance fields (CameraTools API v2.0+)
         private static FieldInfo _toolModeField;
         private static FieldInfo _cameraToolActiveField;
         private static FieldInfo _vesselField;
@@ -54,20 +53,22 @@ namespace CinematicRecorder.Integration
         private static FieldInfo _saveRotationField;
         private static FieldInfo _fmPivotModeField;
         private static FieldInfo _pathingSecondarySmoothingField;
+        private static FieldInfo _autoZoomMarginStationaryField;
+        private static FieldInfo _zoomExpStationaryField;
+        private static FieldInfo _initialVelocityField;
 
-        // Private instance fields
+        // Now-public fields (API v2.0+) - cached for property accessors
         private static FieldInfo _manualPositionField;
         private static FieldInfo _manualFOVField;
         private static FieldInfo _currentFOVField;
-        private static FieldInfo _camTargetField;
         private static FieldInfo _hasTargetField;
-        private static FieldInfo _setPresetOffsetField;
-        private static FieldInfo _presetOffsetField;
-        private static FieldInfo _initialVelocityField;
+        private static FieldInfo _camTargetField;
         private static FieldInfo _cameraParentField;
         private static FieldInfo _lastVesselCoMField;
-        private static FieldInfo _autoZoomMarginStationaryField;
-        private static FieldInfo _zoomExpStationaryField;
+
+        // Remaining private instance fields
+        private static FieldInfo _setPresetOffsetField;
+        private static FieldInfo _presetOffsetField;
 
         // Methods
         private static MethodInfo _cameraActivateMethod;
@@ -110,7 +111,7 @@ namespace CinematicRecorder.Integration
                 // Bind static fetch
                 _fetchField = _camToolsType.GetField("fetch", BindingFlags.Public | BindingFlags.Static);
 
-                // Bind public instance fields
+                // Bind public instance fields (standard settings)
                 _toolModeField = _camToolsType.GetField("toolMode", BindingFlags.Public | BindingFlags.Instance);
                 _cameraToolActiveField = _camToolsType.GetField("cameraToolActive", BindingFlags.Public | BindingFlags.Instance);
                 _vesselField = _camToolsType.GetField("vessel", BindingFlags.Public | BindingFlags.Instance);
@@ -138,20 +139,22 @@ namespace CinematicRecorder.Integration
                 _currentKeyframeIndexField = _camToolsType.GetField("currentKeyframeIndex", BindingFlags.Public | BindingFlags.Instance);
                 _useRealTimeField = _camToolsType.GetField("useRealTime", BindingFlags.Public | BindingFlags.Instance);
                 _pathStartTimeField = _camToolsType.GetField("pathStartTime", BindingFlags.Public | BindingFlags.Instance);
-
-                // Bind private fields
-                _manualPositionField = _camToolsType.GetField("manualPosition", BindingFlags.NonPublic | BindingFlags.Instance);
-                _manualFOVField = _camToolsType.GetField("manualFOV", BindingFlags.NonPublic | BindingFlags.Instance);
-                _currentFOVField = _camToolsType.GetField("currentFOV", BindingFlags.NonPublic | BindingFlags.Instance);
-                _camTargetField = _camToolsType.GetField("camTarget", BindingFlags.NonPublic | BindingFlags.Instance);
-                _hasTargetField = _camToolsType.GetField("hasTarget", BindingFlags.NonPublic | BindingFlags.Instance);
-                _setPresetOffsetField = _camToolsType.GetField("setPresetOffset", BindingFlags.NonPublic | BindingFlags.Instance);
-                _presetOffsetField = _camToolsType.GetField("presetOffset", BindingFlags.NonPublic | BindingFlags.Instance);
-                _initialVelocityField = _camToolsType.GetField("initialVelocity", BindingFlags.NonPublic | BindingFlags.Instance);
-                _cameraParentField = _camToolsType.GetField("cameraParent", BindingFlags.NonPublic | BindingFlags.Instance);
-                _lastVesselCoMField = _camToolsType.GetField("lastVesselCoM", BindingFlags.NonPublic | BindingFlags.Instance);
                 _autoZoomMarginStationaryField = _camToolsType.GetField("autoZoomMarginStationary", BindingFlags.Public | BindingFlags.Instance);
                 _zoomExpStationaryField = _camToolsType.GetField("zoomExpStationary", BindingFlags.Public | BindingFlags.Instance);
+                _initialVelocityField = _camToolsType.GetField("initialVelocity", BindingFlags.Public | BindingFlags.Instance);
+
+                // Bind now-public fields (API v2.0+) - these were previously NonPublic
+                _manualPositionField = _camToolsType.GetField("manualPosition", BindingFlags.Public | BindingFlags.Instance);
+                _manualFOVField = _camToolsType.GetField("manualFOV", BindingFlags.Public | BindingFlags.Instance);
+                _currentFOVField = _camToolsType.GetField("currentFOV", BindingFlags.Public | BindingFlags.Instance);
+                _hasTargetField = _camToolsType.GetField("hasTarget", BindingFlags.Public | BindingFlags.Instance);
+                _camTargetField = _camToolsType.GetField("camTarget", BindingFlags.Public | BindingFlags.Instance);
+                _cameraParentField = _camToolsType.GetField("cameraParent", BindingFlags.Public | BindingFlags.Instance);
+                _lastVesselCoMField = _camToolsType.GetField("lastVesselCoM", BindingFlags.Public | BindingFlags.Instance);
+                _setPresetOffsetField = _camToolsType.GetField("setPresetOffset", BindingFlags.Public | BindingFlags.Instance);
+
+                // Bind remaining private fields
+                _presetOffsetField = _camToolsType.GetField("presetOffset", BindingFlags.NonPublic | BindingFlags.Instance);
 
                 // Bind methods
                 _cameraActivateMethod = _camToolsType.GetMethod("CameraActivate", BindingFlags.Public | BindingFlags.Instance);
@@ -174,6 +177,88 @@ namespace CinematicRecorder.Integration
             if (!IsAvailable || _fetchField == null) return null;
             return _fetchField.GetValue(null);
         }
+
+        #region Direct Public Field Access Properties (API v2.0+)
+
+        /// <summary>
+        /// Direct access to manualPosition (public field in CameraTools v2.0+)
+        /// </summary>
+        public static Vector3 ManualPosition
+        {
+            get => GetField(_manualPositionField, Vector3.zero);
+            set => SetField(_manualPositionField, value);
+        }
+
+        /// <summary>
+        /// Direct access to manualFOV (public field in CameraTools v2.0+).
+        /// Note: Prefer CameraToolsAPIManager.SetExternalFOV() for immediate FOV application without smoothing.
+        /// </summary>
+        public static float ManualFOV
+        {
+            get => GetField(_manualFOVField, 60f);
+            set => SetField(_manualFOVField, value);
+        }
+
+        /// <summary>
+        /// Direct access to currentFOV (public field in CameraTools v2.0+)
+        /// </summary>
+        public static float CurrentFOV
+        {
+            get => GetField(_currentFOVField, 60f);
+            set => SetField(_currentFOVField, value);
+        }
+
+        /// <summary>
+        /// Direct access to hasTarget (public field in CameraTools v2.0+)
+        /// </summary>
+        public static bool HasTarget
+        {
+            get => GetField(_hasTargetField, false);
+            set => SetField(_hasTargetField, value);
+        }
+
+        /// <summary>
+        /// Direct access to camTarget (public field in CameraTools API v2.0+)
+        /// </summary>
+        public static Part CamTarget
+        {
+            get => GetReference<Part>(_camTargetField);
+            set => SetReference(_camTargetField, value);
+        }
+
+        /// <summary>
+        /// Direct access to cameraParent GameObject (public field in CameraTools v2.0+)
+        /// </summary>
+        public static GameObject CameraParent
+        {
+            get => GetReference<GameObject>(_cameraParentField);
+            set => SetReference(_cameraParentField, value);
+        }
+
+        /// <summary>
+        /// Direct access to lastVesselCoM (public field in CameraTools v2.0+)
+        /// </summary>
+        public static Vector3 LastVesselCoM
+        {
+            get => GetField(_lastVesselCoMField, Vector3.zero);
+            set => SetField(_lastVesselCoMField, value);
+        }
+
+        /// <summary>
+        /// Direct access to setPresetOffset (public field in CameraTools API v2.0+)
+        /// </summary>
+        public static bool SetPresetOffset
+        {
+            get => GetField(_setPresetOffsetField, false);
+            set => SetField(_setPresetOffsetField, value);
+        }
+
+        /// <summary>
+        /// Direct access to isPlayingPath (public field in CameraTools v2.0+)
+        /// </summary>
+        public static bool IsPlayingPath => GetField(_isPlayingPathField, false);
+
+        #endregion
 
         // Generic Field Accessors
         public static T GetField<T>(FieldInfo field, T defaultValue = default)
@@ -297,11 +382,6 @@ namespace CinematicRecorder.Integration
         public static FieldInfo ToolModeField => _toolModeField;
         public static FieldInfo CameraToolActiveField => _cameraToolActiveField;
         public static FieldInfo VesselField => _vesselField;
-        public static FieldInfo ManualPositionField => _manualPositionField;
-        public static FieldInfo ManualFOVField => _manualFOVField;
-        public static FieldInfo CurrentFOVField => _currentFOVField;
-        public static FieldInfo CamTargetField => _camTargetField;
-        public static FieldInfo HasTargetField => _hasTargetField;
         public static FieldInfo DogfightDistanceField => _dogfightDistanceField;
         public static FieldInfo DogfightOffsetXField => _dogfightOffsetXField;
         public static FieldInfo DogfightOffsetYField => _dogfightOffsetYField;
@@ -327,10 +407,17 @@ namespace CinematicRecorder.Integration
         public static FieldInfo CurrentKeyframeIndexField => _currentKeyframeIndexField;
         public static FieldInfo UseRealTimeField => _useRealTimeField;
         public static FieldInfo PathStartTimeField => _pathStartTimeField;
-        public static FieldInfo CameraParentField => _cameraParentField;
-        public static FieldInfo LastVesselCoMField => _lastVesselCoMField;
         public static FieldInfo AutoZoomMarginStationaryField => _autoZoomMarginStationaryField;
         public static FieldInfo ZoomExpStationaryField => _zoomExpStationaryField;
         public static FieldInfo InitialVelocityField => _initialVelocityField;
+
+        // Expose the new public field accessors for external use
+        public static FieldInfo ManualPositionField => _manualPositionField;
+        public static FieldInfo ManualFOVField => _manualFOVField;
+        public static FieldInfo CurrentFOVField => _currentFOVField;
+        public static FieldInfo HasTargetField => _hasTargetField;
+        public static FieldInfo CamTargetField => _camTargetField;
+        public static FieldInfo CameraParentField => _cameraParentField;
+        public static FieldInfo LastVesselCoMField => _lastVesselCoMField;
     }
 }

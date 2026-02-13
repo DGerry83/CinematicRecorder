@@ -103,6 +103,17 @@ namespace CinematicRecorder.Core
         public const float RampExponentMin = 0.05f;
         public const float RampExponentMax = 3.0f;
 
+        // ============================================================
+        // CAMERATOOLS INTEGRATION SETTINGS
+        // ============================================================
+
+        /// <summary>
+        /// When true, pathing cameras advance by video frame time (1/60s per frame).
+        /// When false (default), pathing cameras advance by physics time.
+        /// Used for Kraken-Time recording where physics runs at 10,000fps but video outputs at 60fps.
+        /// </summary>
+        public static bool CameraPathPlaybackTiming { get; set; } = false;
+
 
         // ============================================================
         // HELPERS

@@ -264,6 +264,9 @@ namespace CinematicRecorder.Core
                             // NEW: Consistent Auto-Zoom settings (Step 3)
                             ctNode.AddValue("useConsistentAutoZoom", slot.ctSettings.UseConsistentAutoZoom);
                             ctNode.AddValue("zoomPadding", slot.ctSettings.ZoomPadding);
+
+                            // NEW: Playback timing for deterministic pathing (Step 1)
+                            ctNode.AddValue("lockPathingToPlaybackRate", slot.ctSettings.LockPathingToPlaybackRate);
                         }
                     }
                 }
@@ -416,6 +419,10 @@ namespace CinematicRecorder.Core
                                 // NEW: Consistent Auto-Zoom settings (Step 3)
                                 bool.TryParse(ctNode.GetValue("useConsistentAutoZoom") ?? "False", out slot.ctSettings.UseConsistentAutoZoom);
                                 float.TryParse(ctNode.GetValue("zoomPadding") ?? "1.5", out slot.ctSettings.ZoomPadding);
+
+                                // NEW: Playback timing for deterministic pathing (Step 1)
+                                // Default false (physics time) for backward compatibility if value missing
+                                bool.TryParse(ctNode.GetValue("lockPathingToPlaybackRate") ?? "False", out slot.ctSettings.LockPathingToPlaybackRate);
                             }
                         }
 

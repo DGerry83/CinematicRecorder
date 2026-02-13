@@ -71,12 +71,16 @@ namespace CinematicRecorder.Integration
         public bool UseRealTime = true;
         public float PathStartTime = 0f;
 
+        // NEW: Playback timing control for deterministic vs real-time pathing
+        public bool LockPathingToPlaybackRate;      // TRUE: Path advances by video frame time (for Kraken-Time). FALSE: Physics time (default)
+        public bool UseDeterministicControl;        // TRUE: Enables deterministic physics-step control mode
+
         // Additional CameraTools settings for accurate restoration
         public bool SaveRotation;                   // Whether to restore previous rotation on activation
         public FMPivotMode FmPivotMode;             // Camera vs Target pivot mode for free movement
         public float PathingSecondarySmoothing;     // Additional smoothing for path interpolation
 
-        // NEW: Custom Auto-Zoom Settings (Step 1)
+        // Custom Auto-Zoom Settings
         public bool UseConsistentAutoZoom;          // Enable custom angular-size-based auto-zoom
         public float ZoomPadding;                   // Padding multiplier (0.5 = tight, 1.5 = normal, 3.0 = wide)
 
@@ -84,6 +88,8 @@ namespace CinematicRecorder.Integration
         {
             // Initialize default values
             ZoomPadding = 1.5f;
+            LockPathingToPlaybackRate = false;      // Default to physics time for compatibility
+            UseDeterministicControl = false;
         }
 
         // Display helper
@@ -151,9 +157,61 @@ namespace CinematicRecorder.Integration
                            Mathf.Abs(this.DogfightOffsetY - other.DogfightOffsetY) < 1.0f;
 
                 case ToolModes.Pathing:
-                    return this.SelectedPathIndex == other.SelectedPathIndex;
+                    // Include playback timing in path matching
+                    return this.SelectedPathIndex == other.SelectedPathIndex &&
+                           this.LockPathingToPlaybackRate == other.LockPathingToPlaybackRate;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Creates a deep copy of these settings.
+        /// </summary>
+        public CameraToolsSettings Clone()
+        {
+            return new CameraToolsSettings
+            {
+                Mode = this.Mode,
+                DogfightDistance = this.DogfightDistance,
+                DogfightOffsetX = this.DogfightOffsetX,
+                DogfightOffsetY = this.DogfightOffsetY,
+                DogfightChasePlaneMode = this.DogfightChasePlaneMode,
+                DogfightTargetId = this.DogfightTargetId,
+                UseGeographicPosition = this.UseGeographicPosition,
+                Latitude = this.Latitude,
+                Longitude = this.Longitude,
+                Altitude = this.Altitude,
+                BodyName = this.BodyName,
+                AutoFlybyPosition = this.AutoFlybyPosition,
+                ManualOffset = this.ManualOffset,
+                ManualOffsetForward = this.ManualOffsetForward,
+                ManualOffsetRight = this.ManualOffsetRight,
+                ManualOffsetUp = this.ManualOffsetUp,
+                AutoLandingPosition = this.AutoLandingPosition,
+                HasTarget = this.HasTarget,
+                TargetSelf = this.TargetSelf,
+                TargetPartPersistentId = this.TargetPartPersistentId,
+                TargetCoM = this.TargetCoM,
+                AutoZoom = this.AutoZoom,
+                ManualFOV = this.ManualFOV,
+                MaintainInitialVelocity = this.MaintainInitialVelocity,
+                UseOrbital = this.UseOrbital,
+                InitialVelocity = this.InitialVelocity,
+                SelectedPathIndex = this.SelectedPathIndex,
+                PathTimeScale = this.PathTimeScale,
+                CurrentKeyframeIndex = this.CurrentKeyframeIndex,
+                IsPlayingPath = this.IsPlayingPath,
+                UseRealTime = this.UseRealTime,
+                PathStartTime = this.PathStartTime,
+                // NEW: Copy playback timing settings
+                LockPathingToPlaybackRate = this.LockPathingToPlaybackRate,
+                UseDeterministicControl = this.UseDeterministicControl,
+                SaveRotation = this.SaveRotation,
+                FmPivotMode = this.FmPivotMode,
+                PathingSecondarySmoothing = this.PathingSecondarySmoothing,
+                UseConsistentAutoZoom = this.UseConsistentAutoZoom,
+                ZoomPadding = this.ZoomPadding
+            };
         }
     }
 }

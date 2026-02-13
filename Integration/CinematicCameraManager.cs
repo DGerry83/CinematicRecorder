@@ -13,8 +13,6 @@ namespace CinematicRecorder.Integration
         private static CinematicCameraManager _instance;
         public static CinematicCameraManager Instance => _instance ?? (_instance = new CinematicCameraManager());
 
-        private readonly List<CameraToolsCamera> _pendingFixups = new List<CameraToolsCamera>();
-
         private ICamera _activeCamera;
         private CameraSlot _activeSlot;
 
@@ -53,32 +51,55 @@ namespace CinematicRecorder.Integration
         {
             if (slot == null) return;
 
-            // Clear previous if switching
-            if (_activeCamera != null)
+            // Check if switching between two CameraTools slots (CT→CT)
+            bool switchingCTtoCT = (_activeCamera is CameraToolsCamera) && slot.isCameraToolsSlot;
+
+            if (switchingCTtoCT)
             {
-                _activeCamera.OnDeactivated -= OnActiveCameraDeactivated;
+                // CT→CT transition: Use SwitchCamera for seamless transition
+                if (_activeCamera != null)
+                {
+                    _activeCamera.OnDeactivated -= OnActiveCameraDeactivated;
+                    // Don't call Deactivate - we're staying in CT
+                }
 
-                // ALWAYS fully deactivate previous camera when switching
-                // ReleaseControl just sets a flag and leaves CT in broken state
-                _activeCamera.Deactivate();
-            }
+                var newCamera = CreateCameraFromSlot(slot) as CameraToolsCamera;
+                if (newCamera == null) return;
 
-            var newCamera = CreateCameraFromSlot(slot);
-            if (newCamera == null) return;
+                _activeCamera = newCamera;
+                _activeSlot = slot;
+                _activeCamera.OnDeactivated += OnActiveCameraDeactivated;
 
-            _activeCamera = newCamera;
-            _activeSlot = slot;
-            _activeCamera.OnDeactivated += OnActiveCameraDeactivated;
+                if (immediate)
+                {
+                    // Use SwitchMode instead of Activate for CT→CT
+                    var controller = new CameraToolsCameraController();
+                    controller.SwitchMode(slot.ctSettings.Mode, slot.ctSettings);
 
-            if (immediate)
-            {
-                _activeCamera.Activate();
-                OnCameraActivated?.Invoke(_activeCamera);
+                    OnCameraActivated?.Invoke(_activeCamera);
+                }
             }
             else
             {
-                _activeCamera.Activate();
-                OnCameraActivated?.Invoke(_activeCamera);
+                // Normal transition (CT→HullCam, HullCam→CT, etc.)
+                if (_activeCamera != null)
+                {
+                    _activeCamera.OnDeactivated -= OnActiveCameraDeactivated;
+                    _activeCamera.Deactivate();
+                }
+
+                var newCamera = CreateCameraFromSlot(slot);
+                if (newCamera == null) return;
+
+                _activeCamera = newCamera;
+                _activeSlot = slot;
+                _activeCamera.OnDeactivated += OnActiveCameraDeactivated;
+
+                if (immediate)
+                {
+                    _activeCamera.Activate();
+                    OnCameraActivated?.Invoke(_activeCamera);
+                }
             }
         }
 
@@ -87,7 +108,7 @@ namespace CinematicRecorder.Integration
         /// </summary>
         public void ReturnToMain(bool immediate = false)
         {
-            // Check what's actually active and only restore that
+            // Check what's actually active
             bool ctActive = new CameraToolsCameraController().IsActive;
             bool hullCamActive = HullCamBridge.IsAnyCameraActive();
 
@@ -95,18 +116,31 @@ namespace CinematicRecorder.Integration
             if (_activeCamera != null)
             {
                 _activeCamera.OnDeactivated -= OnActiveCameraDeactivated;
+
+                if (_activeCamera is CameraToolsCamera ctCam)
+                {
+                    ctCam.Deactivate();
+                }
+
                 _activeCamera = null;
                 _activeSlot = null;
             }
 
-            // ORIGINAL LOGIC: Exclusive OR - only restore what is actually active
+            // Restore stock camera
             if (ctActive)
             {
-                CameraToolsReflectionProvider.Revert();
+                // Use new DeactivateCamera API which properly validates parenting
+                CameraToolsAPIManager.DeactivateCamera();
             }
             else if (hullCamActive)
             {
                 HullCamBridge.RestoreMain();
+            }
+
+            // Reset FlightCamera FOV to default
+            if (FlightCamera.fetch != null)
+            {
+                FlightCamera.fetch.SetFoV(60f);
             }
         }
 
@@ -146,27 +180,6 @@ namespace CinematicRecorder.Integration
                 OnCameraDeactivated?.Invoke(cam);
             }
         }
-
-        #region Deferred Fixup Support
-
-        public static void ScheduleFixup(CameraToolsCamera camera)
-        {
-            if (Instance != null && !Instance._pendingFixups.Contains(camera))
-                Instance._pendingFixups.Add(camera);
-        }
-
-        public void ProcessPendingFixups()
-        {
-            if (_pendingFixups.Count == 0) return;
-
-            foreach (var cam in _pendingFixups)
-            {
-                cam.ExecuteFixup();
-            }
-            _pendingFixups.Clear();
-        }
-
-        #endregion
 
         #region Zoom Control Integration
 

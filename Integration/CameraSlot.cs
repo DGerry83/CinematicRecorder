@@ -17,7 +17,15 @@ namespace CinematicRecorder.Integration
 
         // CameraTools specific
         public bool isCameraToolsSlot;
-        public CameraToolsSettings ctSettings;
+
+        // CRITICAL FIX: Changed from field to property with automatic cloning
+        // This ensures every assignment creates an isolated copy
+        private CameraToolsSettings _ctSettings;
+        public CameraToolsSettings ctSettings
+        {
+            get { return _ctSettings; }
+            set { _ctSettings = value?.Clone(); }
+        }
 
         public string GetDisplayName()
         {

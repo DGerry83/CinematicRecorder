@@ -1,8 +1,9 @@
 ﻿using CinematicRecorder.Capture;
 using CinematicRecorder.Core;
-using static CinematicRecorder.UI.CinematicUIStrings;
+using CinematicRecorder.Integration;
 using System;
 using UnityEngine;
+using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
@@ -571,6 +572,35 @@ namespace CinematicRecorder.UI
             GUILayout.Label(Settings.AdvancedOptionsHeader, headerStyle);
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
 
+            // CameraTools Pathing Timing Control
+            bool ctAvailable = CameraToolsAPIManager.IsAvailable;
+            GUI.enabled = ctAvailable;
+
+            GUIStyle pathToggleStyle = CinematicUIResources.Styles.Toggle();
+            if (SessionState.CameraPathPlaybackTiming)
+            {
+                pathToggleStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
+                pathToggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newPathTiming = GUILayout.Toggle(
+                SessionState.CameraPathPlaybackTiming,
+                " Camera path uses playback timing",
+                pathToggleStyle
+            );
+
+            if (newPathTiming != SessionState.CameraPathPlaybackTiming)
+            {
+                SessionState.CameraPathPlaybackTiming = newPathTiming;
+            }
+
+            GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
+            tooltipStyle.wordWrap = true;
+            GUILayout.Label("Path advances by video frame time instead of physics time (for Kraken-Time recording)", tooltipStyle);
+
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+            GUI.enabled = true;
+
             if (SessionState.SelectedEncoderTab == 0)
             {
                 GUIStyle ditherStyle = CinematicUIResources.Styles.Toggle();
@@ -583,7 +613,7 @@ namespace CinematicRecorder.UI
                     ditherStyle
                 );
 
-                GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
+                
                 tooltipStyle.wordWrap = true;
 
                 if (SessionState.AmfUseBlueNoiseDither)
