@@ -13,15 +13,16 @@ namespace CinematicRecorder.UI
     /// </summary>
     public class CameraSlotManager
     {
+        #region Fields & State
         private readonly List<CameraSlot> cameraSlots = new List<CameraSlot>();
         private int _activeSlotIndex = -1;
         private bool _wasCameraToolsActive = false;
         private ToolModes _lastCameraToolsMode = ToolModes.StationaryCamera;
-
+        #endregion
+        #region Public API
         public IReadOnlyList<CameraSlot> Slots => cameraSlots;
         public int ActiveSlotIndex => _activeSlotIndex;
         public bool HasActiveSlot => _activeSlotIndex >= 0 && _activeSlotIndex < cameraSlots.Count;
-
         public CameraSlot ActiveSlot => HasActiveSlot ? cameraSlots[_activeSlotIndex] : null;
 
         public event Action<int> OnActiveSlotChanged;
@@ -32,16 +33,6 @@ namespace CinematicRecorder.UI
         {
             InitializeSlots();
         }
-
-        private void InitializeSlots()
-        {
-            cameraSlots.Clear();
-            for (int i = 0; i < CinematicUIResources.Layout.Camera.TOTAL_SLOTS; i++)
-            {
-                cameraSlots.Add(new CameraSlot { buttonID = string.Format(CameraController.ButtonIdFormat, i) });
-            }
-        }
-
         public void LoadPreset(CameraPanelPreset preset)
         {
             if (preset?.buttonAssignments != null && preset.buttonAssignments.Count == CinematicUIResources.Layout.Camera.TOTAL_SLOTS)
@@ -67,7 +58,6 @@ namespace CinematicRecorder.UI
                 }
             }
         }
-
         public int FindFirstOpenSlot()
         {
             for (int i = 0; i < cameraSlots.Count; i++)
@@ -77,7 +67,6 @@ namespace CinematicRecorder.UI
             }
             return -1;
         }
-
         public void SetActiveSlot(int index)
         {
             if (index < -1 || index >= cameraSlots.Count)
@@ -89,12 +78,10 @@ namespace CinematicRecorder.UI
                 OnActiveSlotChanged?.Invoke(index);
             }
         }
-
         public void ClearActiveSlot()
         {
             SetActiveSlot(-1);
         }
-
         public void ClearSlot(int index)
         {
             if (index < 0 || index >= cameraSlots.Count) return;
@@ -112,35 +99,28 @@ namespace CinematicRecorder.UI
             OnSlotCleared?.Invoke(index);
             OnSlotsChanged?.Invoke();
         }
-
         public CameraSlot GetSlot(int index)
         {
             if (index < 0 || index >= cameraSlots.Count) return null;
             return cameraSlots[index];
         }
-
         public CameraSlot.SlotStatus GetSlotStatus(int index, Vessel currentVessel = null)
         {
             if (index < 0 || index >= cameraSlots.Count) return CameraSlot.SlotStatus.Unavailable;
-
-            // Check if this is the explicitly active slot
             bool isExplicitlyActive = (index == _activeSlotIndex);
             return cameraSlots[index].GetStatus(currentVessel, isExplicitlyActive);
         }
-
         public bool AssignCameraToolsToSlot(int index, CameraToolsSettings settings)
         {
             if (index < 0 || index >= cameraSlots.Count) return false;
             if (settings == null) return false;
 
-            // Validation: Ensure Pathing mode has a valid path selected
             if (settings.Mode == ToolModes.Pathing && settings.SelectedPathIndex < 0)
             {
                 ScreenMessages.PostScreenMessage("Cannot save: No path selected in CameraTools", 2f);
                 return false;
             }
 
-            // CRITICAL FIX: Create new slot with cloned settings (property setter handles cloning)
             cameraSlots[index] = new CameraSlot
             {
                 buttonID = string.Format(CameraController.ButtonIdFormat, index),
@@ -155,7 +135,6 @@ namespace CinematicRecorder.UI
             OnSlotsChanged?.Invoke();
             return true;
         }
-
         public bool AssignHullCamToSlot(int index, object camera, Vessel vessel)
         {
             if (index < 0 || index >= cameraSlots.Count) return false;
@@ -196,7 +175,6 @@ namespace CinematicRecorder.UI
 
             if (slot.isCameraToolsSlot)
             {
-                // Check if CT camera was active but is no longer
                 bool wasCTActive = activeCam is CameraToolsCamera;
                 if (!wasCTActive && _wasCameraToolsActive)
                 {
@@ -213,10 +191,8 @@ namespace CinematicRecorder.UI
             }
             else
             {
-                // HullCam check
                 if (_wasCameraToolsActive && !(activeCam is HullCamController))
                 {
-                    // CT was active, now nothing or something else
                     if (!HullCamBridge.IsAnyCameraActive())
                     {
                         SetActiveSlot(-1);
@@ -224,7 +200,6 @@ namespace CinematicRecorder.UI
                 }
                 else if (!_wasCameraToolsActive && activeCam == null)
                 {
-                    // HullCam was active, now nothing
                     if (!HullCamBridge.IsAnyCameraActive())
                     {
                         SetActiveSlot(-1);
@@ -234,7 +209,24 @@ namespace CinematicRecorder.UI
 
             UpdateTrackingState();
         }
-
+        public void HandleVesselChange()
+        {
+            SetActiveSlot(-1);
+        }
+        public void HandleSceneChange()
+        {
+            SetActiveSlot(-1);
+        }
+        #endregion
+        #region Private Implementation
+        private void InitializeSlots()
+        {
+            cameraSlots.Clear();
+            for (int i = 0; i < CinematicUIResources.Layout.Camera.TOTAL_SLOTS; i++)
+            {
+                cameraSlots.Add(new CameraSlot { buttonID = string.Format(CameraController.ButtonIdFormat, i) });
+            }
+        }
         private void UpdateTrackingState()
         {
             ICamera activeCam = CinematicCameraManager.Instance.ActiveCamera;
@@ -244,17 +236,6 @@ namespace CinematicRecorder.UI
                 _lastCameraToolsMode = ((CameraToolsCamera)activeCam).GetSettings().Mode;
             }
         }
-
-        public void HandleVesselChange()
-        {
-            SetActiveSlot(-1);
-        }
-
-        public void HandleSceneChange()
-        {
-            SetActiveSlot(-1);
-        }
-
         private Part GetPartFromCamera(object cameraModule)
         {
             try
@@ -276,5 +257,6 @@ namespace CinematicRecorder.UI
             }
             return null;
         }
+        #endregion
     }
 }

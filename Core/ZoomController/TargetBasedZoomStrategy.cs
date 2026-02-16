@@ -11,12 +11,15 @@ namespace CinematicRecorder.Core
         private readonly float _targetFOV;
         private readonly float _duration;
         private readonly ZoomCurve _curve;
-
         private float _startFOV;
         private float _elapsedTime;
         private bool _hasCapturedStart;
         private bool _isComplete;
 
+        /// <summary>
+        /// Creates a target-based zoom that interpolates from current FOV to target over specified duration.
+        /// Start FOV is captured on first execution to ensure smooth transitions.
+        /// </summary>
         public TargetBasedZoomStrategy(float targetFOV, float durationSeconds, ZoomCurve curve)
         {
             _targetFOV = targetFOV;
@@ -26,7 +29,6 @@ namespace CinematicRecorder.Core
             _isComplete = false;
             _elapsedTime = 0f;
         }
-
         public float GetTargetFOV(float currentFOV, float physicsDeltaTime)
         {
             // Capture start FOV on first execution (not construction) to ensure smooth transition
@@ -36,28 +38,22 @@ namespace CinematicRecorder.Core
                 _hasCapturedStart = true;
             }
 
-            // Accumulate physics time
             _elapsedTime += physicsDeltaTime;
 
-            // Check completion
             if (_elapsedTime >= _duration)
             {
                 _isComplete = true;
                 return _targetFOV; // Return exact target to avoid floating point drift
             }
 
-            // Calculate interpolation factor
             float t = Mathf.Clamp01(_elapsedTime / _duration);
             float curvedT = ZoomCurveEvaluator.Evaluate(t, _curve);
 
             return Mathf.Lerp(_startFOV, _targetFOV, curvedT);
         }
-
         public bool IsComplete => _isComplete;
-
         public void SetInput(float input)
         {
-            // Target-based strategies do not use continuous input
         }
     }
 }

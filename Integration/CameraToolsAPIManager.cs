@@ -9,12 +9,12 @@ namespace CinematicRecorder.Integration
     /// </summary>
     public static class CameraToolsAPIManager
     {
-        // Internal type references for CameraTools types
+
+        #region Fields
         private static Type _integrationType;
         private static Type _toolModesType;
         private static Type _cameraToolsStateType;
 
-        // Cached methods - Configuration Setters
         private static System.Reflection.MethodInfo _setToolModeMethod;
         private static System.Reflection.MethodInfo _setStationaryPositionMethod;
         private static System.Reflection.MethodInfo _setStationaryFlagsMethod;
@@ -32,7 +32,6 @@ namespace CinematicRecorder.Integration
         private static System.Reflection.MethodInfo _setExternalFOVMethod;
         private static System.Reflection.MethodInfo _isAvailableMethod;
 
-        // Cached methods - State Getters
         private static System.Reflection.MethodInfo _getToolModeMethod;
         private static System.Reflection.MethodInfo _isCameraActiveMethod;
         private static System.Reflection.MethodInfo _getActualFOVMethod;
@@ -41,7 +40,6 @@ namespace CinematicRecorder.Integration
         private static System.Reflection.MethodInfo _getCurrentStateMethod;
         private static System.Reflection.MethodInfo _pathExistsMethod;
 
-        // Cached methods - Activation
         private static System.Reflection.MethodInfo _activateCameraMethod;
         private static System.Reflection.MethodInfo _deactivateCameraMethod;
         private static System.Reflection.MethodInfo _startPathPlaybackMethod;
@@ -49,7 +47,6 @@ namespace CinematicRecorder.Integration
         private static System.Reflection.MethodInfo _physicsStepUpdateMethod;
         private static System.Reflection.MethodInfo _switchCameraMethod;
 
-        // Events
         private static System.Reflection.EventInfo _onCameraActivatedEvent;
         private static System.Reflection.EventInfo _onCameraDeactivatedEvent;
         private static System.Reflection.EventInfo _onPathingStartedEvent;
@@ -62,27 +59,18 @@ namespace CinematicRecorder.Integration
         private static Delegate _pathingStoppedHandler;
         private static Delegate _cinematicRecorderControlTakenHandler;
 
-        // State tracking
         private static bool _initialized;
         private static bool _isAvailable;
         private static object _lastState;
-
-        // Public events
+        #endregion
+        #region Events
         public static event Action OnCameraActivated;
         public static event Action OnCameraDeactivated;
         public static event Action OnPathingStarted;
         public static event Action OnPathingStopped;
         public static event Action OnCinematicRecorderControlTaken;
-
-        public static bool IsAvailable
-        {
-            get
-            {
-                if (!_initialized) Initialize();
-                return _isAvailable;
-            }
-        }
-
+        #endregion
+        #region Static Initialization
         private static void Initialize()
         {
             if (_initialized) return;
@@ -120,7 +108,6 @@ namespace CinematicRecorder.Integration
                     return;
                 }
 
-                // Cache Configuration Setters
                 _isAvailableMethod = _integrationType.GetProperty("IsAvailable")?.GetGetMethod();
                 _setToolModeMethod = _integrationType.GetMethod("SetToolMode", new[] { _toolModesType });
                 _setStationaryPositionMethod = _integrationType.GetMethod("SetStationaryPosition", new[] { typeof(Vector3), typeof(Part) });
@@ -139,7 +126,6 @@ namespace CinematicRecorder.Integration
                 _setCinematicRecorderControlMethod = _integrationType.GetMethod("SetCinematicRecorderControl", new[] { typeof(bool), typeof(bool) });
                 _setExternalFOVMethod = _integrationType.GetMethod("SetExternalFOV", new[] { typeof(float) });
 
-                // Cache State Getters (NEW)
                 _getToolModeMethod = _integrationType.GetMethod("GetToolMode", Type.EmptyTypes);
                 _isCameraActiveMethod = _integrationType.GetMethod("IsCameraActive", Type.EmptyTypes);
                 _getActualFOVMethod = _integrationType.GetMethod("GetActualFOV", Type.EmptyTypes);
@@ -147,7 +133,6 @@ namespace CinematicRecorder.Integration
                 _getCurrentPathTimeMethod = _integrationType.GetMethod("GetCurrentPathTime", Type.EmptyTypes);
                 _getCurrentStateMethod = _integrationType.GetMethod("GetCurrentState", Type.EmptyTypes);
 
-                // Cache Activation Methods
                 _activateCameraMethod = _integrationType.GetMethod("ActivateCamera", Type.EmptyTypes);
                 _deactivateCameraMethod = _integrationType.GetMethod("DeactivateCamera", Type.EmptyTypes);
                 _startPathPlaybackMethod = _integrationType.GetMethod("StartPathPlayback", Type.EmptyTypes);
@@ -155,7 +140,6 @@ namespace CinematicRecorder.Integration
                 _physicsStepUpdateMethod = _integrationType.GetMethod("PhysicsStepUpdate", new[] { typeof(float), typeof(float) });
                 _switchCameraMethod = _integrationType.GetMethod("SwitchCamera", new[] { _toolModesType });
 
-                // Cache Events
                 _onCameraActivatedEvent = _integrationType.GetEvent("OnCameraActivated");
                 _onCameraDeactivatedEvent = _integrationType.GetEvent("OnCameraDeactivated");
                 _onPathingStartedEvent = _integrationType.GetEvent("OnPathingStarted");
@@ -179,7 +163,6 @@ namespace CinematicRecorder.Integration
 
             _initialized = true;
         }
-
         private static void SubscribeToEvents()
         {
             if (_onCameraActivatedEvent != null)
@@ -217,15 +200,21 @@ namespace CinematicRecorder.Integration
                 _onCinematicRecorderControlTakenEvent.AddEventHandler(null, _cinematicRecorderControlTakenHandler);
             }
         }
-
         private static void OnCameraActivatedInternal() => OnCameraActivated?.Invoke();
         private static void OnCameraDeactivatedInternal() => OnCameraDeactivated?.Invoke();
         private static void OnPathingStartedInternal() => OnPathingStarted?.Invoke();
         private static void OnPathingStoppedInternal() => OnPathingStopped?.Invoke();
         private static void OnControlTakenInternal() => OnCinematicRecorderControlTaken?.Invoke();
-
-        #region State Getters (NEW)
-
+        #endregion
+        public static bool IsAvailable
+        {
+            get
+            {
+                if (!_initialized) Initialize();
+                return _isAvailable;
+            }
+        }
+        #region Public API - State Getters
         public static ToolModes GetToolMode()
         {
             if (!IsAvailable || _getToolModeMethod == null) return ToolModes.StationaryCamera;
@@ -240,7 +229,6 @@ namespace CinematicRecorder.Integration
                 return ToolModes.StationaryCamera;
             }
         }
-
         public static bool IsCameraActive()
         {
             if (!IsAvailable || _isCameraActiveMethod == null) return false;
@@ -254,7 +242,6 @@ namespace CinematicRecorder.Integration
                 return false;
             }
         }
-
         public static float GetActualFOV()
         {
             if (!IsAvailable || _getActualFOVMethod == null) return 60f;
@@ -268,7 +255,6 @@ namespace CinematicRecorder.Integration
                 return 60f;
             }
         }
-
         public static float GetManualFOV()
         {
             if (!IsAvailable || _getManualFOVMethod == null) return 60f;
@@ -282,7 +268,6 @@ namespace CinematicRecorder.Integration
                 return 60f;
             }
         }
-
         public static float GetCurrentPathTime()
         {
             if (!IsAvailable || _getCurrentPathTimeMethod == null) return 0f;
@@ -296,11 +281,8 @@ namespace CinematicRecorder.Integration
                 return 0f;
             }
         }
-
         #endregion
-
-        #region Configuration Setters
-
+        #region Public API - Configuration Setters
         public static void SetToolMode(ToolModes mode)
         {
             if (!IsAvailable || _setToolModeMethod == null || _toolModesType == null) return;
@@ -314,7 +296,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetToolMode failed: {ex.Message}");
             }
         }
-
         public static void SetStationaryPosition(Vector3 position, Part target = null)
         {
             if (!IsAvailable || _setStationaryPositionMethod == null) return;
@@ -328,7 +309,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetStationaryPosition failed: {ex.Message}");
             }
         }
-
         public static void SetStationaryFlags(bool presetOffset, bool autoFlyby, bool autoLanding, bool manualOffset)
         {
             if (!IsAvailable || _setStationaryFlagsMethod == null) return;
@@ -341,7 +321,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetStationaryFlags failed: {ex.Message}");
             }
         }
-
         public static void SetManualOffset(float forward, float right, float up)
         {
             if (!IsAvailable || _setManualOffsetMethod == null) return;
@@ -354,7 +333,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetManualOffset failed: {ex.Message}");
             }
         }
-
         public static void SetStationaryAdvanced(bool saveRot, bool maintainVel, bool useOrb, bool autoZoom)
         {
             if (!IsAvailable || _setStationaryAdvancedMethod == null) return;
@@ -367,7 +345,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetStationaryAdvanced failed: {ex.Message}");
             }
         }
-
         public static void SetTarget(Part target, bool useCoM)
         {
             if (!IsAvailable || _setTargetMethod == null) return;
@@ -380,7 +357,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetTarget failed: {ex.Message}");
             }
         }
-
         public static void SetDogfightConfig(float distance, float offsetX, float offsetY, bool chasePlane)
         {
             if (!IsAvailable || _setDogfightConfigMethod == null) return;
@@ -393,7 +369,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetDogfightConfig failed: {ex.Message}");
             }
         }
-
         public static void SetDogfightTarget(Vessel target)
         {
             if (!IsAvailable || _setDogfightTargetMethod == null) return;
@@ -406,7 +381,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetDogfightTarget failed: {ex.Message}");
             }
         }
-
         public static void SelectPath(int index)
         {
             if (!IsAvailable || _selectPathMethod == null) return;
@@ -419,7 +393,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SelectPath failed: {ex.Message}");
             }
         }
-
         public static bool PathExists(int index)
         {
             if (!IsAvailable || _pathExistsMethod == null) return false;
@@ -433,7 +406,6 @@ namespace CinematicRecorder.Integration
                 return false;
             }
         }
-
         public static void SetPathState(int pathIndex, int keyframeIndex, bool isPlaying, float startTime)
         {
             if (!IsAvailable || _setPathStateMethod == null) return;
@@ -446,7 +418,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetPathState failed: {ex.Message}");
             }
         }
-
         public static void SetPathTiming(bool useRealTime, float smoothing)
         {
             if (!IsAvailable || _setPathTimingMethod == null) return;
@@ -459,7 +430,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetPathTiming failed: {ex.Message}");
             }
         }
-
         public static void SetPathingStartKeyframe(int index)
         {
             if (!IsAvailable || _setPathingStartKeyframeMethod == null) return;
@@ -472,7 +442,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetPathingStartKeyframe failed: {ex.Message}");
             }
         }
-
         public static void SetLockPathingToPlaybackRate(bool usePlaybackTime)
         {
             if (!IsAvailable || _setLockPathingToPlaybackRateMethod == null) return;
@@ -485,7 +454,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetLockPathingToPlaybackRate failed: {ex.Message}");
             }
         }
-
         public static void SetCinematicRecorderControl(bool enabled, bool deterministicMode)
         {
             if (!IsAvailable || _setCinematicRecorderControlMethod == null) return;
@@ -498,7 +466,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetCinematicRecorderControl failed: {ex.Message}");
             }
         }
-
         public static void SetExternalFOV(float fov)
         {
             if (!IsAvailable || _setExternalFOVMethod == null) return;
@@ -511,11 +478,8 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SetExternalFOV failed: {ex.Message}");
             }
         }
-
         #endregion
-
-        #region Activation
-
+        #region Public API - Activation
         public static void ActivateCamera()
         {
             if (!IsAvailable || _activateCameraMethod == null) return;
@@ -528,7 +492,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] ActivateCamera failed: {ex.Message}");
             }
         }
-
         public static void SwitchCamera(ToolModes mode)
         {
             if (!IsAvailable || _switchCameraMethod == null || _toolModesType == null) return;
@@ -542,7 +505,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] SwitchCamera failed: {ex.Message}");
             }
         }
-
         public static void DeactivateCamera()
         {
             if (!IsAvailable || _deactivateCameraMethod == null) return;
@@ -555,9 +517,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] DeactivateCamera failed: {ex.Message}");
             }
         }
-
-
-
         public static void StartPathPlayback()
         {
             if (!IsAvailable || _startPathPlaybackMethod == null) return;
@@ -570,7 +529,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] StartPathPlayback failed: {ex.Message}");
             }
         }
-
         public static void StopPathPlayback()
         {
             if (!IsAvailable || _stopPathPlaybackMethod == null) return;
@@ -583,7 +541,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] StopPathPlayback failed: {ex.Message}");
             }
         }
-
         public static void PhysicsStepUpdate(float physicsDeltaTime, float playbackDeltaTime)
         {
             if (!IsAvailable || _physicsStepUpdateMethod == null) return;
@@ -596,11 +553,8 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[CameraToolsAPIManager] PhysicsStepUpdate failed: {ex.Message}");
             }
         }
-
         #endregion
-
-        #region Legacy State Extraction (keep for compatibility)
-
+        #region Public API - Legacy State
         public static object GetCurrentState()
         {
             if (!IsAvailable || _getCurrentStateMethod == null) return null;
@@ -615,7 +569,6 @@ namespace CinematicRecorder.Integration
                 return null;
             }
         }
-
         public static ToolModes GetCurrentModeFromState()
         {
             if (_lastState == null || _cameraToolsStateType == null) return ToolModes.StationaryCamera;
@@ -631,7 +584,6 @@ namespace CinematicRecorder.Integration
                 return ToolModes.StationaryCamera;
             }
         }
-
         public static bool GetIsPlayingPathFromState()
         {
             if (_lastState == null || _cameraToolsStateType == null) return false;
@@ -646,7 +598,6 @@ namespace CinematicRecorder.Integration
                 return false;
             }
         }
-
         public static float GetCurrentPathTimeFromState()
         {
             if (_lastState == null || _cameraToolsStateType == null) return 0f;
@@ -661,9 +612,8 @@ namespace CinematicRecorder.Integration
                 return 0f;
             }
         }
-
         #endregion
-
+        #region Public API - Lifecycle
         public static void Shutdown()
         {
             if (!_initialized) return;
@@ -685,5 +635,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogWarning($"[CameraToolsAPIManager] Error during shutdown: {ex.Message}");
             }
         }
+        #endregion
     }
 }

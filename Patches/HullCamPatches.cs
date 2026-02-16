@@ -37,7 +37,6 @@ namespace CinematicRecorder.Patches
                 Debug.LogError("[HullCamPatch] Activate_Prefix error: " + ex);
             }
         }
-
         public static bool RestoreMain_Prefix()
         {
             try

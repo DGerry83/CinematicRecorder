@@ -10,19 +10,25 @@ namespace CinematicRecorder.Integration
     /// </summary>
     public class CinematicCameraManager
     {
+        #region Fields
         private static CinematicCameraManager _instance;
-        public static CinematicCameraManager Instance => _instance ?? (_instance = new CinematicCameraManager());
-
         private ICamera _activeCamera;
         private CameraSlot _activeSlot;
-
+        #endregion
+        #region Properties
+        /// <summary>
+        /// Singleton instance accessor
+        /// </summary>
+        public static CinematicCameraManager Instance => _instance ?? (_instance = new CinematicCameraManager());
         public ICamera ActiveCamera => _activeCamera;
         public CameraSlot ActiveSlot => _activeSlot;
         public bool HasActiveCamera => _activeCamera != null;
-
+        #endregion
+        #region Events
         public event Action<ICamera> OnCameraActivated;
         public event Action<ICamera> OnCameraDeactivated;
-
+        #endregion
+        #region Public API
         private CinematicCameraManager() { }
 
         /// <summary>
@@ -108,11 +114,9 @@ namespace CinematicRecorder.Integration
         /// </summary>
         public void ReturnToMain(bool immediate = false)
         {
-            // Check what's actually active
             bool ctActive = new CameraToolsCameraController().IsActive;
             bool hullCamActive = HullCamBridge.IsAnyCameraActive();
 
-            // Clear managed state first
             if (_activeCamera != null)
             {
                 _activeCamera.OnDeactivated -= OnActiveCameraDeactivated;
@@ -126,7 +130,6 @@ namespace CinematicRecorder.Integration
                 _activeSlot = null;
             }
 
-            // Restore stock camera
             if (ctActive)
             {
                 // Use new DeactivateCamera API which properly validates parenting
@@ -137,7 +140,6 @@ namespace CinematicRecorder.Integration
                 HullCamBridge.RestoreMain();
             }
 
-            // Reset FlightCamera FOV to default
             if (FlightCamera.fetch != null)
             {
                 FlightCamera.fetch.SetFoV(60f);
@@ -169,7 +171,8 @@ namespace CinematicRecorder.Integration
 
             return true;
         }
-
+        #endregion
+        #region Event Handlers
         private void OnActiveCameraDeactivated()
         {
             if (_activeCamera != null)
@@ -180,30 +183,25 @@ namespace CinematicRecorder.Integration
                 OnCameraDeactivated?.Invoke(cam);
             }
         }
-
-        #region Zoom Control Integration
-
+        #endregion
+        #region Zoom Integration
         public float GetCurrentFOV()
         {
             return _activeCamera?.FieldOfView ?? 60f;
         }
-
         public void ApplyZoom(float fov)
         {
             if (_activeCamera != null)
                 _activeCamera.FieldOfView = fov;
         }
-
         public float GetMaxFOV()
         {
             return _activeCamera?.MaxFieldOfView ?? 120f;
         }
-
         public float GetMinFOV()
         {
             return _activeCamera?.MinFieldOfView ?? 10f;
         }
-
         #endregion
     }
 }

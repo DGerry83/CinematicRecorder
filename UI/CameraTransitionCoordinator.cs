@@ -26,21 +26,17 @@ namespace CinematicRecorder.UI
         /// </summary>
         public bool IsCompletingSwitch { get; private set; } = false;
         #endregion
-
         #region State
-        // Real-time fade state
         private float _fadeDurationSeconds;
         private float _elapsedTime;
         private Action _onFadeMidpoint;
         private bool _midpointTriggered;
 
-        // Deterministic fade state
         private bool _isDeterministicMode;
         private int _currentFadeFrame;
         private int _totalFadeFrames;
         private int _playbackFps;
         #endregion
-
         #region Initialization
         public CameraTransitionCoordinator()
         {
@@ -57,14 +53,10 @@ namespace CinematicRecorder.UI
             );
         }
         #endregion
-
         #region Public API
-
         /// <summary>
-        /// Begins a fade transition. Automatically selects deterministic or real-time mode based on parameters and session state.
+        /// Begins a fade transition. Automatically selects deterministic or real-time mode.
         /// </summary>
-        /// <param name="cameraSwitchAction">Action to execute at fade midpoint (full black)</param>
-        /// <param name="useDeterministic">If true and DeterministicCaptureSession is running, uses frame-based timing</param>
         public void BeginTransition(Action cameraSwitchAction, bool useDeterministic = false)
         {
             if (!UseFadeOnSwap)
@@ -83,12 +75,10 @@ namespace CinematicRecorder.UI
             // Recalculate duration in case slider changed
             UpdateDurationFromSlider();
 
-            // Determine mode: deterministic only if requested AND session is actually running
             _isDeterministicMode = useDeterministic && DeterministicCaptureSession.IsRunning;
 
             if (_isDeterministicMode)
             {
-                // Frame-based calculation: convert seconds to playback frames
                 _playbackFps = DeterministicCaptureSession.PlaybackFPS > 0 ?
                     DeterministicCaptureSession.PlaybackFPS : 60;
 
@@ -99,7 +89,6 @@ namespace CinematicRecorder.UI
             }
             else
             {
-                // Real-time calculation
                 _elapsedTime = 0f;
                 _totalFadeFrames = 0;
                 _currentFadeFrame = 0;
@@ -149,14 +138,11 @@ namespace CinematicRecorder.UI
         {
             return new Color(0f, 0f, 0f, FadeAlpha);
         }
-
         #endregion
-
         #region Private Methods
 
         private void CalculateAlpha(float progress)
         {
-            // Clamp progress to 0-1
             progress = Mathf.Clamp01(progress);
 
             // First half: fade to black (0 -> 0.5), Second half: fade from black (0.5 -> 1)

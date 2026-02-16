@@ -14,12 +14,13 @@ namespace CinematicRecorder.Core
         private readonly float _duration;
         private readonly ZoomCurve _curve;
         private readonly float _padding;
-
         private float _elapsed;
         private bool _isComplete;
-
         public bool EnableConsistentFramingOnComplete { get; set; }
 
+        /// <summary>
+        /// Creates a transition strategy that interpolates from start FOV to calculated consistent framing FOV.
+        /// </summary>
         public ConsistentFramingTransitionStrategy(float startFOV, float duration, ZoomCurve curve, float padding)
         {
             _startFOV = startFOV;
@@ -29,10 +30,8 @@ namespace CinematicRecorder.Core
             _elapsed = 0f;
             _isComplete = false;
         }
-
         public float GetTargetFOV(float currentFOV, float physicsDeltaTime)
         {
-            // Calculate what consistent framing FOV should be RIGHT NOW
             Vessel vessel = FlightGlobals.ActiveVessel;
             float targetConsistentFOV = currentFOV; // fallback
 
@@ -54,11 +53,9 @@ namespace CinematicRecorder.Core
                 return targetConsistentFOV;
             }
 
-            // Advance time
             _elapsed += physicsDeltaTime;
             float t = Mathf.Clamp01(_elapsed / _duration);
 
-            // Check completion
             if (t >= 1.0f)
             {
                 _isComplete = true;
@@ -69,9 +66,7 @@ namespace CinematicRecorder.Core
             float curvedT = ZoomCurveEvaluator.Evaluate(t, _curve);
             return Mathf.Lerp(_startFOV, targetConsistentFOV, curvedT);
         }
-
         public bool IsComplete => _isComplete;
-
         public void SetInput(float input)
         {
             // No manual input in transition mode

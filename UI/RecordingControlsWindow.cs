@@ -22,20 +22,16 @@ namespace CinematicRecorder.UI
         private bool stylesInitialized = false;
         private bool shouldShow = false;
 
-        // Speed ramps state
         private bool showSpeedRamps = false;
         private float durationSlider;
         private float exponentSlider;
         private enum SpeedMode { Normal, Slow, SuperSlow, KrakenTime }
         private SpeedMode currentSpeedMode = SpeedMode.Normal;
 
-        // NEW: Advanced Camera Settings panel state
-        private bool showAdvancedCameraPanel = false;
+        private AdvancedCameraOptionsWindow advancedOptionsWindow;
 
-        // Sub-controllers
         private CameraPanelController cameraPanel;
         #endregion
-
         #region Unity Lifecycle
         void Start()
         {
@@ -45,13 +41,16 @@ namespace CinematicRecorder.UI
 
             cameraPanel = new CameraPanelController(this);
         }
-
         void OnDestroy()
         {
             UnsubscribeFromEvents();
             cameraPanel?.Shutdown();
-        }
 
+            if (advancedOptionsWindow != null)
+            {
+                Destroy(advancedOptionsWindow);
+            }
+        }
         void OnGUI()
         {
             cameraPanel.DrawFadeOverlay();
@@ -70,14 +69,12 @@ namespace CinematicRecorder.UI
 
             cameraPanel.DrawConfirmationDialogs();
         }
-
         void LateUpdate()
         {
             if (!shouldShow) return;
             cameraPanel.ProcessZoomLateUpdate();
         }
         #endregion
-
         #region Initialization
         private void InitStyles()
         {
@@ -90,7 +87,6 @@ namespace CinematicRecorder.UI
 
             stylesInitialized = true;
         }
-
         private void LoadFromSessionState()
         {
             durationSlider = SessionState.RampDurationDefault;
@@ -98,16 +94,12 @@ namespace CinematicRecorder.UI
                            / Mathf.Log(SessionState.RampExponentMax / SessionState.RampExponentMin);
         }
         #endregion
-
         #region Window Dimensions & Animation
         private void UpdateWindowDimensions()
         {
             if (Event.current.type != EventType.Layout) return;
 
-            // Calculate target width based on advanced panel visibility
-            float targetWidth = showAdvancedCameraPanel
-                ? (CinematicUIResources.Windows.Recording.WIDTH + CinematicUIResources.Windows.Recording.ADVANCED_PANEL_WIDTH + 10)
-                : CinematicUIResources.Windows.Recording.WIDTH;
+            float targetWidth = CinematicUIResources.Windows.Recording.WIDTH;
 
             windowRect.width = Mathf.Lerp(windowRect.width, targetWidth, 0.25f);
             if (Mathf.Abs(windowRect.width - targetWidth) < 1f)
@@ -118,7 +110,6 @@ namespace CinematicRecorder.UI
             if (Mathf.Abs(windowRect.height - targetHeight) < 0.5f)
                 windowRect.height = targetHeight;
         }
-
         private float CalculateTargetHeight()
         {
             float speedRampHeight = showSpeedRamps ? 210f : 0f;
@@ -126,20 +117,12 @@ namespace CinematicRecorder.UI
             return CinematicUIResources.Windows.Recording.HEIGHT_BASE + speedRampHeight + cameraPanelHeight;
         }
         #endregion
-
         #region Window Layout
         private void DrawWindow(int id)
         {
-            // Use Horizontal layout for slide-out panel support
-            GUILayout.BeginHorizontal();
-
-            // LEFT COLUMN: Main content
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Windows.Recording.WIDTH - CinematicUIResources.Spacing.NORMAL * 2));
 
             DrawHeaderWithAdvancedToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.SECTION);
-
-            DrawStatusDisplay();
             GUILayout.Space(CinematicUIResources.Spacing.SECTION);
 
             DrawSpeedButtons();
@@ -152,112 +135,63 @@ namespace CinematicRecorder.UI
 
             GUILayout.EndVertical();
 
-            // RIGHT COLUMN: Advanced Camera Settings panel (slides in)
-            if (showAdvancedCameraPanel)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT / 2);
-                GUI.color = CinematicUIResources.Colors.SEPARATOR_GRAY;
-                GUILayout.Box("", GUILayout.Width(CinematicUIResources.Layout.SEPARATOR_LINE_WIDTH), GUILayout.ExpandHeight(true));
-                GUI.color = Color.white;
-                GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
-
-                GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Windows.Recording.ADVANCED_PANEL_WIDTH - CinematicUIResources.Windows.Recording.ADVANCED_MARGIN));
-                DrawAdvancedCameraContent();
-                GUILayout.EndVertical();
-            }
-
-            GUILayout.EndHorizontal();
-
             // Delegate camera panel rendering (draws below main content)
-            // Note: Camera panel draws inside the left column width automatically
             cameraPanel.Draw(windowRect);
 
             GUI.DragWindow();
         }
-
         private void DrawHeaderWithAdvancedToggle()
         {
             GUILayout.BeginHorizontal();
 
-            // Status takes remaining space
             GUILayout.BeginVertical();
             DrawStatusDisplay();
             GUILayout.EndVertical();
 
             GUILayout.FlexibleSpace();
 
-            // Advanced Camera Settings toggle button
+            // Advanced Camera Settings toggle button - now controls separate window
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_WIDTH));
             GUIStyle advStyle = CinematicUIResources.Styles.Button();
-            if (showAdvancedCameraPanel)
+
+            bool advancedVisible = advancedOptionsWindow != null && advancedOptionsWindow.IsVisible;
+            if (advancedVisible)
             {
                 advStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
                 advStyle.fontStyle = FontStyle.Bold;
             }
 
-            string arrow = showAdvancedCameraPanel ? Common.arrowL : Common.arrowR;
+            string arrow = advancedVisible ? Common.arrowL : Common.arrowR;
             string buttonText = arrow + Recording.AdvancedCameraButton;
             if (GUILayout.Button(buttonText, advStyle, GUILayout.Height(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_HEIGHT)))
             {
-                showAdvancedCameraPanel = !showAdvancedCameraPanel;
+                ToggleAdvancedOptionsWindow();
             }
             GUILayout.EndVertical();
 
             GUILayout.EndHorizontal();
         }
-        #endregion
-
-        #region Advanced Camera Settings Panel
-        private void DrawAdvancedCameraContent()
+        private void ToggleAdvancedOptionsWindow()
         {
-            GUIStyle headerStyle = CinematicUIResources.Styles.Header();
-            GUILayout.Label(Recording.AdvancedCameraHeader, headerStyle);
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-
-            // Check if we have an active CameraTools slot to configure
-            var activeSlot = cameraPanel.SlotManager.ActiveSlot;
-            bool hasCTSlot = activeSlot?.isCameraToolsSlot == true && activeSlot.ctSettings != null;
-
-            GUI.enabled = hasCTSlot;
-
-            if (!hasCTSlot)
+            if (advancedOptionsWindow == null)
             {
-                GUIStyle infoStyle = CinematicUIResources.Styles.Info();
-                infoStyle.wordWrap = true;
-                GUILayout.Label("Select a CameraTools slot to configure advanced options", infoStyle);
-                GUI.enabled = true;
-                return;
+                advancedOptionsWindow = gameObject.AddComponent<AdvancedCameraOptionsWindow>();
+                advancedOptionsWindow.Initialize(this, cameraPanel);
+                advancedOptionsWindow.Show();
             }
-
-            // Path Playback Timing Toggle
-            GUIStyle toggleStyle = CinematicUIResources.Styles.Toggle();
-            if (activeSlot.ctSettings.LockPathingToPlaybackRate)
+            else
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
+                if (advancedOptionsWindow.IsVisible)
+                {
+                    advancedOptionsWindow.Hide();
+                }
+                else
+                {
+                    advancedOptionsWindow.Show();
+                }
             }
-
-            bool newTiming = GUILayout.Toggle(
-                activeSlot.ctSettings.LockPathingToPlaybackRate,
-                Recording.PathPlaybackTimingToggle,
-                toggleStyle
-            );
-
-            if (newTiming != activeSlot.ctSettings.LockPathingToPlaybackRate)
-            {
-                activeSlot.ctSettings.LockPathingToPlaybackRate = newTiming;
-                // Also update the global default for future assignments
-                SessionState.CameraPathPlaybackTiming = newTiming;
-            }
-
-            GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
-            tooltipStyle.wordWrap = true;
-            GUILayout.Label(Recording.PathPlaybackTimingTooltip, tooltipStyle);
-
-            GUI.enabled = true;
         }
         #endregion
-
         #region Event Subscription & Handlers
         private void SubscribeToEvents()
         {
@@ -265,25 +199,21 @@ namespace CinematicRecorder.UI
             DeterministicCaptureSession.OnRecordingStopped += OnRecordingStopped;
             DeterministicCaptureSession.OnTimeScaleChanged += OnTimeScaleChanged;
         }
-
         private void UnsubscribeFromEvents()
         {
             DeterministicCaptureSession.OnRecordingStarted -= OnRecordingStarted;
             DeterministicCaptureSession.OnRecordingStopped -= OnRecordingStopped;
             DeterministicCaptureSession.OnTimeScaleChanged -= OnTimeScaleChanged;
         }
-
         private void OnRecordingStarted()
         {
             shouldShow = true;
             currentSpeedMode = SpeedMode.Normal;
         }
-
         private void OnRecordingStopped()
         {
             currentSpeedMode = SpeedMode.Normal;
         }
-
         private void OnTimeScaleChanged(float newScale)
         {
             float tolerance = 0.01f;
@@ -306,7 +236,6 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region Status Display
         private void DrawStatusDisplay()
         {
@@ -338,7 +267,6 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region Speed Control Section
         private void DrawSpeedButtons()
         {
@@ -362,7 +290,6 @@ namespace CinematicRecorder.UI
             GUILayout.EndHorizontal();
             GUI.enabled = true;
         }
-
         private void DrawSpeedRampsFoldout()
         {
             string label = showSpeedRamps ? Recording.SpeedRampsCollapse : Recording.SpeedRampsExpand;
@@ -395,7 +322,6 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.INNER);
             GUILayout.EndVertical();
         }
-
         private void DrawExponentSlider(GUIStyle helpStyle)
         {
             GUILayout.BeginHorizontal();
@@ -412,7 +338,6 @@ namespace CinematicRecorder.UI
                 SessionState.RampExponent = min * Mathf.Pow(max / min, sliderPos);
             }
         }
-
         private string GetCurveDescription(float exp)
         {
             if (Mathf.Abs(exp - 1.0f) < 0.1f) return CurveDescriptions.Linear;
@@ -423,7 +348,6 @@ namespace CinematicRecorder.UI
             return CurveDescriptions.Moderate;
         }
         #endregion
-
         #region Progress Display
         private void DrawProgressInfo()
         {
@@ -440,7 +364,6 @@ namespace CinematicRecorder.UI
                 DrawLimitedProgress();
             }
         }
-
         private void DrawUnlimitedProgress()
         {
             float simulated = DeterministicCaptureSession.AccumulatedSimulatedSeconds;
@@ -451,7 +374,6 @@ namespace CinematicRecorder.UI
 
             DrawIndeterminateProgressBar();
         }
-
         private void DrawIndeterminateProgressBar()
         {
             Rect barRect = GUILayoutUtility.GetRect(
@@ -474,7 +396,6 @@ namespace CinematicRecorder.UI
             );
             GUI.DrawTexture(segmentRect, CinematicUIResources.Styles.ProgressFill().normal.background, ScaleMode.StretchToFill);
         }
-
         private void DrawLimitedProgress()
         {
             float current = DeterministicCaptureSession.AccumulatedSimulatedSeconds;
@@ -505,10 +426,15 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region Public API
         public void Show() { shouldShow = true; }
         public void Hide() { shouldShow = false; }
+        public Rect GetWindowRect() => windowRect;
+        public float GetDockEdgeX()
+        {
+            // Use final designed width, not animated current width
+            return windowRect.x + CinematicUIResources.Windows.Recording.WIDTH;
+        }
         #endregion
     }
 }

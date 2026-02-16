@@ -20,6 +20,9 @@ namespace CinematicRecorder.Core
         private RecordingControlsWindow recordingControlsWindow;
         private Texture2D toolbarIcon;
 
+        /// <summary>
+        /// Locates FFmpeg binaries and initializes AutoGen bindings.
+        /// </summary>
         void Awake()
         {
             Instance = this;
@@ -62,7 +65,9 @@ namespace CinematicRecorder.Core
                 UnityEngine.Debug.LogError($"[CinematicRecorder] FFmpeg init failed: {ex.Message}\n{ex.StackTrace}");
             }
         }
-
+        /// <summary>
+        /// Creates core GameObjects and hooks into ApplicationLauncher toolbar.
+        /// </summary>
         void Start()
         {
             // Initialize core systems
@@ -87,7 +92,9 @@ namespace CinematicRecorder.Core
             DontDestroyOnLoad(configObj);
             configObj.AddComponent<CameraPanelConfig>();
         }
-
+        /// <summary>
+        /// Removes toolbar button and destroys UI windows.
+        /// </summary>
         void OnDestroy()
         {
             GameEvents.onGUIApplicationLauncherReady.Remove(OnGUIApplicationLauncherReady);
@@ -106,21 +113,19 @@ namespace CinematicRecorder.Core
             if (recordingControlsWindow != null && recordingControlsWindow.gameObject != null)
                 Destroy(recordingControlsWindow.gameObject);
         }
-
         private void OnGUIApplicationLauncherReady()
         {
             if (toolbarButton == null)
             {
                 toolbarButton = ApplicationLauncher.Instance.AddModApplication(
-                    OnToolbarButtonOn,    // Called when button pressed (turns on)
-                    OnToolbarButtonOff,   // Called when button pressed again (turns off)
+                    OnToolbarButtonOn,    
+                    OnToolbarButtonOff,   
                     null, null, null, null,
                     ApplicationLauncher.AppScenes.FLIGHT | ApplicationLauncher.AppScenes.MAPVIEW,
                     toolbarIcon
                 );
             }
         }
-
         private void OnGUIApplicationLauncherDestroyed()
         {
             if (toolbarButton != null)
@@ -129,33 +134,25 @@ namespace CinematicRecorder.Core
                 toolbarButton = null;
             }
         }
-
         private void OnToolbarButtonOn()
         {
-            // Button pressed to turn ON - show both windows
-
-            // Ensure SettingsDialog exists (DontDestroyOnLoad)
             if (settingsDialog == null)
             {
                 GameObject settingsGo = new GameObject("SettingsDialog");
                 DontDestroyOnLoad(settingsGo);
                 settingsDialog = settingsGo.AddComponent<SettingsDialog>();
-                // Position: (300, 60) - defined in SettingsDialog, but we can ensure it here if needed
                 settingsDialog.OnDialogDismissed += OnDialogClosed;
             }
             settingsDialog.Show();
 
-            // Ensure RecordingControlsWindow exists (DontDestroyOnLoad)
             if (recordingControlsWindow == null)
             {
                 GameObject controlsGo = new GameObject("RecordingControlsWindow");
                 DontDestroyOnLoad(controlsGo);
                 recordingControlsWindow = controlsGo.AddComponent<RecordingControlsWindow>();
-                // Position: (300, 480) - defined in RecordingControlsWindow
             }
             recordingControlsWindow.Show();
         }
-
         private void OnToolbarButtonOff()
         {
             // Button pressed to turn OFF - hide both windows
@@ -168,8 +165,6 @@ namespace CinematicRecorder.Core
                 recordingControlsWindow.Hide();
             }
         }
-
-        // Called when dialog closes via escape or other means
         private void OnDialogClosed()
         {
             if (toolbarButton != null)

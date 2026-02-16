@@ -8,6 +8,7 @@ namespace CinematicRecorder.Integration
 {
     public static class HullCamBridge
     {
+        #region Fields
         private static Type s_HullCamType;
         private static MethodInfo s_ActivateMethod;
         private static MethodInfo s_RestoreMethod;
@@ -16,18 +17,11 @@ namespace CinematicRecorder.Integration
         private static FieldInfo s_CamEnabledField;
         private static FieldInfo s_CameraNameField;
 
-        //FOV Controls
         private static FieldInfo s_CameraFoVField;
         private static FieldInfo s_CameraFoVMinField;
         private static FieldInfo s_CameraFoVMaxField;
-
-        public static bool IsAvailable => s_HullCamType != null;
-
-        static HullCamBridge()
-        {
-            Initialize();
-        }
-
+        #endregion
+        #region Static Initialization
         private static void Initialize()
         {
             try
@@ -60,7 +54,13 @@ namespace CinematicRecorder.Integration
                 s_HullCamType = null;
             }
         }
-
+        static HullCamBridge()
+        {
+            Initialize();
+        }
+        #endregion
+        #region Public API
+        public static bool IsAvailable => s_HullCamType != null;
         public static void Activate(object cam)
         {
             if (!IsAvailable || cam == null || s_ActivateMethod == null) return;
@@ -75,7 +75,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[HullCamBridge] Activate failed: {ex.Message}");
             }
         }
-
         public static void RestoreMain()
         {
             if (!IsAvailable || s_RestoreMethod == null) return;
@@ -89,18 +88,15 @@ namespace CinematicRecorder.Integration
                 Debug.LogError("[HullCamBridge] RestoreMain failed: " + ex.Message);
             }
         }
-
         public static object GetCurrentCamera()
         {
             if (!IsAvailable || s_CurrentCameraField == null) return null;
             return s_CurrentCameraField.GetValue(null);
         }
-
         public static bool IsAnyCameraActive()
         {
             return GetCurrentCamera() != null;
         }
-
         public static IEnumerable<object> GetAllCameras()
         {
             if (!IsAvailable || s_CamerasField == null)
@@ -109,13 +105,11 @@ namespace CinematicRecorder.Integration
             var list = s_CamerasField.GetValue(null) as System.Collections.IEnumerable;
             return list?.Cast<object>() ?? Enumerable.Empty<object>();
         }
-
         public static bool IsCameraActive(object cam)
         {
             if (cam == null) return false;
             return ReferenceEquals(cam, GetCurrentCamera());
         }
-
         public static bool IsCameraAvailable(object cam)
         {
             if (cam == null || s_CamEnabledField == null) return false;
@@ -139,15 +133,11 @@ namespace CinematicRecorder.Integration
                 return false;
             }
         }
-
-        //Camera FOV Controls
-
         public static float GetCameraFoV(object cam)
         {
             if (cam == null || s_CameraFoVField == null) return 60f;
             return (float)(s_CameraFoVField.GetValue(cam) ?? 60f);
         }
-
         public static void SetCameraFoV(object cam, float fov)
         {
             if (cam == null || s_CameraFoVField == null) return;
@@ -155,20 +145,16 @@ namespace CinematicRecorder.Integration
             float max = GetCameraFoVMax(cam);
             s_CameraFoVField.SetValue(cam, Mathf.Clamp(fov, min, max));
         }
-
         public static float GetCameraFoVMin(object cam) =>
             cam != null && s_CameraFoVMinField != null ? (float)s_CameraFoVMinField.GetValue(cam) : 10f;
-
         public static float GetCameraFoVMax(object cam) =>
             cam != null && s_CameraFoVMaxField != null ? (float)s_CameraFoVMaxField.GetValue(cam) : 120f;
-
         public static Transform GetCameraTransform(object cam)
         {
             if (cam == null) return null;
             var comp = cam as Component;
             return comp?.transform;
         }
-
         public static string GetCameraName(object cam)
         {
             if (cam == null || s_CameraNameField == null) return "Unknown";
@@ -217,7 +203,6 @@ namespace CinematicRecorder.Integration
 
             return null;
         }
-
         public static void ClearHullCamStaticState()
         {
             if (s_HullCamType == null) return;
@@ -267,5 +252,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError("[HullCamBridge] Emergency reset failed: " + ex);
             }
         }
+        #endregion
     }
 }

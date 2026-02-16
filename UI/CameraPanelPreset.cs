@@ -12,21 +12,21 @@ namespace CinematicRecorder.UI
     [Serializable]
     public class CameraPanelPreset
     {
+        #region Fields
         public string presetName;
-        public string vesselId; // "GLOBAL" or specific vessel GUID string
-        public bool autoLoadForVessel; // Auto-switch when vessel changes
+        public string vesselId; 
+        public bool autoLoadForVessel; 
 
-        // Window position (optional persistence)
         public float panelX;
         public float panelY;
 
         // 16 camera slots (4x4 grid)
         public List<CameraSlot> buttonAssignments;
-
+        #endregion
+        #region Public API
         public CameraPanelPreset()
         {
             buttonAssignments = new List<CameraSlot>();
-            // Initialize empty slots 0-15
             for (int i = 0; i < 16; i++)
             {
                 buttonAssignments.Add(new CameraSlot
@@ -35,7 +35,6 @@ namespace CinematicRecorder.UI
                 });
             }
         }
-
         public CameraSlot GetSlot(int index)
         {
             if (index < 0 || index >= 16) return null;
@@ -52,7 +51,6 @@ namespace CinematicRecorder.UI
             }
             return buttonAssignments[index];
         }
-
         public void SetSlot(int index, CameraSlot slot)
         {
             if (index < 0 || index >= 16) return;
@@ -70,7 +68,7 @@ namespace CinematicRecorder.UI
         }
 
         /// <summary>
-        /// Creates a deep copy for "Save As" operations.
+        /// Creates a deep copy of this preset for "Save As" operations.
         /// </summary>
         public CameraPanelPreset Clone()
         {
@@ -103,7 +101,7 @@ namespace CinematicRecorder.UI
                         DogfightChasePlaneMode = slot.ctSettings.DogfightChasePlaneMode,
                         DogfightTargetId = slot.ctSettings.DogfightTargetId,
 
-                        // Geographic positioning (NEW)
+                        // Geographic positioning
                         UseGeographicPosition = slot.ctSettings.UseGeographicPosition,
                         Latitude = slot.ctSettings.Latitude,
                         Longitude = slot.ctSettings.Longitude,
@@ -131,23 +129,34 @@ namespace CinematicRecorder.UI
                         ManualFOV = slot.ctSettings.ManualFOV,
                         InitialVelocity = slot.ctSettings.InitialVelocity,
 
-                        // Additional settings
+                        // Additional CameraTools settings
                         SaveRotation = slot.ctSettings.SaveRotation,
                         FmPivotMode = slot.ctSettings.FmPivotMode,
                         PathingSecondarySmoothing = slot.ctSettings.PathingSecondarySmoothing,
 
-                        // Pathing
+                        // Pathing settings
                         SelectedPathIndex = slot.ctSettings.SelectedPathIndex,
                         PathTimeScale = slot.ctSettings.PathTimeScale,
                         CurrentKeyframeIndex = slot.ctSettings.CurrentKeyframeIndex,
                         IsPlayingPath = slot.ctSettings.IsPlayingPath,
                         UseRealTime = slot.ctSettings.UseRealTime,
-                        PathStartTime = slot.ctSettings.PathStartTime
+                        PathStartTime = slot.ctSettings.PathStartTime,
+
+                        // Playback timing controls 
+                        LockPathingToPlaybackRate = slot.ctSettings.LockPathingToPlaybackRate,
+
+                        // Deterministic control flag 
+                        UseDeterministicControl = slot.ctSettings.UseDeterministicControl,
+
+                        // Custom Auto-Zoom settings
+                        UseConsistentAutoZoom = slot.ctSettings.UseConsistentAutoZoom,
+                        ZoomPadding = slot.ctSettings.ZoomPadding
                     } : null
                 });
             }
 
             return clone;
         }
+        #endregion
     }
 }

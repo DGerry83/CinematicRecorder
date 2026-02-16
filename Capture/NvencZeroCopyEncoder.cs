@@ -7,11 +7,13 @@ namespace CinematicRecorder.Capture
 {
     public unsafe class NvencZeroCopyEncoder : IDisposable
     {
+        #region Fields
         private IntPtr _encoderHandle;
         private bool _isInitialized;
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
-
+        #endregion
+        #region Structs
         [StructLayout(LayoutKind.Sequential)]
         public struct NvencEncoderSettings
         {
@@ -26,8 +28,8 @@ namespace CinematicRecorder.Capture
             public int Reserved1;
             public int Reserved2;
         }
-
-        // Shared error getter from native DLL (same as AMF)
+        #endregion
+        #region Native Imports
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr CR_GetLastError();
 
@@ -48,9 +50,12 @@ namespace CinematicRecorder.Capture
 
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern int CR_ShutdownNvencEncoder(IntPtr encoder);
-
+        #endregion
+        #region Public API
         public bool IsInitialized => _isInitialized;
-
+        /// <summary>
+        /// Initializes NVENC hardware encoder from a D3D11 texture for zero-copy GPU encoding.
+        /// </summary>
         public bool Initialize(
             int width,
             int height,
@@ -108,7 +113,9 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
-
+        /// <summary>
+        /// Encodes a frame using the configured NVENC encoder.
+        /// </summary>
         public bool EncodeFrame(IntPtr d3d11TexturePtr, long frameIndex)
         {
             if (!_isInitialized || _encoderHandle == IntPtr.Zero)
@@ -163,7 +170,8 @@ namespace CinematicRecorder.Capture
             _isInitialized = false;
             Debug.Log("[NvencZeroCopyEncoder] Shutdown complete");
         }
-
+        #endregion
+        #region IDisposable
         public void Dispose()
         {
             if (_isDisposed)
@@ -172,5 +180,6 @@ namespace CinematicRecorder.Capture
             _isDisposed = true;
             Shutdown();
         }
+        #endregion
     }
 }

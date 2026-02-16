@@ -38,8 +38,8 @@ namespace CinematicRecorder.Integration
         public float ManualOffsetUp = 5f;
         public bool AutoLandingPosition;            // Landing prediction mode
 
-        // Stationary params - Geographic Position (THE FIX)
-        // These replace the old PresetOffset Vector3 which was corrupted by terrain LOD
+        // Stationary params - Geographic Position
+        // These replace PresetOffset Vector3 which was corrupted by terrain LOD
         public double Latitude;
         public double Longitude;
         public double Altitude;                     // ASL (Above Sea Level)
@@ -71,8 +71,11 @@ namespace CinematicRecorder.Integration
         public bool UseRealTime = true;
         public float PathStartTime = 0f;
 
-        // NEW: Playback timing control for deterministic vs real-time pathing
-        public bool LockPathingToPlaybackRate;      // TRUE: Path advances by video frame time (for Kraken-Time). FALSE: Physics time (default)
+        // Playback timing control for deterministic vs real-time pathing
+        /// <summary>
+        /// TRUE: Path advances by video frame time (for Kraken-Time). FALSE: Physics time
+        /// </summary>
+        public bool LockPathingToPlaybackRate;
         public bool UseDeterministicControl;        // TRUE: Enables deterministic physics-step control mode
 
         // Additional CameraTools settings for accurate restoration
@@ -86,7 +89,6 @@ namespace CinematicRecorder.Integration
 
         public CameraToolsSettings()
         {
-            // Initialize default values
             ZoomPadding = 1.5f;
             LockPathingToPlaybackRate = false;      // Default to physics time for compatibility
             UseDeterministicControl = false;
@@ -115,7 +117,9 @@ namespace CinematicRecorder.Integration
                     return "CameraTools";
             }
         }
-
+        /// <summary>
+        /// Determines if settings match for camera slot equivalence
+        /// </summary>
         public bool ApproximatelyMatches(CameraToolsSettings other)
         {
             if (other == null || other.Mode != this.Mode) return false;
@@ -203,7 +207,7 @@ namespace CinematicRecorder.Integration
                 IsPlayingPath = this.IsPlayingPath,
                 UseRealTime = this.UseRealTime,
                 PathStartTime = this.PathStartTime,
-                // NEW: Copy playback timing settings
+                // Copy playback timing settings
                 LockPathingToPlaybackRate = this.LockPathingToPlaybackRate,
                 UseDeterministicControl = this.UseDeterministicControl,
                 SaveRotation = this.SaveRotation,

@@ -12,9 +12,8 @@ namespace CinematicRecorder.Integration
     /// </summary>
     public class CameraToolsCameraController
     {
+        #region Fields
         private readonly CameraSettingsRepository _settingsRepo;
-
-        // Zoom state
         private IZoomStrategy _currentStrategy;
         private float _rateInput;
         private float _manualTargetFOV = 60f;
@@ -26,23 +25,13 @@ namespace CinematicRecorder.Integration
         // Deferred restoration state for PostActivationPositionFixup
         private Vector3 _pendingRestoredPosition;
         private CameraToolsSettings _pendingGeographicSettings;
-
-        public CameraToolsCameraController()
-        {
-            _settingsRepo = new CameraSettingsRepository();
-        }
-
-        #region State Properties
+        #endregion
+        #region Properties
         public bool IsAvailable => CameraToolsAPIManager.IsAvailable;
-
         public bool IsActive => CameraToolsAPIManager.IsCameraActive();
-
         public ToolModes CurrentMode => CameraToolsAPIManager.GetToolMode();
-
         public float ManualFOV => CameraToolsAPIManager.GetManualFOV();
-
         public float CurrentFOV => CameraToolsAPIManager.GetActualFOV();
-
         public bool UseConsistentAutoZoom
         {
             get => _useConsistentAutoZoom;
@@ -52,22 +41,23 @@ namespace CinematicRecorder.Integration
                 if (value) CancelActiveZoom();
             }
         }
-
         public float ConsistentZoomPadding
         {
             get => _consistentZoomPadding;
             set => _consistentZoomPadding = value;
         }
-
         public Part CamTarget => CameraToolsReflectionProvider.CamTarget;
-
         public bool UsePresetOffset => CameraToolsReflectionProvider.SetPresetOffset;
-        #endregion
-
         public bool HasActiveStrategy => _currentStrategy != null;
-
-        #region Rate-Based Update
-
+        public int SelectedPathIndex => CameraToolsReflectionProvider.GetInt(CameraToolsReflectionProvider.SelectedPathIndexField, -1);
+        #endregion
+        #region Constructor
+        public CameraToolsCameraController()
+        {
+            _settingsRepo = new CameraSettingsRepository();
+        }
+        #endregion
+        #region Rate-Based Zoom
         /// <summary>
         /// Applies a single rate-based zoom step. Used by both real-time and deterministic modes.
         /// </summary>
@@ -87,12 +77,10 @@ namespace CinematicRecorder.Integration
                 rateStrategy.SetInput(intent);
                 float newFOV = rateStrategy.GetTargetFOV(_rateControlCurrentFOV, deltaTime);
 
-                // Use API for immediate FOV application
                 CameraToolsAPIManager.SetExternalFOV(newFOV);
                 _rateControlCurrentFOV = newFOV;
             }
         }
-
         public void UpdateRate(float intent)
         {
             ApplyRateStep(intent, Time.deltaTime);
@@ -115,8 +103,7 @@ namespace CinematicRecorder.Integration
         /// </summary>
         public float GetRateInput() => _rateInput;
         #endregion
-
-        #region Target-Based Update
+        #region Target-Based Zoom
         /// <summary>
         /// Updates target-based zoom. Call this every frame in Target mode.
         /// </summary>
@@ -190,7 +177,6 @@ namespace CinematicRecorder.Integration
             _enableConsistentOnComplete = false;
         }
         #endregion
-
         #region Consistent Framing
         /// <summary>
         /// Applies consistent auto-zoom settings every frame when enabled.
@@ -209,16 +195,14 @@ namespace CinematicRecorder.Integration
                 float targetFov = ZoomMathUtility.CalculateConsistentFramingFOV(
                     FlightGlobals.ActiveVessel, camPos, _consistentZoomPadding);
 
-                // Clamp to camera bounds
                 targetFov = Mathf.Clamp(targetFov, 2f, 120f);
 
-                // Use API for immediate application
                 CameraToolsAPIManager.SetExternalFOV(targetFov);
             }
         }
 
         /// <summary>
-        /// Legacy support - immediately applies consistent framing every frame.
+        /// Legacy support for immediate consistent framing application
         /// </summary>
         public void ApplyConsistentAutoZoom(bool enable, float padding)
         {
@@ -240,9 +224,7 @@ namespace CinematicRecorder.Integration
             CameraToolsAPIManager.SetExternalFOV(60f); // "Normal" FOV
         }
         #endregion
-
         #region Core Operations
-
         /// <summary>
         /// Sets the playback timing mode for pathing cameras.
         /// </summary>
@@ -265,10 +247,8 @@ namespace CinematicRecorder.Integration
         /// </summary>
         public void Deactivate()
         {
-            // Use the new API method which properly validates camera parenting
             CameraToolsAPIManager.DeactivateCamera();
 
-            // Clear local state
             CancelActiveZoom();
             ClearPendingRestoration();
         }
@@ -284,11 +264,9 @@ namespace CinematicRecorder.Integration
             // Apply new settings first
             if (settings != null)
             {
-                // Determine deterministic mode
                 bool useDeterministic = settings.UseDeterministicControl || DeterministicCaptureSession.IsRunning;
                 CameraToolsAPIManager.SetCinematicRecorderControl(enabled: true, deterministicMode: useDeterministic);
 
-                // Apply mode-specific settings
                 _settingsRepo.ApplySettings(settings, activateImmediately: false);
 
                 // Store geographic settings for potential fixup
@@ -307,14 +285,11 @@ namespace CinematicRecorder.Integration
             // Use SwitchCamera API for seamless transition
             CameraToolsAPIManager.SwitchCamera(newMode);
 
-            // Execute position fixup immediately for geographic cameras
-            // This sets FlightCamera position directly and updates LastVesselCoM
             if (_pendingGeographicSettings != null)
             {
                 PostActivationPositionFixup();
             }
 
-            // Start path playback if needed
             if (newMode == ToolModes.Pathing && settings?.IsPlayingPath == true)
             {
                 CameraToolsAPIManager.StartPathPlayback();
@@ -359,11 +334,9 @@ namespace CinematicRecorder.Integration
                 useDeterministic = true;
             }
 
-            // Enable CR control mode first (immediate FOV, no smoothing)
             CameraToolsAPIManager.SetCinematicRecorderControl(enabled: true, deterministicMode: useDeterministic);
             UnityEngine.Debug.Log($"[ActivateMode] CR Control enabled, deterministic: {useDeterministic}");
 
-            // Set mode first
             CameraToolsAPIManager.SetToolMode(mode);
             UnityEngine.Debug.Log($"[ActivateMode] Mode set to {mode}");
 
@@ -381,7 +354,6 @@ namespace CinematicRecorder.Integration
                 }
             }
 
-            // NOW activate camera with settings configured
             UnityEngine.Debug.Log("[ActivateMode] Activating CameraTools camera");
             CameraToolsAPIManager.ActivateCamera();
 
@@ -403,17 +375,17 @@ namespace CinematicRecorder.Integration
             return _settingsRepo.CaptureSettings();
         }
         #endregion
-
         #region Geographic Restoration
         public bool HasPendingGeographicRestoration() =>
             _pendingGeographicSettings != null && _pendingGeographicSettings.UseGeographicPosition;
-
         public void ClearPendingRestoration()
         {
             _pendingRestoredPosition = Vector3.zero;
             _pendingGeographicSettings = null;
         }
-
+        /// <summary>
+        /// Executes deferred position correction for geographic coordinates after activation
+        /// </summary>
         public void PostActivationPositionFixup()
         {
             if (_pendingGeographicSettings == null || !IsActive) return;
@@ -429,15 +401,12 @@ namespace CinematicRecorder.Integration
             Vector3 restoredWorldPos = _pendingRestoredPosition;
             Vector3 targetOffset = restoredWorldPos - currentVessel.CoM;
 
-            // Use direct field access (now public in API v2.0+)
             CameraToolsReflectionProvider.ManualPosition = targetOffset;
 
-            // Update camera parent if available
             var cameraParent = CameraToolsReflectionProvider.CameraParent;
             if (cameraParent != null)
                 cameraParent.transform.position = restoredWorldPos;
 
-            // Update FlightCamera directly
             if (FlightCamera.fetch != null)
             {
                 FlightCamera.fetch.transform.position = restoredWorldPos;
@@ -445,10 +414,8 @@ namespace CinematicRecorder.Integration
                     FlightCamera.fetch.transform.localPosition = Vector3.zero;
             }
 
-            // Update lastVesselCoM (now public field)
             CameraToolsReflectionProvider.LastVesselCoM = currentVessel.CoM;
 
-            // Apply zoom if needed
             if (_pendingGeographicSettings.UseConsistentAutoZoom)
             {
                 float targetFOV = ZoomMathUtility.CalculateConsistentFramingFOV(
@@ -465,19 +432,15 @@ namespace CinematicRecorder.Integration
             ClearPendingRestoration();
         }
         #endregion
-
         #region Helpers
-
         /// <summary>
         /// Applies FOV using the API for immediate effect.
         /// </summary>
         private void ApplyFOV(float fov)
         {
-            // Clamp to CT limits
             fov = Mathf.Clamp(fov, 2f, 120f);
             CameraToolsAPIManager.SetExternalFOV(fov);
         }
-
         public void EnforceAutoZoomFOVImmediate(float targetFOV)
         {
             ApplyFOV(targetFOV);
@@ -489,20 +452,17 @@ namespace CinematicRecorder.Integration
         /// </summary>
         public void ForceReset()
         {
-            // Clear all internal state
             CancelActiveZoom();
             ClearPendingRestoration();
             _useConsistentAutoZoom = false;
             _rateInput = 0f;
             _currentStrategy = null;
 
-            // Ensure CameraTools is deactivated via API
             if (IsActive)
             {
                 CameraToolsAPIManager.DeactivateCamera();
             }
         }
-
         private float CalculateAutoZoomFOV(CameraToolsSettings settings, Vessel vessel)
         {
             if (vessel == null) return 60f;
@@ -518,15 +478,11 @@ namespace CinematicRecorder.Integration
             float targetFoV = (7000f / (distance + 100f)) - 14f + margin;
             return Mathf.Clamp(targetFoV, 2f, 60f);
         }
-
         public float CalculateConsistentAutoZoom(Vessel vessel, Vector3 cameraPosition, float paddingMultiplier)
         {
             return ZoomMathUtility.CalculateConsistentFramingFOV(vessel, cameraPosition, paddingMultiplier);
         }
-
         public bool PathExists(int index) => CameraToolsReflectionProvider.PathExists(index);
-
-        public int SelectedPathIndex => CameraToolsReflectionProvider.GetInt(CameraToolsReflectionProvider.SelectedPathIndexField, -1);
         #endregion
     }
 }

@@ -19,7 +19,6 @@ namespace CinematicRecorder.UI
             return result;
         }
         #endregion
-
         #region Window Definitions
         public static class Windows
         {
@@ -29,6 +28,7 @@ namespace CinematicRecorder.UI
                 public const int FinalReport = 12346;
                 public const int RecordingControls = 12347;
                 public const int AdvancedOptions = 12348;
+                public const int AdvancedCameraDocked = 12349;
                 public const int DialogDelete = 99999;
                 public const int DialogUnassign = 99998;
             }
@@ -73,7 +73,6 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region Layout Constants
         public static class Layout
         {
@@ -174,9 +173,16 @@ namespace CinematicRecorder.UI
                 public const float DURATION_MIN = 0.1f;
                 public const float DURATION_MAX = 3.0f;
             }
+
+            public static class AdvancedCamera
+            {
+                public const float PANEL_WIDTH = 260f;
+                public const float RADIO_WIDTH = 100f;
+                public const float SLIDER_MIN = 0f;
+                public const float SLIDER_MAX = 10f;
+            }
         }
         #endregion
-
         #region Spacing
         public static class Spacing
         {
@@ -189,7 +195,6 @@ namespace CinematicRecorder.UI
             public const float STATUS_TOP = 10f;
         }
         #endregion
-
         #region Typography
         public static class Typography
         {
@@ -198,7 +203,6 @@ namespace CinematicRecorder.UI
             public const int HELP = 10;
         }
         #endregion
-
         #region Colors
         public static class Colors
         {
@@ -217,7 +221,7 @@ namespace CinematicRecorder.UI
                 public static readonly Color UNAVAILABLE = new Color(0.8f, 0.2f, 0.2f); // Red
                 public static readonly Color UNASSIGNED = new Color(0.3f, 0.3f, 0.3f);  // Gray
                 public static readonly Color REMOTE = new Color(0.0f, 0.8f, 0.8f);      // Aqua
-                public static readonly Color CT_ACTIVE = new Color(1.0f, 0.6f, 0.1f);   // Orange (CameraTools)
+                public static readonly Color CT_ACTIVE = new Color(1.0f, 0.6f, 0.1f);   // Orange 
                 public static readonly Color CT_INACTIVE = new Color(0.8f, 0.4f, 0.1f); // Dark Orange
             }
 
@@ -230,7 +234,6 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region Style Factories
         public static class Styles
         {

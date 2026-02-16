@@ -25,7 +25,8 @@ namespace CinematicRecorder.Core
         }
 
         /// <summary>
-        /// Calculates the bounding radius of a vessel from its CoM.
+        /// Calculates the bounding radius of a vessel from its center of mass.
+        /// Returns 5f default if vessel has no parts.
         /// </summary>
         public static float CalculateVesselBoundingRadius(Vessel vessel)
         {

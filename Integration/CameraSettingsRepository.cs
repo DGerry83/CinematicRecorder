@@ -12,6 +12,7 @@ namespace CinematicRecorder.Integration
     /// </summary>
     public class CameraSettingsRepository
     {
+        #region Public API
         /// <summary>
         /// Captures current CameraTools state into a settings DTO.
         /// Uses GetCurrentState() API where available, reflection for remaining fields.
@@ -31,9 +32,8 @@ namespace CinematicRecorder.Integration
             settings.IsPlayingPath = CameraToolsAPIManager.IsCameraActive(); // Or specific pathing state if available
             settings.PathStartTime = CameraToolsAPIManager.GetCurrentPathTime();
 
-            // FOV via API
             settings.ManualFOV = CameraToolsAPIManager.GetManualFOV();
-            if (settings.ManualFOV <= 0) // Fallback
+            if (settings.ManualFOV <= 0)
                 settings.ManualFOV = CameraToolsReflectionProvider.CurrentFOV;
 
             UnityEngine.Debug.Log($"[CaptureSettings] API State captured - Mode: {settings.Mode}, IsPlayingPath: {settings.IsPlayingPath}");
@@ -71,7 +71,6 @@ namespace CinematicRecorder.Integration
 
             return settings;
         }
-
         /// <summary>
         /// Applies settings to CameraTools using the public API.
         /// Uses CinematicRecorderIntegration methods for configuration.
@@ -141,7 +140,8 @@ namespace CinematicRecorder.Integration
                 UnityEngine.Debug.LogError($"[CameraSettingsRepository] Apply failed: {ex}");
             }
         }
-
+        #endregion
+        #region Private Implementation
         private void CaptureDogfightSettings(CameraToolsSettings settings)
         {
             settings.DogfightDistance = CameraToolsReflectionProvider.GetFloat(CameraToolsReflectionProvider.DogfightDistanceField, 50f);
@@ -152,10 +152,8 @@ namespace CinematicRecorder.Integration
             var target = CameraToolsReflectionProvider.GetReference<Vessel>(CameraToolsReflectionProvider.DogfightTargetField);
             settings.DogfightTargetId = target?.id.ToString();
 
-            // Capture FOV
             settings.ManualFOV = CameraToolsReflectionProvider.CurrentFOV;
         }
-
         private void CaptureStationarySettings(CameraToolsSettings settings)
         {
             Vessel currentVessel = FlightGlobals.ActiveVessel;
@@ -218,7 +216,6 @@ namespace CinematicRecorder.Integration
             // Target tracking
             CaptureTargetTrackingState(settings, currentVessel);
         }
-
         private void CaptureTargetTrackingState(CameraToolsSettings settings, Vessel currentVessel)
         {
             settings.HasTarget = CameraToolsReflectionProvider.HasTarget;
@@ -244,7 +241,6 @@ namespace CinematicRecorder.Integration
                 settings.TargetPartPersistentId = 0;
             }
         }
-
         private void CapturePathingSettings(CameraToolsSettings settings)
         {
             settings.SelectedPathIndex = CameraToolsReflectionProvider.GetInt(CameraToolsReflectionProvider.SelectedPathIndexField, -1);
@@ -253,9 +249,6 @@ namespace CinematicRecorder.Integration
             settings.PathingSecondarySmoothing = CameraToolsReflectionProvider.GetFloat(CameraToolsReflectionProvider.PathingSecondarySmoothingField, 0f);
             settings.PathTimeScale = CameraToolsReflectionProvider.ExtractPathTimeScale(settings.SelectedPathIndex);
 
-            // FIX: Capture playback timing preference from current session state
-            // Since we can't read this back from CameraTools via reflection/API getter, 
-            // we capture the current global setting as the "active" value
             settings.LockPathingToPlaybackRate = SessionState.CameraPathPlaybackTiming;
 
             if (!CameraToolsReflectionProvider.PathExists(settings.SelectedPathIndex))
@@ -263,17 +256,13 @@ namespace CinematicRecorder.Integration
                 UnityEngine.Debug.LogWarning($"[CapturePathingSettings] Path index {settings.SelectedPathIndex} no longer exists, marking as invalid");
                 settings.SelectedPathIndex = -1;
             }
-
-            // Capture FOV
             settings.ManualFOV = CameraToolsReflectionProvider.CurrentFOV;
 
             UnityEngine.Debug.Log($"[CapturePathingSettings] Captured: PathIndex={settings.SelectedPathIndex}, " +
                 $"Keyframe={settings.CurrentKeyframeIndex}, UsePlaybackTiming={settings.LockPathingToPlaybackRate}, FOV={settings.ManualFOV}");
         }
-
         private void ApplyDogfightSettings(CameraToolsSettings settings)
         {
-            // Use API to set dogfight configuration (replaces individual reflection calls)
             CameraToolsAPIManager.SetDogfightConfig(
                 distance: settings.DogfightDistance,
                 offsetX: settings.DogfightOffsetX,
@@ -281,7 +270,6 @@ namespace CinematicRecorder.Integration
                 chasePlane: settings.DogfightChasePlaneMode
             );
 
-            // Use API to set dogfight target (replaces reflection)
             if (!string.IsNullOrEmpty(settings.DogfightTargetId))
             {
                 var target = FlightGlobals.Vessels.FirstOrDefault(v => v.id.ToString() == settings.DogfightTargetId);
@@ -292,13 +280,11 @@ namespace CinematicRecorder.Integration
                 CameraToolsAPIManager.SetDogfightTarget(null);
             }
         }
-
         private void ApplyStationarySettings(CameraToolsSettings settings)
         {
             Vessel currentVessel = FlightGlobals.ActiveVessel;
             if (currentVessel == null) return;
 
-            // Use API to set positioning mode flags (replaces reflection)
             CameraToolsAPIManager.SetStationaryFlags(
                 presetOffset: settings.UseGeographicPosition || settings.ManualOffset,
                 autoFlyby: settings.AutoFlybyPosition,
@@ -306,7 +292,6 @@ namespace CinematicRecorder.Integration
                 manualOffset: settings.ManualOffset
             );
 
-            // Use API to set manual offset values (replaces reflection)
             if (settings.ManualOffset)
             {
                 CameraToolsAPIManager.SetManualOffset(
@@ -316,7 +301,6 @@ namespace CinematicRecorder.Integration
                 );
             }
 
-            // Use API to set stationary advanced options (replaces reflection)
             CameraToolsAPIManager.SetStationaryAdvanced(
                 saveRot: settings.SaveRotation,
                 maintainVel: settings.MaintainInitialVelocity,
@@ -324,7 +308,6 @@ namespace CinematicRecorder.Integration
                 autoZoom: settings.AutoZoom
             );
 
-            // Set position via API (existing)
             if (settings.UseGeographicPosition)
             {
                 var body = GeographicCoordinateSystem.ResolveBody(settings.BodyName);
@@ -342,7 +325,7 @@ namespace CinematicRecorder.Integration
             }
             // else: AutoFlyby/AutoLanding - CameraTools calculates position internally, flags already set above
 
-            // Apply target tracking via API (replaces reflection)
+            // Apply target tracking via API
             ApplyTargetState(settings, currentVessel);
 
             // Pivot mode still requires reflection (no API yet)
@@ -360,7 +343,6 @@ namespace CinematicRecorder.Integration
                 CameraToolsReflectionProvider.ManualFOV = settings.ManualFOV;
             }
         }
-
         private void ApplyPathingSettings(CameraToolsSettings settings)
         {
             UnityEngine.Debug.Log($"[ApplyPathingSettings] Configuring path {settings.SelectedPathIndex} with playback timing: {settings.LockPathingToPlaybackRate}");
@@ -377,21 +359,14 @@ namespace CinematicRecorder.Integration
                 return;
             }
 
-            // Use API to select path
             CameraToolsAPIManager.SelectPath(settings.SelectedPathIndex);
-
-            // Use API to set playback timing
             CameraToolsAPIManager.SetLockPathingToPlaybackRate(settings.LockPathingToPlaybackRate);
-
-            // Use API to set path state (replaces individual reflection calls)
             CameraToolsAPIManager.SetPathState(
                 pathIndex: settings.SelectedPathIndex,
                 keyframeIndex: settings.CurrentKeyframeIndex >= 0 ? settings.CurrentKeyframeIndex : 0,
                 isPlaying: settings.IsPlayingPath,
                 startTime: settings.PathStartTime
             );
-
-            // Use API to set path timing options (replaces reflection)
             CameraToolsAPIManager.SetPathTiming(
                 useRealTime: settings.UseRealTime,
                 smoothing: settings.PathingSecondarySmoothing
@@ -402,12 +377,10 @@ namespace CinematicRecorder.Integration
 
             UnityEngine.Debug.Log("[ApplyPathingSettings] Pathing configuration applied via API");
         }
-
         private void ApplyTargetState(CameraToolsSettings settings, Vessel currentVessel)
         {
             if (!settings.HasTarget)
             {
-                // Use API to clear target
                 CameraToolsAPIManager.SetTarget(null, false);
                 return;
             }
@@ -423,7 +396,6 @@ namespace CinematicRecorder.Integration
                 CameraToolsReflectionProvider.HasTarget = false;
             }
         }
-
         private Part ResolveTargetPart(CameraToolsSettings settings, Vessel currentVessel)
         {
             if (settings.TargetSelf && currentVessel != null)
@@ -436,5 +408,6 @@ namespace CinematicRecorder.Integration
 
             return currentVessel?.GetReferenceTransformPart() ?? currentVessel?.rootPart;
         }
+        #endregion
     }
 }

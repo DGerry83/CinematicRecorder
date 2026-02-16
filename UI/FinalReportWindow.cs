@@ -7,6 +7,7 @@ namespace CinematicRecorder.UI
 {
     public class FinalReportWindow : MonoBehaviour
     {
+        #region Fields & State
         private Rect windowRect = new Rect(
             CinematicUIResources.Windows.FinalReport.DEFAULT_X,
             CinematicUIResources.Windows.FinalReport.DEFAULT_Y,
@@ -18,7 +19,6 @@ namespace CinematicRecorder.UI
         private bool hasInitStyles = false;
         private bool shouldShow = false;
 
-        // Report data
         private int capturedFrames;
         private float simulatedSeconds;
         private float outputDuration;
@@ -26,21 +26,9 @@ namespace CinematicRecorder.UI
         private string encodingModeUsed;
         private string outputFilePath;
         private bool wasUnlimitedRecording;
-
+        #endregion
+        #region Public API
         public bool IsVisible => shouldShow;
-
-        void Start()
-        {
-            InitStyles();
-        }
-
-        private void InitStyles()
-        {
-            if (hasInitStyles) return;
-            windowStyle = CinematicUIResources.Styles.Window();
-            hasInitStyles = true;
-        }
-
         public void ShowReport(
             int frames,
             float simSeconds,
@@ -62,25 +50,18 @@ namespace CinematicRecorder.UI
 
             Debug.Log(string.Format(Report.FinalReportLog, frames, simSeconds, realTimeSeconds, encodingMode, unlimited, filePath));
         }
-
         public void HideReport()
         {
             shouldShow = false;
         }
-
-        void OnGUI()
+        #endregion
+        #region Private Implementation
+        private void InitStyles()
         {
-            if (!shouldShow) return;
-
-            windowRect = GUILayout.Window(
-                CinematicUIResources.Windows.IDs.FinalReport,
-                windowRect,
-                OnWindow,
-                Report.WindowTitle,
-                windowStyle
-            );
+            if (hasInitStyles) return;
+            windowStyle = CinematicUIResources.Styles.Window();
+            hasInitStyles = true;
         }
-
         private void OnWindow(int windowId)
         {
             GUILayout.BeginVertical();
@@ -90,7 +71,6 @@ namespace CinematicRecorder.UI
             GUILayout.Label(Report.SummaryHeader, headerStyle);
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // Stats grid
             GUILayout.BeginHorizontal();
             GUILayout.Label(Report.FramesCaptured, GUILayout.Width(130));
             GUILayout.Label(capturedFrames.ToString("N0"), GUILayout.Width(100));
@@ -118,7 +98,6 @@ namespace CinematicRecorder.UI
 
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // File path with Open Folder button
             GUILayout.Label(Report.FilenameLabel, HighLogic.Skin.label);
 
             GUILayout.BeginHorizontal();
@@ -139,7 +118,6 @@ namespace CinematicRecorder.UI
 
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
 
-            // Centered Okay button
             GUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
 
@@ -155,7 +133,6 @@ namespace CinematicRecorder.UI
 
             GUI.DragWindow();
         }
-
         /// <summary>
         /// Returns just the filename without any path
         /// </summary>
@@ -164,7 +141,6 @@ namespace CinematicRecorder.UI
             if (string.IsNullOrEmpty(fullPath)) return string.Empty;
             return Path.GetFileName(fullPath);
         }
-
         /// <summary>
         /// Opens the file explorer to the directory containing the output file
         /// </summary>
@@ -195,12 +171,31 @@ namespace CinematicRecorder.UI
                 ScreenMessages.PostScreenMessage(Report.FailedToOpenFolder, 3f, ScreenMessageStyle.UPPER_CENTER);
             }
         }
-
         private string FormatTimeSpan(TimeSpan ts)
         {
             if (ts.TotalHours >= 1)
                 return $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}";
             return $"{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds / 100:D1}";
         }
+        #endregion
+        #region Unity Lifecycle
+        void Start()
+        {
+            InitStyles();
+        }
+        void OnGUI()
+        {
+            if (!shouldShow) return;
+
+            windowRect = GUILayout.Window(
+                CinematicUIResources.Windows.IDs.FinalReport,
+                windowRect,
+                OnWindow,
+                Report.WindowTitle,
+                windowStyle
+            );
+        }
+        #endregion
+
     }
 }

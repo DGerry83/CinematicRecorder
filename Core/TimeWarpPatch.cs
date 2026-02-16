@@ -7,10 +7,8 @@ namespace CinematicRecorder.Core
     [HarmonyPatch(MethodType.Getter)]
     public static class TimeWarp_FixedDeltaTime_Patch
     {
-        // Store our override value
         public static float OverrideValue { get; set; } = 0.02f;
         public static bool IsOverridden { get; set; } = false;
-
         static bool Prefix(ref float __result)
         {
             if (IsOverridden)

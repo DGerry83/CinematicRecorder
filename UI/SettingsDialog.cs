@@ -7,6 +7,10 @@ using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
+    /// <summary>
+    /// Main settings dialog for CinematicRecorder. Manages capture settings,
+    /// encoder configuration, and recording start/stop.
+    /// </summary>
     public class SettingsDialog : MonoBehaviour
     {
         #region Fields & State
@@ -23,10 +27,6 @@ namespace CinematicRecorder.UI
 
         private GUIStyle windowStyle;
         private bool stylesInitialized;
-        public bool IsVisible => renderDisplay;
-
-        public event Action OnDialogDismissed;
-
         private bool showAdvancedPanel = false;
 
         private readonly int[] frameratePresets = { 24, 30, 60, 120, 240 };
@@ -34,7 +34,6 @@ namespace CinematicRecorder.UI
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
         #endregion
-
         #region Unity Lifecycle
         private void OnGUI()
         {
@@ -66,7 +65,6 @@ namespace CinematicRecorder.UI
             );
         }
         #endregion
-
         #region Initialization
         private void InitStyles()
         {
@@ -75,21 +73,15 @@ namespace CinematicRecorder.UI
             stylesInitialized = true;
         }
         #endregion
-
         #region Window Layout
         private void DrawWindow(int id)
         {
-            // TOP ROW: Status left, Advanced button right
             GUILayout.BeginHorizontal();
-
-            // Status takes remaining space
             GUILayout.BeginVertical();
             DrawStatusSection();
             GUILayout.EndVertical();
-
             GUILayout.FlexibleSpace();
 
-            // Advanced toggle button - fixed width container
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Settings.ADVANCED_TOGGLE_WIDTH));
             GUIStyle advStyle = CinematicUIResources.Styles.Button();
             if (showAdvancedPanel)
@@ -105,13 +97,8 @@ namespace CinematicRecorder.UI
                 showAdvancedPanel = !showAdvancedPanel;
             }
             GUILayout.EndVertical();
-
             GUILayout.EndHorizontal();
-
-            // MAIN CONTENT with slide-out panel
             GUILayout.BeginHorizontal();
-
-            // LEFT: Main settings
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH - CinematicUIResources.Spacing.NORMAL * 2));
 
             DrawCaptureTimingSection();
@@ -123,7 +110,6 @@ namespace CinematicRecorder.UI
             DrawRecordButton();
             GUILayout.EndVertical();
 
-            // RIGHT: Advanced panel slides in
             if (showAdvancedPanel)
             {
                 GUILayout.Space(CinematicUIResources.Spacing.TIGHT / 2);
@@ -136,16 +122,13 @@ namespace CinematicRecorder.UI
                 DrawAdvancedContent();
                 GUILayout.EndVertical();
             }
-
             GUILayout.EndHorizontal();
             GUI.DragWindow();
         }
-
         private void DrawRecordButton()
         {
             bool running = DeterministicCaptureSession.IsRunning;
             GUI.color = running ? Color.red : Color.green;
-
             if (GUILayout.Button(
                 running ? Settings.StopRecording : Settings.StartRecording,
                 GUILayout.Height(CinematicUIResources.Layout.BTN_HEIGHT_RECORD)))
@@ -160,17 +143,13 @@ namespace CinematicRecorder.UI
                     StartRecording();
                 }
             }
-
             GUI.color = Color.white;
         }
-
         private void StartRecording()
         {
             stopRequested = false;
-
             int simFps = frameratePresets[SessionState.SimFpsIndex];
             int playbackFps = frameratePresets[SessionState.PlaybackFpsIndex];
-
             bool forceSoftware = SessionState.SelectedEncoderTab == 2;
             bool zeroCopy = SessionState.SelectedEncoderTab != 2;
 
@@ -181,9 +160,7 @@ namespace CinematicRecorder.UI
                     forceSoftware,
                     zeroCopy);
         }
-
         #endregion
-
         #region Status Display
         private void DrawStatusSection()
         {
@@ -244,7 +221,6 @@ namespace CinematicRecorder.UI
                 GUILayout.Label(string.Format(Settings.ReadyStatusFormat, Screen.width, Screen.height, fps));
             }
         }
-
         private void ApplyFpsColorGradient(GUIStyle style, float ratio)
         {
             if (ratio < 0.10f)
@@ -275,7 +251,6 @@ namespace CinematicRecorder.UI
                 style.normal.textColor = Color.cyan;
         }
         #endregion
-
         #region Capture Settings
         private void DrawCaptureTimingSection()
         {
@@ -349,7 +324,6 @@ namespace CinematicRecorder.UI
             GUILayout.EndHorizontal();
         }
         #endregion
-
         #region Encoding Settings
         private void DrawEncodingFoldout()
         {
@@ -564,42 +538,15 @@ namespace CinematicRecorder.UI
             SessionState.CpuPreset = selectedSpeed;
         }
         #endregion
-
         #region Advanced Panel
         private void DrawAdvancedContent()
         {
             GUIStyle headerStyle = CinematicUIResources.Styles.Header();
             GUILayout.Label(Settings.AdvancedOptionsHeader, headerStyle);
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-
-            // CameraTools Pathing Timing Control
-            bool ctAvailable = CameraToolsAPIManager.IsAvailable;
-            GUI.enabled = ctAvailable;
-
-            GUIStyle pathToggleStyle = CinematicUIResources.Styles.Toggle();
-            if (SessionState.CameraPathPlaybackTiming)
-            {
-                pathToggleStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-                pathToggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newPathTiming = GUILayout.Toggle(
-                SessionState.CameraPathPlaybackTiming,
-                " Camera path uses playback timing",
-                pathToggleStyle
-            );
-
-            if (newPathTiming != SessionState.CameraPathPlaybackTiming)
-            {
-                SessionState.CameraPathPlaybackTiming = newPathTiming;
-            }
-
             GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
             tooltipStyle.wordWrap = true;
-            GUILayout.Label("Path advances by video frame time instead of physics time (for Kraken-Time recording)", tooltipStyle);
 
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            GUI.enabled = true;
 
             if (SessionState.SelectedEncoderTab == 0)
             {
@@ -631,21 +578,12 @@ namespace CinematicRecorder.UI
             GUILayout.Label(Settings.PostProcessText, placeholderStyle);
         }
         #endregion
-
         #region Public API
-        public void Show()
-        {
-            renderDisplay = true;
-            stopRequested = false;
-            InitStyles();
-        }
-
-        public void Hide()
-        {
-            renderDisplay = false;
-            OnDialogDismissed?.Invoke();
-        }
-        #endregion
+        public bool IsVisible => renderDisplay;
+        public event Action OnDialogDismissed;
+        /// <summary>
+        /// Data container for capture completion report.
+        /// </summary>
         public class CaptureReport
         {
             public int CapturedFrames;
@@ -655,5 +593,17 @@ namespace CinematicRecorder.UI
             public string EncodingMode;
             public string OutputFilePath;
         }
+        public void Show()
+        {
+            renderDisplay = true;
+            stopRequested = false;
+            InitStyles();
+        }
+        public void Hide()
+        {
+            renderDisplay = false;
+            OnDialogDismissed?.Invoke();
+        }
+        #endregion
     }
 }

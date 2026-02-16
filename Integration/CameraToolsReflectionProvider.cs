@@ -13,19 +13,17 @@ namespace CinematicRecorder.Integration
     /// </summary>
     public static class CameraToolsReflectionProvider
     {
+        #region Fields
         private static bool _initialized;
         private static bool _isAvailable;
 
-        // Assembly and type references
         private static Assembly _ctAssembly;
         private static Type _camToolsType;
         private static Type _toolModesEnumType;
         private static Type _fmPivotModeEnumType;
 
-        // Static fields
         private static FieldInfo _fetchField;
 
-        // Public instance fields (CameraTools API v2.0+)
         private static FieldInfo _toolModeField;
         private static FieldInfo _cameraToolActiveField;
         private static FieldInfo _vesselField;
@@ -57,7 +55,6 @@ namespace CinematicRecorder.Integration
         private static FieldInfo _zoomExpStationaryField;
         private static FieldInfo _initialVelocityField;
 
-        // Now-public fields (API v2.0+) - cached for property accessors
         private static FieldInfo _manualPositionField;
         private static FieldInfo _manualFOVField;
         private static FieldInfo _currentFOVField;
@@ -66,21 +63,17 @@ namespace CinematicRecorder.Integration
         private static FieldInfo _cameraParentField;
         private static FieldInfo _lastVesselCoMField;
 
-        // Remaining private instance fields
         private static FieldInfo _setPresetOffsetField;
         private static FieldInfo _presetOffsetField;
 
-        // Methods
         private static MethodInfo _cameraActivateMethod;
         private static MethodInfo _revertCameraMethod;
-
-        public static bool IsAvailable => _initialized ? _isAvailable : Initialize();
-
+        #endregion
+        #region Static Initialization
         static CameraToolsReflectionProvider()
         {
             Initialize();
         }
-
         private static bool Initialize()
         {
             if (_initialized) return _isAvailable;
@@ -108,10 +101,8 @@ namespace CinematicRecorder.Integration
                     return false;
                 }
 
-                // Bind static fetch
                 _fetchField = _camToolsType.GetField("fetch", BindingFlags.Public | BindingFlags.Static);
 
-                // Bind public instance fields (standard settings)
                 _toolModeField = _camToolsType.GetField("toolMode", BindingFlags.Public | BindingFlags.Instance);
                 _cameraToolActiveField = _camToolsType.GetField("cameraToolActive", BindingFlags.Public | BindingFlags.Instance);
                 _vesselField = _camToolsType.GetField("vessel", BindingFlags.Public | BindingFlags.Instance);
@@ -143,7 +134,6 @@ namespace CinematicRecorder.Integration
                 _zoomExpStationaryField = _camToolsType.GetField("zoomExpStationary", BindingFlags.Public | BindingFlags.Instance);
                 _initialVelocityField = _camToolsType.GetField("initialVelocity", BindingFlags.Public | BindingFlags.Instance);
 
-                // Bind now-public fields (API v2.0+) - these were previously NonPublic
                 _manualPositionField = _camToolsType.GetField("manualPosition", BindingFlags.Public | BindingFlags.Instance);
                 _manualFOVField = _camToolsType.GetField("manualFOV", BindingFlags.Public | BindingFlags.Instance);
                 _currentFOVField = _camToolsType.GetField("currentFOV", BindingFlags.Public | BindingFlags.Instance);
@@ -153,10 +143,8 @@ namespace CinematicRecorder.Integration
                 _lastVesselCoMField = _camToolsType.GetField("lastVesselCoM", BindingFlags.Public | BindingFlags.Instance);
                 _setPresetOffsetField = _camToolsType.GetField("setPresetOffset", BindingFlags.Public | BindingFlags.Instance);
 
-                // Bind remaining private fields
                 _presetOffsetField = _camToolsType.GetField("presetOffset", BindingFlags.NonPublic | BindingFlags.Instance);
 
-                // Bind methods
                 _cameraActivateMethod = _camToolsType.GetMethod("CameraActivate", BindingFlags.Public | BindingFlags.Instance);
                 _revertCameraMethod = _camToolsType.GetMethod("RevertCamera", BindingFlags.Public | BindingFlags.Instance);
 
@@ -171,15 +159,11 @@ namespace CinematicRecorder.Integration
             _initialized = true;
             return _isAvailable;
         }
-
-        public static object GetFetchInstance()
-        {
-            if (!IsAvailable || _fetchField == null) return null;
-            return _fetchField.GetValue(null);
-        }
-
-        #region Direct Public Field Access Properties (API v2.0+)
-
+        #endregion
+        #region Public API - Properties
+        public static bool IsAvailable => _initialized ? _isAvailable : Initialize();
+        #endregion
+        #region Direct Field Access
         /// <summary>
         /// Direct access to manualPosition (public field in CameraTools v2.0+)
         /// </summary>
@@ -257,9 +241,8 @@ namespace CinematicRecorder.Integration
         /// Direct access to isPlayingPath (public field in CameraTools v2.0+)
         /// </summary>
         public static bool IsPlayingPath => GetField(_isPlayingPathField, false);
-
         #endregion
-
+        #region Generic Accessors
         // Generic Field Accessors
         public static T GetField<T>(FieldInfo field, T defaultValue = default)
         {
@@ -268,7 +251,6 @@ namespace CinematicRecorder.Integration
             try { return (T)field.GetValue(instance); }
             catch { return defaultValue; }
         }
-
         public static void SetField<T>(FieldInfo field, T value)
         {
             object instance = GetFetchInstance();
@@ -288,57 +270,55 @@ namespace CinematicRecorder.Integration
         public static void SetVector3(FieldInfo field, Vector3 value) => SetField(field, value);
         public static T GetReference<T>(FieldInfo field) where T : class => GetField<T>(field, null);
         public static void SetReference<T>(FieldInfo field, T value) where T : class => SetField(field, value);
-
-        // Public API Methods
+        #endregion
+        #region Public Methods
+        public static object GetFetchInstance()
+        {
+            if (!IsAvailable || _fetchField == null) return null;
+            return _fetchField.GetValue(null);
+        }
         public static void Activate()
         {
             var instance = GetFetchInstance();
             if (instance != null && _cameraActivateMethod != null)
                 _cameraActivateMethod.Invoke(instance, null);
         }
-
         public static void Revert()
         {
             var instance = GetFetchInstance();
             if (instance != null && _revertCameraMethod != null)
                 _revertCameraMethod.Invoke(instance, null);
         }
-
         public static bool PathExists(int index)
         {
             if (index < 0 || _availablePathsField == null) return false;
             var paths = GetReference<IList>(_availablePathsField);
             return paths != null && index < paths.Count;
         }
-
         public static object ConvertToCameraToolsToolModes(ToolModes mode)
         {
             if (_toolModesEnumType == null) return null;
             try { return Enum.ToObject(_toolModesEnumType, (int)mode); }
             catch { return null; }
         }
-
         public static ToolModes ConvertToLocalToolModes(object ctEnumValue)
         {
             if (ctEnumValue == null) return ToolModes.StationaryCamera;
             try { return (ToolModes)Convert.ToInt32(ctEnumValue); }
             catch { return ToolModes.StationaryCamera; }
         }
-
         public static object ConvertToCameraToolsFMPivotMode(FMPivotMode mode)
         {
             if (_fmPivotModeEnumType == null) return null;
             try { return Enum.ToObject(_fmPivotModeEnumType, (int)mode); }
             catch { return null; }
         }
-
         public static FMPivotMode ConvertToLocalFMPivotMode(object ctEnumValue)
         {
             if (ctEnumValue == null) return FMPivotMode.Camera;
             try { return (FMPivotMode)Convert.ToInt32(ctEnumValue); }
             catch { return FMPivotMode.Camera; }
         }
-
         public static float ExtractPathTimeScale(int pathIndex)
         {
             if (pathIndex < 0 || _availablePathsField == null) return 1f;
@@ -358,7 +338,6 @@ namespace CinematicRecorder.Integration
             catch { }
             return 1f;
         }
-
         public static void ApplyPathTimeScale(int pathIndex, float timeScale)
         {
             if (pathIndex < 0 || _availablePathsField == null) return;
@@ -377,7 +356,8 @@ namespace CinematicRecorder.Integration
             }
             catch { }
         }
-
+        #endregion
+        #region Field Exporters
         // Field Accessors for external use
         public static FieldInfo ToolModeField => _toolModeField;
         public static FieldInfo CameraToolActiveField => _cameraToolActiveField;
@@ -419,5 +399,6 @@ namespace CinematicRecorder.Integration
         public static FieldInfo CamTargetField => _camTargetField;
         public static FieldInfo CameraParentField => _cameraParentField;
         public static FieldInfo LastVesselCoMField => _lastVesselCoMField;
+        #endregion
     }
 }

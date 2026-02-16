@@ -55,7 +55,6 @@ namespace CinematicRecorder.Integration
             return worldPosition - vessel.CoM;
         }
     }
-
     public struct GeographicCoords
     {
         public double Latitude;

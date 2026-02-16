@@ -24,16 +24,19 @@ namespace CinematicRecorder.Core
         // Target zoom state
         private bool _enableConsistentOnComplete = false;
         #endregion
-
         #region Public Properties
+        /// <summary>
+        /// Gets the current cached FOV value.
+        /// </summary>
         public float CurrentFoV => _currentFOV;
-
+        /// <summary>
+        /// Gets or sets the rate input (-1 to 1) for zoom intent.
+        /// </summary>
         public float ZoomIntent
         {
             get => _rateInput;
             set => _rateInput = Mathf.Clamp(value, -1f, 1f);
         }
-
         public bool UseConsistentAutoZoom
         {
             get => _useConsistentAutoZoom;
@@ -43,19 +46,21 @@ namespace CinematicRecorder.Core
                 if (value) CancelActiveZoom();
             }
         }
-
         public float ConsistentZoomPadding
         {
             get => _consistentZoomPadding;
             set => _consistentZoomPadding = value;
         }
-
+        /// <summary>
+        /// Returns true if a consistent framing transition is currently active.
+        /// </summary>
         public bool IsConsistentTransitionActive =>
             _currentStrategy is ConsistentFramingTransitionStrategy && !_currentStrategy.IsComplete;
-
+        /// <summary>
+        /// Returns true if any zoom strategy is currently active.
+        /// </summary>
         public bool HasActiveStrategy => _currentStrategy != null;
         #endregion
-
         #region Core Update Loop
         /// <summary>
         /// Primary update method - call this from LateUpdate every frame.
@@ -73,13 +78,11 @@ namespace CinematicRecorder.Core
                 return;
             }
 
-            // Initialize if camera changed
             if (hullCamModule != _activeCameraModule)
             {
                 InitializeForCamera(hullCamModule);
             }
 
-            // Execute strategy if active
             if (_currentStrategy != null)
             {
                 ExecuteStrategy(Time.deltaTime, hullCamModule);
@@ -90,26 +93,20 @@ namespace CinematicRecorder.Core
             }
             else
             {
-                // No strategy and no consistent framing - ensure we track current FOV
                 _currentFOV = HullCamBridge.GetCameraFoV(hullCamModule);
             }
         }
-
         private void ExecuteStrategy(float deltaTime, object hullCamModule)
         {
             float currentFOV = HullCamBridge.GetCameraFoV(hullCamModule);
             float newFOV = _currentStrategy.GetTargetFOV(currentFOV, deltaTime);
-
-            // Clamp to HullCam limits
             float minFoV = HullCamBridge.GetCameraFoVMin(hullCamModule);
             float maxFoV = HullCamBridge.GetCameraFoVMax(hullCamModule);
             newFOV = Mathf.Clamp(newFOV, minFoV, maxFoV);
 
-            // Apply
             HullCamBridge.SetCameraFoV(hullCamModule, newFOV);
             _currentFOV = newFOV;
 
-            // Check completion
             if (_currentStrategy.IsComplete)
             {
                 // Handoff to consistent framing if applicable
@@ -121,7 +118,6 @@ namespace CinematicRecorder.Core
                 _currentStrategy = null;
             }
         }
-
         private void InitializeForCamera(object hullCamModule)
         {
             _activeCameraModule = hullCamModule;
@@ -130,7 +126,6 @@ namespace CinematicRecorder.Core
             _rateInput = 0f;
         }
         #endregion
-
         #region Rate-Based Control
         /// <summary>
         /// Sets rate input (-1 to 1). Creates RateBasedZoomStrategy automatically if needed.
@@ -163,7 +158,6 @@ namespace CinematicRecorder.Core
             }
         }
         #endregion
-
         #region Target-Based Control
         /// <summary>
         /// Queues a target zoom for real-time execution.
@@ -218,7 +212,6 @@ namespace CinematicRecorder.Core
             _enableConsistentOnComplete = false;
         }
         #endregion
-
         #region Consistent Framing
         /// <summary>
         /// Applies consistent framing to HullCam immediately.
@@ -244,7 +237,6 @@ namespace CinematicRecorder.Core
             _currentFOV = targetFOV;
         }
         #endregion
-
         #region Utility
         /// <summary>
         /// Resets zoom to maximum FOV and clears all strategies.

@@ -14,11 +14,8 @@ namespace CinematicRecorder.Integration
         private readonly string _cameraName;
 
         public bool IsActive => HullCamBridge.IsCameraActive(_cameraModule);
-
         public string DisplayName => _cameraName ?? "HullCam";
-
         public string CameraId => _hostPart?.persistentId.ToString() ?? "unknown";
-
         public Vector3 Position
         {
             get
@@ -31,17 +28,13 @@ namespace CinematicRecorder.Integration
                 // HullCam position is fixed to part, cannot be set externally
             }
         }
-
         public float FieldOfView
         {
             get => HullCamBridge.GetCameraFoV(_cameraModule);
             set => HullCamBridge.SetCameraFoV(_cameraModule, value);
         }
-
         public float MaxFieldOfView => HullCamBridge.GetCameraFoVMax(_cameraModule);
-
         public float MinFieldOfView => HullCamBridge.GetCameraFoVMin(_cameraModule);
-
         public event Action OnActivated;
         public event Action OnDeactivated;
 
@@ -55,7 +48,6 @@ namespace CinematicRecorder.Integration
             var comp = cameraModule as Component;
             _hostPart = comp?.GetComponentInParent<Part>();
         }
-
         public void Activate()
         {
             if (!IsActive)
@@ -64,7 +56,6 @@ namespace CinematicRecorder.Integration
                 OnActivated?.Invoke();
             }
         }
-
         public void Deactivate()
         {
             if (IsActive)
@@ -73,19 +64,16 @@ namespace CinematicRecorder.Integration
                 OnDeactivated?.Invoke();
             }
         }
-
         public void ReleaseControl()
         {
             // HullCam doesn't distinguish between release and deactivate
             // Always revert to main camera
             HullCamBridge.RestoreMain();
         }
-
         public void SetFieldOfViewImmediate(float fov)
         {
             HullCamBridge.SetCameraFoV(_cameraModule, fov);
         }
-
         public void Update(float deltaTime)
         {
             // HullCam zoom is handled by ZoomControlService directly

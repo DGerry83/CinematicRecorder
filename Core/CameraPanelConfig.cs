@@ -14,6 +14,7 @@ namespace CinematicRecorder.Core
     /// </summary>
     public class CameraPanelConfig : MonoBehaviour
     {
+        #region Fields
         public static CameraPanelConfig Instance { get; private set; }
 
         private List<CameraPanelPreset> presets = new List<CameraPanelPreset>();
@@ -22,7 +23,8 @@ namespace CinematicRecorder.Core
 
         public event Action OnPresetsChanged;
         public event Action<CameraPanelPreset> OnPresetLoaded;
-
+        #endregion
+        #region Unity Lifecycle  
         void Awake()
         {
             Instance = this;
@@ -39,17 +41,20 @@ namespace CinematicRecorder.Core
 
             LoadFromFile();
         }
-
         void OnDestroy()
         {
             Instance = null;
         }
-
+        #endregion
+        #region Public API
+        /// <summary>
+        /// Saves a camera panel configuration with slot assignments to the presets file.
+        /// Replaces any existing preset with the same name.
+        /// </summary>
         public void SavePreset(string name, bool vesselSpecific, List<CameraSlot> slots, float x, float y)
         {
             if (string.IsNullOrEmpty(name)) return;
 
-            // Remove existing with same name
             presets.RemoveAll(p => p.presetName == name);
 
             CameraPanelPreset preset = new CameraPanelPreset
@@ -80,7 +85,7 @@ namespace CinematicRecorder.Core
                         DogfightChasePlaneMode = s.ctSettings.DogfightChasePlaneMode,
                         DogfightTargetId = s.ctSettings.DogfightTargetId,
 
-                        // Geographic positioning (NEW)
+                        // Geographic positioning
                         UseGeographicPosition = s.ctSettings.UseGeographicPosition,
                         Latitude = s.ctSettings.Latitude,
                         Longitude = s.ctSettings.Longitude,
@@ -121,7 +126,7 @@ namespace CinematicRecorder.Core
                         UseRealTime = s.ctSettings.UseRealTime,
                         PathStartTime = s.ctSettings.PathStartTime,
 
-                        // NEW: Consistent Auto-Zoom settings (Step 3)
+                        // Consistent Auto-Zoom settings
                         UseConsistentAutoZoom = s.ctSettings.UseConsistentAutoZoom,
                         ZoomPadding = s.ctSettings.ZoomPadding
                     } : null
@@ -134,7 +139,9 @@ namespace CinematicRecorder.Core
             SaveToFile();
             OnPresetsChanged?.Invoke();
         }
-
+        /// <summary>
+        /// Activates a preset by name, firing OnPresetLoaded event.
+        /// </summary>
         public void LoadPreset(string name)
         {
             CameraPanelPreset preset = presets.FirstOrDefault(p => p.presetName == name);
@@ -144,7 +151,9 @@ namespace CinematicRecorder.Core
                 OnPresetLoaded?.Invoke(preset);
             }
         }
-
+        /// <summary>
+        /// Removes a preset from storage and saves updated configuration.
+        /// </summary>
         public void DeletePreset(string name)
         {
             if (presets.RemoveAll(p => p.presetName == name) > 0)
@@ -156,14 +165,16 @@ namespace CinematicRecorder.Core
                 OnPresetsChanged?.Invoke();
             }
         }
-
         public List<string> GetPresetNames()
         {
             return presets.Select(p => p.presetName).ToList();
         }
-
         public CameraPanelPreset GetActivePreset() { return activePreset; }
-
+        #endregion
+        #region Serialization
+        /// <summary>
+        /// Serializes all presets to ConfigNode file in PluginData.
+        /// </summary>
         void SaveToFile()
         {
             try
@@ -187,7 +198,6 @@ namespace CinematicRecorder.Core
 
                     foreach (CameraSlot slot in p.buttonAssignments)
                     {
-                        // Skip completely empty slots
                         if (slot.partPersistentId == 0 && string.IsNullOrEmpty(slot.cameraName) && !slot.isCameraToolsSlot)
                             continue;
 
@@ -224,7 +234,7 @@ namespace CinematicRecorder.Core
                             ctNode.AddValue("manualOffsetRight", slot.ctSettings.ManualOffsetRight);
                             ctNode.AddValue("manualOffsetUp", slot.ctSettings.ManualOffsetUp);
 
-                            // Geographic coordinates (THE FIX)
+                            // Geographic coordinates
                             ctNode.AddValue("latitude", slot.ctSettings.Latitude);
                             ctNode.AddValue("longitude", slot.ctSettings.Longitude);
                             ctNode.AddValue("altitude", slot.ctSettings.Altitude);
@@ -261,11 +271,11 @@ namespace CinematicRecorder.Core
                             ctNode.AddValue("useRealTime", slot.ctSettings.UseRealTime);
                             ctNode.AddValue("pathStartTime", slot.ctSettings.PathStartTime);
 
-                            // NEW: Consistent Auto-Zoom settings (Step 3)
+                            // Consistent Auto-Zoom settings
                             ctNode.AddValue("useConsistentAutoZoom", slot.ctSettings.UseConsistentAutoZoom);
                             ctNode.AddValue("zoomPadding", slot.ctSettings.ZoomPadding);
 
-                            // NEW: Playback timing for deterministic pathing (Step 1)
+                            // Playback timing for deterministic pathing
                             ctNode.AddValue("lockPathingToPlaybackRate", slot.ctSettings.LockPathingToPlaybackRate);
                         }
                     }
@@ -278,7 +288,9 @@ namespace CinematicRecorder.Core
                 Debug.LogError("[CameraPanelConfig] Failed to save: " + ex);
             }
         }
-
+        /// <summary>
+        /// Deserializes presets from ConfigNode file. Safe to call if file missing.
+        /// </summary>
         void LoadFromFile()
         {
             try
@@ -363,7 +375,7 @@ namespace CinematicRecorder.Core
                                 float.TryParse(ctNode.GetValue("manualOffsetRight") ?? "50", out slot.ctSettings.ManualOffsetRight);
                                 float.TryParse(ctNode.GetValue("manualOffsetUp") ?? "5", out slot.ctSettings.ManualOffsetUp);
 
-                                // Geographic coordinates (THE FIX)
+                                // Geographic coordinates
                                 double.TryParse(ctNode.GetValue("latitude") ?? "0", out slot.ctSettings.Latitude);
                                 double.TryParse(ctNode.GetValue("longitude") ?? "0", out slot.ctSettings.Longitude);
                                 double.TryParse(ctNode.GetValue("altitude") ?? "0", out slot.ctSettings.Altitude);
@@ -416,12 +428,12 @@ namespace CinematicRecorder.Core
                                 bool.TryParse(ctNode.GetValue("useRealTime") ?? "True", out slot.ctSettings.UseRealTime);
                                 float.TryParse(ctNode.GetValue("pathStartTime") ?? "0", out slot.ctSettings.PathStartTime);
 
-                                // NEW: Consistent Auto-Zoom settings (Step 3)
+                                // Consistent Auto-Zoom settings
                                 bool.TryParse(ctNode.GetValue("useConsistentAutoZoom") ?? "False", out slot.ctSettings.UseConsistentAutoZoom);
                                 float.TryParse(ctNode.GetValue("zoomPadding") ?? "1.5", out slot.ctSettings.ZoomPadding);
 
-                                // NEW: Playback timing for deterministic pathing (Step 1)
-                                // Default false (physics time) for backward compatibility if value missing
+                                // Playback timing for deterministic pathing
+                                // Default false (physics time)
                                 bool.TryParse(ctNode.GetValue("lockPathingToPlaybackRate") ?? "False", out slot.ctSettings.LockPathingToPlaybackRate);
                             }
                         }
@@ -446,5 +458,6 @@ namespace CinematicRecorder.Core
                 presets = new List<CameraPanelPreset>();
             }
         }
+        #endregion
     }
 }

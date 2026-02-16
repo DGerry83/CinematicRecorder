@@ -17,7 +17,10 @@ namespace CinematicRecorder.Core
             _maxRate = maxRateDegreesPerSecond;
             _currentInput = 0f;
         }
-
+        /// <summary>
+        /// Gets the target FOV by applying rate-based delta from input.
+        /// Negative input zooms in (decreases FOV), positive zooms out.
+        /// </summary>
         public float GetTargetFOV(float currentFOV, float physicsDeltaTime)
         {
             // Negative sign: Right (+1) → FOV decreases (zoom in), Left (-1) → FOV increases (zoom out)

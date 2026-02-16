@@ -7,6 +7,7 @@ namespace CinematicRecorder.Integration
     [Serializable]
     public class CameraSlot
     {
+        #region Fields
         public string buttonID;
 
         // HullCam specific
@@ -17,23 +18,25 @@ namespace CinematicRecorder.Integration
 
         // CameraTools specific
         public bool isCameraToolsSlot;
-
-        // CRITICAL FIX: Changed from field to property with automatic cloning
-        // This ensures every assignment creates an isolated copy
         private CameraToolsSettings _ctSettings;
+        #endregion
+        #region Properties
         public CameraToolsSettings ctSettings
         {
             get { return _ctSettings; }
             set { _ctSettings = value?.Clone(); }
         }
-
+        #endregion
+        #region Public API
         public string GetDisplayName()
         {
             if (isCameraToolsSlot)
                 return ctSettings?.GetDisplayName() ?? "CameraTools";
             return cameraName ?? "Unknown";
         }
-
+        /// <summary>
+        /// Determines slot status considering current vessel and explicit activation state
+        /// </summary>
         public SlotStatus GetStatus(Vessel currentVessel = null, bool isExplicitlyActive = false)
         {
             if (isCameraToolsSlot)
@@ -42,8 +45,7 @@ namespace CinematicRecorder.Integration
                 if (!controller.IsAvailable) return SlotStatus.Unavailable;
                 if (ctSettings == null) return SlotStatus.Unassigned;
 
-                // CRITICAL FIX: Only THIS specific slot is "Active" if it's the explicitly selected one
-                // CameraTools is mutually exclusive - only one slot can be active at a time
+                // Only this specific slot is "Active" if it's the explicitly selected one
                 if (isExplicitlyActive && controller.IsActive)
                 {
                     // Verify the active camera actually matches this slot's mode
@@ -107,7 +109,8 @@ namespace CinematicRecorder.Integration
 
             return SlotStatus.Assigned;
         }
-
+        #endregion
+        #region Types
         public enum SlotStatus
         {
             Unassigned,
@@ -116,5 +119,6 @@ namespace CinematicRecorder.Integration
             Remote,
             Unavailable
         }
+        #endregion
     }
 }

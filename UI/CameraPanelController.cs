@@ -8,6 +8,10 @@ using UnityEngine;
 
 namespace CinematicRecorder.UI
 {
+    /// <summary>
+    /// Controller for the camera assignment panel UI. Manages slot assignments, 
+    /// camera transitions with fade effects, zoom controls, and preset persistence.
+    /// </summary>
     public class CameraPanelController
     {
         #region Services
@@ -17,7 +21,6 @@ namespace CinematicRecorder.UI
         private readonly CinematicCameraManager cameraManager;
         private readonly CameraToolsCameraController ctController;
         #endregion
-
         #region UI State
         private readonly GUIStyle[] cameraButtonStyles = new GUIStyle[7];
         private bool cameraPanelStylesInitialized = false;
@@ -38,7 +41,6 @@ namespace CinematicRecorder.UI
         private bool targetIsConsistentFraming = false;
         private float targetFOVValue = 60f;
         #endregion
-
         #region Cached Layout State (IMGUI Safety)
         private bool _cachedCamActive;
         private bool _cachedHasCurrentCam;
@@ -48,12 +50,10 @@ namespace CinematicRecorder.UI
         private bool _cachedHasPresets;
         private string[] _cachedPresetNames;
         #endregion
-
         #region External Dependencies
         private readonly MonoBehaviour host;
         private Rect parentWindowRect;
         #endregion
-
         #region Properties
         public bool IsVisible => showCameraPanel;
         public bool IsFading => transitionCoordinator.IsFading;
@@ -61,8 +61,10 @@ namespace CinematicRecorder.UI
         public bool UseFadeOnSwap => transitionCoordinator.UseFadeOnSwap;
         public CameraSlotManager SlotManager => slotManager;
         #endregion
-
         #region Constructor
+        /// <summary>
+        /// Initializes the controller with host MonoBehaviour for coroutine support.
+        /// </summary>
         public CameraPanelController(MonoBehaviour hostBehaviour)
         {
             host = hostBehaviour ?? throw new ArgumentNullException(nameof(hostBehaviour));
@@ -79,7 +81,6 @@ namespace CinematicRecorder.UI
             slotManager.OnActiveSlotChanged += OnActiveSlotChanged;
         }
         #endregion
-
         #region Initialization & Cleanup
         private void InitializeStyles()
         {
@@ -90,7 +91,6 @@ namespace CinematicRecorder.UI
             }
             cameraPanelStylesInitialized = true;
         }
-
         private void SubscribeToEvents()
         {
             GameEvents.onVesselWillDestroy.Add(OnVesselWillDestroy);
@@ -102,7 +102,15 @@ namespace CinematicRecorder.UI
                 CameraPanelConfig.Instance.OnPresetLoaded += OnPresetLoaded;
             }
         }
-
+        private void UnsubscribeFromEvents()
+        {
+            GameEvents.onVesselWillDestroy.Remove(OnVesselWillDestroy);
+            GameEvents.onGameSceneLoadRequested.Remove(OnGameSceneLoadRequested);
+            GameEvents.onVesselChange.Remove(OnVesselChange);
+        }
+        /// <summary>
+        /// Cleans up event subscriptions and references. Call before destroying host.
+        /// </summary>
         public void Shutdown()
         {
             UnsubscribeFromEvents();
@@ -113,15 +121,7 @@ namespace CinematicRecorder.UI
                 CameraPanelConfig.Instance.OnPresetLoaded -= OnPresetLoaded;
             }
         }
-
-        private void UnsubscribeFromEvents()
-        {
-            GameEvents.onVesselWillDestroy.Remove(OnVesselWillDestroy);
-            GameEvents.onGameSceneLoadRequested.Remove(OnGameSceneLoadRequested);
-            GameEvents.onVesselChange.Remove(OnVesselChange);
-        }
         #endregion
-
         #region Event Handlers
         private void OnVesselWillDestroy(Vessel v)
         {
@@ -131,31 +131,27 @@ namespace CinematicRecorder.UI
                 cameraManager.ClearActiveSlot();
             }
         }
-
         private void OnGameSceneLoadRequested(GameScenes scene)
         {
             HullCamBridge.ClearHullCamStaticState();
             slotManager.HandleSceneChange();
         }
-
         private void OnVesselChange(Vessel v)
         {
             slotManager.HandleVesselChange();
         }
-
         private void OnPresetLoaded(CameraPanelPreset preset)
         {
             slotManager.LoadPreset(preset);
             presetNameBuffer = preset?.presetName ?? "";
         }
-
-        private void OnActiveSlotChanged(int slotIndex)
-        {
-            // Slot changed externally
-        }
+        private void OnActiveSlotChanged(int slotIndex) {}
         #endregion
-
         #region Main Rendering
+        /// <summary>
+        /// Renders the camera panel UI inside the given parent window rectangle.
+        /// Call from OnGUI.
+        /// </summary>
         public void Draw(Rect parentWindowRect)
         {
             this.parentWindowRect = parentWindowRect;
@@ -200,10 +196,12 @@ namespace CinematicRecorder.UI
                 // Suppress IMGUI control count mismatches during rapid camera state changes
             }
         }
-
+        /// <summary>
+        /// Renders the fade-to-black overlay. Call from OnGUI before other UI.
+        /// Updates real-time fades when not in deterministic mode.
+        /// </summary>
         public void DrawFadeOverlay()
         {
-            // Update real-time fade when not in deterministic mode
             if (!DeterministicCaptureSession.IsRunning)
             {
                 transitionCoordinator.UpdateFade();
@@ -236,7 +234,10 @@ namespace CinematicRecorder.UI
             GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
             GUI.color = Color.white;
         }
-
+        /// <summary>
+        /// Renders confirmation dialogs (delete, unassign, overwrite). 
+        /// Call from OnGUI after main window.
+        /// </summary>
         public void DrawConfirmationDialogs()
         {
             DrawDeleteDialog();
@@ -245,8 +246,8 @@ namespace CinematicRecorder.UI
         }
 
         /// <summary>
-        /// Simplified zoom processing - delegates all execution to services/controllers.
-        /// Handles deterministic fade updates when in recording mode.
+        /// Processes zoom input and deterministic fade updates. 
+        /// Call from LateUpdate once per frame.
         /// </summary>
         public void ProcessZoomLateUpdate()
         {
@@ -270,7 +271,6 @@ namespace CinematicRecorder.UI
                 HandleRealTimeZoom(activeSlot);
             }
         }
-
         private void HandleDeterministicZoom(CameraSlot activeSlot)
         {
             var detZoom = DeterministicCaptureSession.ActiveZoomController;
@@ -279,22 +279,21 @@ namespace CinematicRecorder.UI
             bool isHullCam = cameraManager.ActiveCamera is HullCamController;
             bool isCT = cameraManager.ActiveCamera is CameraToolsCamera;
 
-            // Sync consistent framing state FROM controller TO UI (for hand-off detection)
-            if (detZoom.UseConsistentAutoZoom)
-            {
-                if (isCT && activeSlot?.ctSettings != null)
-                    activeSlot.ctSettings.UseConsistentAutoZoom = true;
-                else if (isHullCam)
-                    zoomService.UseConsistentAutoZoom = true;
-            }
-
             if (currentZoomMode == ZoomMode.Rate)
             {
                 // ALWAYS pass rate input in Rate mode, regardless of consistent framing setting
                 // Consistent framing check happens inside OnPhysicsStepped if UseConsistentAutoZoom is true
                 detZoom.SetRateInput(zoomService.ZoomIntent);
-                detZoom.UseConsistentAutoZoom = zoomService.UseConsistentAutoZoom;
-                detZoom.ConsistentZoomPadding = zoomService.ConsistentZoomPadding;
+                if (isCT)
+                {
+                    detZoom.UseConsistentAutoZoom = ctController.UseConsistentAutoZoom;
+                    detZoom.ConsistentZoomPadding = ctController.ConsistentZoomPadding;
+                }
+                else if (isHullCam)
+                {
+                    detZoom.UseConsistentAutoZoom = zoomService.UseConsistentAutoZoom;
+                    detZoom.ConsistentZoomPadding = zoomService.ConsistentZoomPadding;
+                }
                 zoomService.DecayZoomIntent(Time.deltaTime);
             }
             else // Target mode
@@ -308,8 +307,6 @@ namespace CinematicRecorder.UI
                 }
             }
         }
-
-
         private void HandleRealTimeZoom(CameraSlot activeSlot)
         {
             ICamera activeCam = cameraManager.ActiveCamera;
@@ -375,7 +372,6 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region UI Sections
         private void DrawDisabledPanel()
         {
@@ -385,7 +381,6 @@ namespace CinematicRecorder.UI
             );
             GUILayout.Label(CameraController.RequiresHullCam, disabledStyle);
         }
-
         private void DrawFoldoutButton()
         {
             string label = showCameraPanel ? CameraController.FoldoutCollapse : CameraController.FoldoutExpand;
@@ -394,7 +389,6 @@ namespace CinematicRecorder.UI
                 showCameraPanel = !showCameraPanel;
             }
         }
-
         private void DrawFadeControls()
         {
             GUILayout.BeginHorizontal();
@@ -425,7 +419,6 @@ namespace CinematicRecorder.UI
             }
             GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
         }
-
         private void DrawGridContainer()
         {
             GUILayout.BeginVertical(GUI.skin.box);
@@ -443,12 +436,9 @@ namespace CinematicRecorder.UI
             GUI.enabled = hasActiveCam;
             if (GUILayout.Button(CameraController.ReturnToMain, GUILayout.Height(CinematicUIResources.Layout.SpeedControl.BUTTON_HEIGHT)))
             {
-                // Capture state before switching away from CT
                 CaptureCTStateIfActive();
-
                 BeginCameraSwitch(() =>
                 {
-                    // Use the manager's ReturnToMain which now properly uses API DeactivateCamera
                     cameraManager.ReturnToMain(immediate: true);
                     slotManager.ClearActiveSlot();
                     _lastCTSlotIndex = -1;
@@ -523,7 +513,6 @@ namespace CinematicRecorder.UI
             GUILayout.EndHorizontal();
             GUILayout.EndVertical();
         }
-
         private void DrawConsistentFramingControls(
             bool useConsistent,
             float padding,
@@ -575,7 +564,6 @@ namespace CinematicRecorder.UI
                 fontSize: CinematicUIResources.Typography.INFO);
             GUILayout.Label(string.Format(CameraController.CurrentFOVFormat, currentFOV), infoStyle);
         }
-
         private void DrawGrid()
         {
             Vessel currentVessel = _cachedVessel;
@@ -591,7 +579,6 @@ namespace CinematicRecorder.UI
                 GUILayout.EndHorizontal();
             }
         }
-
         private void DrawCameraButton(int index, Vessel currentVessel)
         {
             CameraSlot.SlotStatus status = slotManager.GetSlotStatus(index, currentVessel);
@@ -618,7 +605,6 @@ namespace CinematicRecorder.UI
                 OnButtonClicked(index);
             }
         }
-
         private void DrawInstructions()
         {
             GUIStyle header = CinematicUIResources.Styles.Header();
@@ -631,16 +617,12 @@ namespace CinematicRecorder.UI
             GUILayout.Label(CameraController.ControlRightClick, small);
             GUILayout.Label(CameraController.ControlAssignCurrent, small);
         }
-
         private void DrawZoomControls()
         {
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
             GUILayout.BeginVertical(GUI.skin.box);
-
-            // Mode Toggle - Fixed Layout
             GUILayout.BeginHorizontal();
 
-            // Rate Mode Toggle (left side, fixed width)
             GUIStyle modeStyle = new GUIStyle(HighLogic.Skin.toggle);
             if (currentZoomMode == ZoomMode.Rate)
             {
@@ -649,10 +631,7 @@ namespace CinematicRecorder.UI
             }
             bool wantRateMode = GUILayout.Toggle(currentZoomMode == ZoomMode.Rate, CameraController.RateModeToggle, modeStyle, GUILayout.Width(85f));
 
-            // Small gap between buttons
             GUILayout.Space(10f);
-
-            // Target Mode Toggle (left side, fixed width)
             GUIStyle targetStyle = new GUIStyle(HighLogic.Skin.toggle);
             if (currentZoomMode == ZoomMode.Target)
             {
@@ -661,36 +640,27 @@ namespace CinematicRecorder.UI
             }
             bool wantTargetMode = GUILayout.Toggle(currentZoomMode == ZoomMode.Target, CameraController.TargetModeToggle, targetStyle, GUILayout.Width(85f));
 
-            // Fill remaining space to the right (pushes buttons to left)
             GUILayout.FlexibleSpace();
-
             GUILayout.EndHorizontal();
 
-            // Update mode if changed - cancel active strategies on switch
             if (wantRateMode && currentZoomMode != ZoomMode.Rate)
             {
                 zoomService.CancelActiveZoom();
                 ctController.CancelActiveZoom();
-
-                // Also cancel deterministic strategies if in capture mode
                 if (DeterministicCaptureSession.IsRunning)
                 {
                     DeterministicCaptureSession.ActiveZoomController?.Clear();
                 }
-
                 currentZoomMode = ZoomMode.Rate;
             }
             else if (wantTargetMode && currentZoomMode != ZoomMode.Target)
             {
                 zoomService.CancelActiveZoom();
                 ctController.CancelActiveZoom();
-
-                // Also cancel deterministic strategies if in capture mode
                 if (DeterministicCaptureSession.IsRunning)
                 {
                     DeterministicCaptureSession.ActiveZoomController?.Clear();
                 }
-
                 zoomService.ZoomIntent = 0f;
                 currentZoomMode = ZoomMode.Target;
             }
@@ -705,10 +675,8 @@ namespace CinematicRecorder.UI
             {
                 DrawTargetModeControls();
             }
-
             GUILayout.EndVertical();
         }
-
         private void DrawRateModeControls()
         {
             GUILayout.Label(CameraController.ZoomControlLabel, HighLogic.Skin.label);
@@ -741,10 +709,8 @@ namespace CinematicRecorder.UI
                 }
             }
         }
-
         private void DrawTargetModeControls()
         {
-            // Target Consistent Framing checkbox
             bool newConsistentTarget = GUILayout.Toggle(targetIsConsistentFraming, CameraController.TargetConsistentFramingToggle);
             if (newConsistentTarget != targetIsConsistentFraming)
             {
@@ -753,7 +719,6 @@ namespace CinematicRecorder.UI
 
             GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
 
-            // Target FOV input (hidden if using consistent framing)
             if (!targetIsConsistentFraming)
             {
                 GUILayout.BeginHorizontal();
@@ -767,18 +732,14 @@ namespace CinematicRecorder.UI
                 GUILayout.EndHorizontal();
                 GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
             }
-
-            // Duration slider (0.0 - 5.0 seconds)
             GUILayout.Label(string.Format(CameraController.DurationLabel, targetDuration), HighLogic.Skin.label);
             GUILayout.BeginHorizontal();
             GUILayout.Label("0.0", GUILayout.Width(30f));
             targetDuration = GUILayout.HorizontalSlider(targetDuration, 0f, 5f);
             GUILayout.Label("5.0", GUILayout.Width(30f));
             GUILayout.EndHorizontal();
-
             GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
 
-            // Curve selection
             GUILayout.BeginHorizontal();
             GUILayout.Label(CameraController.CurveLabel, GUILayout.Width(50f));
             string[] curveOptions = new string[]
@@ -792,10 +753,8 @@ namespace CinematicRecorder.UI
             selectedCurve = GUILayout.SelectionGrid(selectedCurve, curveOptions, 2);
             targetZoomCurve = (ZoomCurve)selectedCurve;
             GUILayout.EndHorizontal();
-
             GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
 
-            // Go button
             GUIStyle goStyle = CinematicUIResources.Styles.ColoredButton(
                 CinematicUIResources.Colors.GLOW_GREEN,
                 Color.black,
@@ -807,7 +766,6 @@ namespace CinematicRecorder.UI
                 ExecuteTargetZoom();
             }
         }
-
         private void ExecuteTargetZoom()
         {
             if (!targetIsConsistentFraming && targetFOVValue <= 0)
@@ -859,7 +817,6 @@ namespace CinematicRecorder.UI
                 }
             }
         }
-
         private void DrawProfilesInterface()
         {
             GUILayout.BeginVertical(GUI.skin.box);
@@ -904,7 +861,6 @@ namespace CinematicRecorder.UI
 
             GUILayout.EndVertical();
         }
-
         private void DrawPresetDropdown()
         {
             GUILayout.BeginVertical(GUI.skin.box);
@@ -921,7 +877,6 @@ namespace CinematicRecorder.UI
             GUILayout.EndVertical();
         }
         #endregion
-
         #region Dialogs
         private void DrawDeleteDialog()
         {
@@ -954,7 +909,6 @@ namespace CinematicRecorder.UI
                 GUILayout.EndHorizontal();
             }, CameraController.ConfirmDeleteTitle);
         }
-
         private void DrawUnassignDialog()
         {
             if (pendingUnassignSlot < 0) return;
@@ -987,7 +941,6 @@ namespace CinematicRecorder.UI
             }, CameraController.ConfirmUnassignTitle);
         }
         #endregion
-
         #region Camera Interaction
         private void OnButtonClicked(int index)
         {
@@ -1006,12 +959,12 @@ namespace CinematicRecorder.UI
                 {
                     if (slot.ctSettings.SelectedPathIndex < 0)
                     {
-                        ScreenMessages.PostScreenMessage("Cannot activate - invalid path index", 2f);
+                        ScreenMessages.PostScreenMessage("Cannot activate - invalid path index", 2f); // Belongs in UI strings
                         return;
                     }
                     if (!ctController.PathExists(slot.ctSettings.SelectedPathIndex))
                     {
-                        ScreenMessages.PostScreenMessage("Saved path no longer exists", 2f);
+                        ScreenMessages.PostScreenMessage("Saved path no longer exists", 2f); // Belongs in UI strings.
                         return;
                     }
                 }
@@ -1081,10 +1034,8 @@ namespace CinematicRecorder.UI
 
             Debug.Log($"[FOV Debug] === CLICK END ===");
         }
-
         private void BeginCameraSwitch(Action cameraAction)
         {
-            // Determine if we should use deterministic fading based on session state
             bool useDeterministic = DeterministicCaptureSession.IsRunning;
             transitionCoordinator.BeginTransition(cameraAction, useDeterministic);
         }
@@ -1114,7 +1065,6 @@ namespace CinematicRecorder.UI
                 }
             }
         }
-
         private void AssignCurrentToSlot(int index)
         {
             if (ctController.IsAvailable && ctController.IsActive)
@@ -1122,10 +1072,7 @@ namespace CinematicRecorder.UI
                 var settings = ctController.CaptureCurrentSettings();
                 if (settings != null)
                 {
-                    // Sync playback timing preference from Advanced Options
                     settings.LockPathingToPlaybackRate = SessionState.CameraPathPlaybackTiming;
-
-                    // Also sync deterministic control flag if currently recording
                     settings.UseDeterministicControl = DeterministicCaptureSession.IsRunning;
 
                     UnityEngine.Debug.Log($"[AssignCurrentToSlot] Slot {index}: Capturing CT {settings.Mode} " +
@@ -1150,7 +1097,6 @@ namespace CinematicRecorder.UI
                 ScreenMessages.PostScreenMessage(string.Format(CameraController.SavedHullCamFormat, camName), 2f);
             }
         }
-
         private void AssignCurrentToFirstOpenSlot()
         {
             int openSlot = slotManager.FindFirstOpenSlot();
@@ -1159,7 +1105,6 @@ namespace CinematicRecorder.UI
                 AssignCurrentToSlot(openSlot);
             }
         }
-
         private bool ValidateAssignmentPrerequisites(out object currentCam, out Vessel vessel)
         {
             currentCam = null;
@@ -1177,7 +1122,6 @@ namespace CinematicRecorder.UI
             vessel = _cachedVessel;
             return vessel != null;
         }
-
         private void ApplyNativeAutoZoom(CameraSlot slot, CameraToolsCameraController controller)
         {
             Vessel currentVessel = _cachedVessel;
@@ -1196,7 +1140,6 @@ namespace CinematicRecorder.UI
             FlightCamera.fetch.SetFoV(nativeFOV);
         }
         #endregion
-
         #region Preset Management
         private void SavePreset(CameraPanelConfig scenario)
         {
@@ -1216,11 +1159,8 @@ namespace CinematicRecorder.UI
                 return;
             }
 
-            // Check for auto-generated [i] variants and find next available
             string uniqueName = GetUniquePresetName(nameToSave, existingNames);
 
-            // If GetUniquePresetName modified the name (added [i]), use it directly
-            // Otherwise use the original
             if (uniqueName != nameToSave)
             {
                 SavePresetWithName(scenario, uniqueName);
@@ -1232,7 +1172,6 @@ namespace CinematicRecorder.UI
                 presetNameBuffer = nameToSave;
             }
         }
-
         private void ShowOverwriteDialog(string presetName, CameraPanelConfig scenario)
         {
             // Store state for dialog callback
@@ -1240,7 +1179,6 @@ namespace CinematicRecorder.UI
             _pendingOverwriteScenario = scenario;
             _showOverwriteDialog = true;
         }
-
         private void DrawOverwriteDialog()
         {
             if (!_showOverwriteDialog) return;
@@ -1248,7 +1186,7 @@ namespace CinematicRecorder.UI
             Rect dialogRect = new Rect(
                 parentWindowRect.x + CinematicUIResources.Layout.Dialog.OFFSET_X,
                 parentWindowRect.y + CinematicUIResources.Layout.Dialog.OFFSET_Y,
-                CinematicUIResources.Layout.Dialog.WIDTH + 100, // Wider for two buttons
+                CinematicUIResources.Layout.Dialog.WIDTH + 100, 
                 CinematicUIResources.Layout.Dialog.HEIGHT
             );
 
@@ -1289,24 +1227,20 @@ namespace CinematicRecorder.UI
                 }
             }, CameraController.ConfirmOverwriteTitle);
         }
-
         private void SavePresetWithName(CameraPanelConfig scenario, string name)
         {
             scenario.SavePreset(name, false, new List<CameraSlot>(slotManager.Slots),
                 parentWindowRect.x, parentWindowRect.y);
         }
-
         private string GetUniquePresetName(string baseName, List<string> existingNames)
         {
             // If base name doesn't exist, use it as-is
             if (!existingNames.Contains(baseName))
                 return baseName;
 
-            // Parse existing [i] suffix if present in baseName
             string rootName = baseName;
             int existingIndex = 0;
 
-            // Check if baseName already ends with [i] pattern
             int bracketStart = baseName.LastIndexOf('[');
             int bracketEnd = baseName.LastIndexOf(']');
 
@@ -1320,7 +1254,6 @@ namespace CinematicRecorder.UI
                 }
             }
 
-            // Find next available [i] starting from existingIndex + 1
             int counter = existingIndex + 1;
             string candidate;
 
@@ -1332,12 +1265,10 @@ namespace CinematicRecorder.UI
 
             return candidate;
         }
-
         private string GetDefaultPresetName()
         {
             return _cachedVessel?.vesselName ?? CameraController.Preset;
         }
-
         private void EnsurePresetNameBuffer()
         {
             if (string.IsNullOrEmpty(presetNameBuffer))
@@ -1346,7 +1277,6 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-
         #region Helpers
         private int GetStyleIndexForStatus(CameraSlot.SlotStatus status, bool isCameraTools)
         {

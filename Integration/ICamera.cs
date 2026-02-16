@@ -5,7 +5,7 @@ namespace CinematicRecorder.Integration
 {
     /// <summary>
     /// Unified interface for camera controllers (HullCam and CameraTools).
-    /// Enables polymorphic camera management in the UI and capture pipeline.
+    /// Enables multi camera management in the UI and capture pipeline.
     /// </summary>
     public interface ICamera
     {
