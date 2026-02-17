@@ -1,4 +1,5 @@
-﻿using System;
+﻿using CinematicRecorder.Core;
+using System;
 using System.IO;
 using UnityEngine;
 using static CinematicRecorder.UI.CinematicUIStrings;
@@ -26,6 +27,8 @@ namespace CinematicRecorder.UI
         private string encodingModeUsed;
         private string outputFilePath;
         private bool wasUnlimitedRecording;
+        private float showStartTime = -1f;
+        private const float REPORT_TIMEOUT_SECONDS = 30f;
         #endregion
         #region Public API
         public bool IsVisible => shouldShow;
@@ -47,12 +50,19 @@ namespace CinematicRecorder.UI
             wasUnlimitedRecording = unlimited;
 
             shouldShow = true;
+            showStartTime = Time.realtimeSinceStartup;
 
             Debug.Log(string.Format(Report.FinalReportLog, frames, simSeconds, realTimeSeconds, encodingMode, unlimited, filePath));
         }
         public void HideReport()
         {
             shouldShow = false;
+            showStartTime = -1f;
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                UnityEngine.Debug.Log("[FinalReportWindow] HideReport called while session still running. Forcing EndSession.");
+                DeterministicCaptureSession.EndSession();
+            }
         }
         #endregion
         #region Private Implementation
@@ -123,7 +133,7 @@ namespace CinematicRecorder.UI
 
             if (GUILayout.Button(Common.Okay, HighLogic.Skin.button, GUILayout.Width(100), GUILayout.Height(30)))
             {
-                shouldShow = false;
+                HideReport();
             }
 
             GUILayout.FlexibleSpace();
@@ -182,6 +192,25 @@ namespace CinematicRecorder.UI
         void Start()
         {
             InitStyles();
+        }
+        /// <summary>
+        /// Checks for timeout condition to force session cleanup if user leaves report open.
+        /// </summary>
+        void Update()
+        {
+            if (shouldShow && showStartTime > 0 && DeterministicCaptureSession.IsRunning)
+            {
+                float elapsed = Time.realtimeSinceStartup - showStartTime;
+                if (elapsed > REPORT_TIMEOUT_SECONDS)
+                {
+                    UnityEngine.Debug.LogWarning(string.Format(
+                        "[FinalReportWindow] Report timeout reached ({0}s). Forcing session end.",
+                        REPORT_TIMEOUT_SECONDS));
+
+                    DeterministicCaptureSession.EndSession();
+                    showStartTime = -1f; 
+                }
+            }
         }
         void OnGUI()
         {

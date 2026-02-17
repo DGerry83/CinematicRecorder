@@ -76,6 +76,11 @@ namespace CinematicRecorder.Core
 
             FrameCaptureInstance = coreObject.AddComponent<FrameCapture>();
 
+            GameObject safetyMonitorObj = new GameObject("CinematicRecorder_SafetyMonitor");
+            DontDestroyOnLoad(safetyMonitorObj);
+            safetyMonitorObj.AddComponent<SafetyMonitor>();
+            UnityEngine.Debug.Log("[CinematicRecorder] SafetyMonitor initialized");
+
             // Hook into ApplicationLauncher (toolbar)
             GameEvents.onGUIApplicationLauncherReady.Add(OnGUIApplicationLauncherReady);
             GameEvents.onGUIApplicationLauncherDestroyed.Add(OnGUIApplicationLauncherDestroyed);

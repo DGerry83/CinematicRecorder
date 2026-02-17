@@ -91,7 +91,15 @@ namespace CinematicRecorder.Integration
         public static object GetCurrentCamera()
         {
             if (!IsAvailable || s_CurrentCameraField == null) return null;
-            return s_CurrentCameraField.GetValue(null);
+            try
+            {
+                return s_CurrentCameraField.GetValue(null);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCurrentCamera (field.GetValue) failed: {ex.Message}");
+                return null;
+            }
         }
         public static bool IsAnyCameraActive()
         {
@@ -102,8 +110,16 @@ namespace CinematicRecorder.Integration
             if (!IsAvailable || s_CamerasField == null)
                 return Enumerable.Empty<object>();
 
-            var list = s_CamerasField.GetValue(null) as System.Collections.IEnumerable;
-            return list?.Cast<object>() ?? Enumerable.Empty<object>();
+            try
+            {
+                var list = s_CamerasField.GetValue(null) as System.Collections.IEnumerable;
+                return list?.Cast<object>() ?? Enumerable.Empty<object>();
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetAllCameras reflection failed: {ex.Message}");
+                return Enumerable.Empty<object>();
+            }
         }
         public static bool IsCameraActive(object cam)
         {
@@ -128,27 +144,65 @@ namespace CinematicRecorder.Integration
 
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                UnityEngine.Debug.LogError($"[HullCamBridge] IsCameraAvailable reflection failed for {cam}: {ex.Message}");
                 return false;
             }
         }
         public static float GetCameraFoV(object cam)
         {
             if (cam == null || s_CameraFoVField == null) return 60f;
-            return (float)(s_CameraFoVField.GetValue(cam) ?? 60f);
+            try
+            {
+                return (float)(s_CameraFoVField.GetValue(cam) ?? 60f);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraFoV (field.GetValue) failed for {cam}: {ex.Message}");
+                return 60f;
+            }
         }
         public static void SetCameraFoV(object cam, float fov)
         {
             if (cam == null || s_CameraFoVField == null) return;
-            float min = GetCameraFoVMin(cam);
-            float max = GetCameraFoVMax(cam);
-            s_CameraFoVField.SetValue(cam, Mathf.Clamp(fov, min, max));
+            try
+            {
+                float min = GetCameraFoVMin(cam);
+                float max = GetCameraFoVMax(cam);
+                s_CameraFoVField.SetValue(cam, Mathf.Clamp(fov, min, max));
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] SetCameraFoV (field.SetValue) failed for {cam}: {ex.Message}");
+            }
         }
-        public static float GetCameraFoVMin(object cam) =>
-            cam != null && s_CameraFoVMinField != null ? (float)s_CameraFoVMinField.GetValue(cam) : 10f;
-        public static float GetCameraFoVMax(object cam) =>
-            cam != null && s_CameraFoVMaxField != null ? (float)s_CameraFoVMaxField.GetValue(cam) : 120f;
+        public static float GetCameraFoVMin(object cam)
+        {
+            if (cam == null || s_CameraFoVMinField == null) return 10f;
+            try
+            {
+                return (float)s_CameraFoVMinField.GetValue(cam);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraFoVMin (field.GetValue) failed for {cam}: {ex.Message}");
+                return 10f;
+            }
+        }
+        public static float GetCameraFoVMax(object cam)
+        {
+            if (cam == null || s_CameraFoVMaxField == null) return 120f;
+            try
+            {
+                return (float)s_CameraFoVMaxField.GetValue(cam);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraFoVMax (field.GetValue) failed for {cam}: {ex.Message}");
+                return 120f;
+            }
+        }
         public static Transform GetCameraTransform(object cam)
         {
             if (cam == null) return null;
@@ -158,7 +212,15 @@ namespace CinematicRecorder.Integration
         public static string GetCameraName(object cam)
         {
             if (cam == null || s_CameraNameField == null) return "Unknown";
-            return s_CameraNameField.GetValue(cam) as string ?? "Unknown";
+            try
+            {
+                return s_CameraNameField.GetValue(cam) as string ?? "Unknown";
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraName (field.GetValue) failed for {cam}: {ex.Message}");
+                return "Unknown";
+            }
         }
 
         /// <summary>

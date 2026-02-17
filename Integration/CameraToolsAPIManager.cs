@@ -617,6 +617,7 @@ namespace CinematicRecorder.Integration
         public static void Shutdown()
         {
             if (!_initialized) return;
+
             try
             {
                 if (_cameraActivatedHandler != null && _onCameraActivatedEvent != null)
@@ -632,8 +633,15 @@ namespace CinematicRecorder.Integration
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[CameraToolsAPIManager] Error during shutdown: {ex.Message}");
+                UnityEngine.Debug.LogWarning($"[CameraToolsAPIManager] Error during shutdown: {ex.Message}");
             }
+            _cameraActivatedHandler = null;
+            _cameraDeactivatedHandler = null;
+            _pathingStartedHandler = null;
+            _pathingStoppedHandler = null;
+            _cinematicRecorderControlTakenHandler = null;
+            _initialized = false;
+            _isAvailable = false;
         }
         #endregion
     }

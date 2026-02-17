@@ -103,20 +103,20 @@ namespace CinematicRecorder.Capture
                 return;
             }
 
-            if (ActiveEncoder == EncoderType.CPU)
-            {
-                if (!encoderAlive)
-                {
-                    if (rgba.IsCreated) rgba.Dispose();
-                    return;
-                }
-                commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Frame, Frame = rgba });
-            }
-            else
-            {
+            //if (ActiveEncoder == EncoderType.CPU)
+            //{
+            //    if (!encoderAlive)
+            //    {
+            //        if (rgba.IsCreated) rgba.Dispose();
+            //        return;
+            //    }
+            //    commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Frame, Frame = rgba });
+            //}
+            //else
+            //{
                 EncodeFrameInternal(rgba);
                 if (rgba.IsCreated) rgba.Dispose();
-            }
+            //}
         }
         /// <summary>
         /// Signals the encoder to finish and flush remaining frames. Blocks until complete for CPU path.
@@ -128,21 +128,22 @@ namespace CinematicRecorder.Capture
 
             stopping = true;
 
-            if (ActiveEncoder == EncoderType.CPU)
-            {
-                if (encoderAlive)
-                {
-                    commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Stop });
-                    if (encoderThread != null)
-                        encoderThread.Join();
-                }
-                Cleanup();
-            }
-            else
-            {
+            //Synchronous flush
+            //if (ActiveEncoder == EncoderType.CPU)
+            //{
+            //    if (encoderAlive)
+            //    {
+            //        commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Stop });
+            //        if (encoderThread != null)
+            //            encoderThread.Join();
+            //    }
+            //    Cleanup();
+            //}
+            //else
+            //{
                 FlushEncoder();
                 Cleanup();
-            }
+            //}
         }
         public void Dispose()
         {
@@ -191,15 +192,16 @@ namespace CinematicRecorder.Capture
             if (!TryInitializeEncoder("libx264", EncoderType.CPU))
                 return false;
 
-            commandQueue = new ConcurrentQueue<EncoderCommandItem>();
-            encoderAlive = true;
+            //No background thread processing
+            //commandQueue = new ConcurrentQueue<EncoderCommandItem>();
+            //encoderAlive = true;
 
-            encoderThread = new Thread(EncoderThreadMain)
-            {
-                IsBackground = false,
-                Name = "CinematicRecorder_Encoder"
-            };
-            encoderThread.Start();
+            //encoderThread = new Thread(EncoderThreadMain)
+            //{
+            //    IsBackground = false,
+            //    Name = "CinematicRecorder_Encoder"
+            //};
+            //encoderThread.Start();
 
             return true;
         }
@@ -331,32 +333,32 @@ namespace CinematicRecorder.Capture
             UnityEngine.Debug.Log("[HardwareEncoder] SUCCESS: Initialized " + type + " encoder (" + codecName + ")");
             return true;
         }
-        private void EncoderThreadMain()
-        {
-            UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread started");
+        //private void EncoderThreadMain()
+        //{
+        //    UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread started");
 
-            while (true)
-            {
-                EncoderCommandItem item;
-                if (!commandQueue.TryDequeue(out item))
-                {
-                    Thread.Sleep(1);
-                    continue;
-                }
+        //    while (true)
+        //    {
+        //        EncoderCommandItem item;
+        //        if (!commandQueue.TryDequeue(out item))
+        //        {
+        //            Thread.Sleep(1);
+        //            continue;
+        //        }
 
-                if (item.Command == EncoderCommand.Stop)
-                {
-                    FlushEncoder();
-                    break;
-                }
+        //        if (item.Command == EncoderCommand.Stop)
+        //        {
+        //            FlushEncoder();
+        //            break;
+        //        }
 
-                EncodeFrameInternal(item.Frame);
-                if (item.Frame.IsCreated) item.Frame.Dispose();
-            }
+        //        EncodeFrameInternal(item.Frame);
+        //        if (item.Frame.IsCreated) item.Frame.Dispose();
+        //    }
 
-            encoderAlive = false;
-            UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread exited cleanly");
-        }
+        //    encoderAlive = false;
+        //    UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread exited cleanly");
+        //}
         private void EncodeFrameInternal(NativeArray<byte> rgba)
         {
             byte* srcPtr = (byte*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(rgba);

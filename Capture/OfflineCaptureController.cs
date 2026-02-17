@@ -127,7 +127,8 @@ namespace CinematicRecorder.Capture
                 TimeWarp_FixedDeltaTime_Patch.OverrideValue = currentDelta;
                 Time.fixedDeltaTime = currentDelta;
                 Time.maximumDeltaTime = currentDelta;
-                Planetarium.fetch.fixedDeltaTime = currentDelta;
+                if (Planetarium.fetch != null)
+                    Planetarium.fetch.fixedDeltaTime = currentDelta;
 
                 yield return null; // One frame per step
             }
@@ -181,7 +182,8 @@ namespace CinematicRecorder.Capture
                 Time.maximumDeltaTime = simFrameDelta;
                 Time.captureFramerate = Mathf.RoundToInt(currentSimFps);
                 TimeWarp_FixedDeltaTime_Patch.OverrideValue = simFrameDelta;
-                Planetarium.fetch.fixedDeltaTime = simFrameDelta;
+                if (Planetarium.fetch != null)
+                    Planetarium.fetch.fixedDeltaTime = simFrameDelta;
 
                 if (simFrameDelta < 0.0001f)
                 {
@@ -541,7 +543,8 @@ namespace CinematicRecorder.Capture
             Time.captureFramerate = 0;
             Time.fixedDeltaTime = originalFixedDelta;
             Time.maximumDeltaTime = originalMaxDelta;
-            Planetarium.fetch.fixedDeltaTime = originalPlanetariumDelta;
+            if (Planetarium.fetch != null)
+                Planetarium.fetch.fixedDeltaTime = originalPlanetariumDelta;
 
             FinalizeEncoder();
 

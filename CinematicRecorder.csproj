@@ -59,6 +59,7 @@
     <Compile Include="Core\CinematicRecorderAddon.cs" />
     <Compile Include="Core\DeterministicCaptureSession.cs" />
     <Compile Include="Core\HarmonyBootstrap.cs" />
+    <Compile Include="Core\SafetyMonitor.cs" />
     <Compile Include="Core\ZoomController\ConsistentFramingTransitionStrategy.cs" />
     <Compile Include="Core\ZoomController\InstantZoomStrategy.cs" />
     <Compile Include="Core\ZoomController\IZoomStrategy.cs" />

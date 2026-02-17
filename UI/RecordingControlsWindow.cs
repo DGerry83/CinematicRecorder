@@ -1,7 +1,8 @@
 ﻿using CinematicRecorder.Core;
-using static CinematicRecorder.UI.CinematicUIStrings;
+using CinematicRecorder.Integration;
 using System;
 using UnityEngine;
+using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
@@ -45,6 +46,7 @@ namespace CinematicRecorder.UI
         {
             UnsubscribeFromEvents();
             cameraPanel?.Shutdown();
+            CameraToolsAPIManager.Shutdown();
 
             if (advancedOptionsWindow != null)
             {

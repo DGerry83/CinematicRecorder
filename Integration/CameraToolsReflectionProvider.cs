@@ -249,14 +249,21 @@ namespace CinematicRecorder.Integration
             object instance = GetFetchInstance();
             if (instance == null || field == null) return defaultValue;
             try { return (T)field.GetValue(instance); }
-            catch { return defaultValue; }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] GetField failed for '{field?.Name}': {ex.Message}");
+                return defaultValue;
+            }
         }
         public static void SetField<T>(FieldInfo field, T value)
         {
             object instance = GetFetchInstance();
             if (instance == null || field == null) return;
             try { field.SetValue(instance, value); }
-            catch (Exception ex) { Debug.LogWarning($"[CTReflection] SetField failed: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[CameraToolsReflectionProvider] SetField failed for '{field?.Name}': {ex.Message}");
+            }
         }
 
         // Specialized Accessors
@@ -275,25 +282,59 @@ namespace CinematicRecorder.Integration
         public static object GetFetchInstance()
         {
             if (!IsAvailable || _fetchField == null) return null;
-            return _fetchField.GetValue(null);
+            try
+            {
+                return _fetchField.GetValue(null);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] GetFetchInstance failed: {ex.Message}");
+                return null;
+            }
         }
         public static void Activate()
         {
             var instance = GetFetchInstance();
             if (instance != null && _cameraActivateMethod != null)
-                _cameraActivateMethod.Invoke(instance, null);
+            {
+                try
+                {
+                    _cameraActivateMethod.Invoke(instance, null);
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] Activate (method.Invoke) failed: {ex.Message}");
+                }
+            }
         }
         public static void Revert()
         {
             var instance = GetFetchInstance();
             if (instance != null && _revertCameraMethod != null)
-                _revertCameraMethod.Invoke(instance, null);
+            {
+                try
+                {
+                    _revertCameraMethod.Invoke(instance, null);
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] Revert (method.Invoke) failed: {ex.Message}");
+                }
+            }
         }
         public static bool PathExists(int index)
         {
-            if (index < 0 || _availablePathsField == null) return false;
-            var paths = GetReference<IList>(_availablePathsField);
-            return paths != null && index < paths.Count;
+            try
+            {
+                if (index < 0 || _availablePathsField == null) return false;
+                var paths = GetReference<IList>(_availablePathsField);
+                return paths != null && index < paths.Count;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] PathExists failed for index {index}: {ex.Message}");
+                return false;
+            }
         }
         public static object ConvertToCameraToolsToolModes(ToolModes mode)
         {
@@ -335,7 +376,10 @@ namespace CinematicRecorder.Integration
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] ExtractPathTimeScale failed for path {pathIndex}: {ex.Message}");
+            }
             return 1f;
         }
         public static void ApplyPathTimeScale(int pathIndex, float timeScale)
@@ -354,7 +398,10 @@ namespace CinematicRecorder.Integration
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[CameraToolsReflectionProvider] ApplyPathTimeScale failed for path {pathIndex}: {ex.Message}");
+            }
         }
         #endregion
         #region Field Exporters

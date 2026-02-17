@@ -471,7 +471,10 @@ namespace CinematicRecorder.Integration
                 ? (CamTarget?.transform.position ?? vessel.CoM)
                 : vessel.CoM;
 
-            Vector3 cameraPos = FlightCamera.fetch?.transform.position ?? Vector3.zero;
+            Vector3 cameraPos = Vector3.zero;
+            if (FlightCamera.fetch != null)
+                cameraPos = FlightCamera.fetch.transform.position;
+            //Vector3 cameraPos = FlightCamera.fetch?.transform.position ?? Vector3.zero;
             float distance = Vector3.Distance(targetPos, cameraPos);
             float margin = CameraToolsReflectionProvider.GetFloat(CameraToolsReflectionProvider.AutoZoomMarginStationaryField, 30f);
 

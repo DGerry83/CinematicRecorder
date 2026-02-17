@@ -544,6 +544,9 @@ namespace CinematicRecorder.UI
             GUIStyle headerStyle = CinematicUIResources.Styles.Header();
             GUILayout.Label(Settings.AdvancedOptionsHeader, headerStyle);
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+            // Safe Mode (CPU Encoding) Toggle - Added
+            DrawSafeModeToggle();
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
             tooltipStyle.wordWrap = true;
 
@@ -576,6 +579,54 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             GUIStyle placeholderStyle = CinematicUIResources.Styles.Info();
             GUILayout.Label(Settings.PostProcessText, placeholderStyle);
+        }
+        private void DrawSafeModeToggle()
+        {
+            // Lock during recording to prevent mid-stream codec switches
+            bool wasEnabled = GUI.enabled;
+            if (DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            // Style: Green + Bold when active
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.ForceSoftwareEncoding)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            // Toggle
+            bool newValue = GUILayout.Toggle(
+                SessionState.ForceSoftwareEncoding,
+                Settings.SafeModeToggle,
+                toggleStyle
+            );
+
+            if (newValue != SessionState.ForceSoftwareEncoding && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.ForceSoftwareEncoding = newValue;
+                UnityEngine.Debug.Log($"[CinematicRecorder] ForceSoftwareEncoding = {newValue}");
+            }
+
+            // Help text
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+            helpStyle.wordWrap = true;
+            GUILayout.Label(Settings.SafeModeTooltip, helpStyle);
+
+            // Warning when disabled during recording
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle warningStyle = CinematicUIResources.Styles.Label(
+                    CinematicUIResources.Colors.INFO_ORANGE,
+                    fontSize: CinematicUIResources.Typography.INFO
+                );
+                GUILayout.Label(Settings.SafeModeRecordingWarning, warningStyle);
+            }
+
+            GUI.enabled = wasEnabled;
         }
         #endregion
         #region Public API

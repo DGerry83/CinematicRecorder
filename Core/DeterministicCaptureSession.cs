@@ -12,9 +12,24 @@ namespace CinematicRecorder.Core
     public static class DeterministicCaptureSession
     {
         #region Session State
-        public static bool IsRunning { get; private set; }
-        public static bool StopRequested { get; private set; }
-        public static bool IsUnlimitedMode { get; private set; }
+        private static volatile bool _isRunning;
+        public static bool IsRunning
+        {
+            get => _isRunning;
+            private set => _isRunning = value;
+        }
+        private static volatile bool _stopRequested;
+        public static bool StopRequested
+        {
+            get => _stopRequested;
+            private set => _stopRequested = value;
+        }
+        private static volatile bool _isUnlimitedMode;
+        public static bool IsUnlimitedMode
+        {
+            get => _isUnlimitedMode;
+            private set => _isUnlimitedMode = value;
+        }
         /// <summary>Fired every physics step during deterministic capture. Parameter = physics delta time for this step.</summary>
         public static event Action<float> OnPhysicsStepped;
 

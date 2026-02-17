@@ -14,6 +14,10 @@
             public const string arrowDn = "▼";
             public const string DeleteConfirm = "Delete preset '{0}'?";
         }
+        public static class ScreenMessages
+        {
+            public const string EmergencyResetSceneChange = "Cinematic Recorder: Emergency reset due to scene change!";
+        }
 
         public static class Settings
         {
@@ -51,6 +55,9 @@
             public const string GradientTooltip = "Reduces color banding in dark areas";
             public const string AMFOnlyWarning = "Advanced options require AMD encoder.";
             public const string PostProcessText = "(Post-processing effects will appear here)";
+            public const string SafeModeToggle = " Safe Mode (CPU Encoding)";
+            public const string SafeModeTooltip = "Forces CPU-based x264 encoding instead of GPU hardware acceleration. Use this if you experience crashes, artifacts, or need to test the CPU encoding path.";
+            public const string SafeModeRecordingWarning = "⚠ Cannot modify while recording";
 
             // Encoder Configuration
             public const string EncoderTitle = "Encoder";
