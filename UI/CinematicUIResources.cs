@@ -234,6 +234,27 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
+        #region Cached Textures
+        private static readonly Texture2D _progressBlue;
+        private static readonly Texture2D _cameraActive;
+        private static readonly Texture2D _cameraAssigned;
+        private static readonly Texture2D _cameraUnavailable;
+        private static readonly Texture2D _cameraUnassigned;
+        private static readonly Texture2D _cameraRemote;
+        private static readonly Texture2D _cameraCTActive;
+        private static readonly Texture2D _cameraCTInactive;
+        static CinematicUIResources()
+        {
+            _progressBlue = CreateTexture(Colors.PROGRESS_BLUE);
+            _cameraActive = CreateTexture(Colors.Camera.ACTIVE);
+            _cameraAssigned = CreateTexture(Colors.Camera.ASSIGNED);
+            _cameraUnavailable = CreateTexture(Colors.Camera.UNAVAILABLE);
+            _cameraUnassigned = CreateTexture(Colors.Camera.UNASSIGNED);
+            _cameraRemote = CreateTexture(Colors.Camera.REMOTE);
+            _cameraCTActive = CreateTexture(Colors.Camera.CT_ACTIVE);
+            _cameraCTInactive = CreateTexture(Colors.Camera.CT_INACTIVE);
+        }
+        #endregion
         #region Style Factories
         public static class Styles
         {
@@ -359,19 +380,60 @@ namespace CinematicRecorder.UI
             /// 0=Active(Green), 1=Assigned(Yellow), 2=Unavailable(Red), 3=Unassigned(Gray), 4=Remote(Aqua),
             /// 5=CT_Active(Orange), 6=CT_Inactive(DarkOrange)
             /// </summary>
+            /// <summary>
+            /// Camera grid button by status index (uses cached textures)
+            /// </summary>
             public static GUIStyle CameraButton(int statusIndex)
             {
+                Texture2D bg;
+                Color textColor;
+                FontStyle fontStyle = FontStyle.Bold;
+
                 switch (statusIndex)
                 {
-                    case 0: return ColoredButton(Colors.Camera.ACTIVE, Color.white, FontStyle.Bold);
-                    case 1: return ColoredButton(Colors.Camera.ASSIGNED, Color.black, FontStyle.Bold);
-                    case 2: return ColoredButton(Colors.Camera.UNAVAILABLE, Color.white, FontStyle.Bold);
-                    case 3: return ColoredButton(Colors.Camera.UNASSIGNED, Colors.TEXT_DIM, FontStyle.Bold);
-                    case 4: return ColoredButton(Colors.Camera.REMOTE, Color.white, FontStyle.Bold);
-                    case 5: return ColoredButton(Colors.Camera.CT_ACTIVE, Color.white, FontStyle.Bold);
-                    case 6: return ColoredButton(Colors.Camera.CT_INACTIVE, Color.white, FontStyle.Bold);
-                    default: return ColoredButton(Colors.Camera.UNASSIGNED, Colors.TEXT_DIM, FontStyle.Bold);
+                    case 0:
+                        bg = _cameraActive;
+                        textColor = Color.white;
+                        break;
+                    case 1:
+                        bg = _cameraAssigned;
+                        textColor = Color.black;
+                        break;
+                    case 2:
+                        bg = _cameraUnavailable;
+                        textColor = Color.white;
+                        break;
+                    case 3:
+                        bg = _cameraUnassigned;
+                        textColor = Colors.TEXT_DIM;
+                        break;
+                    case 4:
+                        bg = _cameraRemote;
+                        textColor = Color.white;
+                        break;
+                    case 5:
+                        bg = _cameraCTActive;
+                        textColor = Color.white;
+                        break;
+                    case 6:
+                        bg = _cameraCTInactive;
+                        textColor = Color.white;
+                        break;
+                    default:
+                        bg = _cameraUnassigned;
+                        textColor = Colors.TEXT_DIM;
+                        break;
                 }
+
+                GUIStyle style = new GUIStyle(HighLogic.Skin.button);
+                style.fontStyle = fontStyle;
+                style.normal.textColor = textColor;
+                style.hover.textColor = textColor;
+                style.active.textColor = textColor;
+                style.normal.background = bg;
+                style.hover.background = bg;
+                style.active.background = bg;
+                return style;
             }
 
             /// <summary>
@@ -388,7 +450,7 @@ namespace CinematicRecorder.UI
             public static GUIStyle ProgressFill()
             {
                 GUIStyle style = new GUIStyle(GUI.skin.box);
-                style.normal.background = CreateTexture(Colors.PROGRESS_BLUE);
+                style.normal.background = _progressBlue;
                 return style;
             }
 
