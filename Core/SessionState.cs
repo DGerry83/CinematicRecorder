@@ -9,126 +9,99 @@ namespace CinematicRecorder.Core
     /// </summary>
     public static class SessionState
     {
-        // ============================================================
-        // CAPTURE TIMING SETTINGS
-        // ============================================================
 
+        #region Capture Timing
         public static int SimFpsIndex { get; set; } = 2;        // Default 60
         public static int PlaybackFpsIndex { get; set; } = 2;
         public static bool LockFps { get; set; } = true;
         public static float DurationSeconds { get; set; } = 10f;
-
         public static bool ForceSoftwareEncoding { get; set; } = false;
         public static bool PngSequence { get; set; } = false;
-
-        // ============================================================
-        // ENCODER TAB SELECTION
-        // 0 = AMF (AMD / HEVC)
-        // 1 = NVENC (NVIDIA / HEVC)
-        // 2 = CPU (x264)
-        // ============================================================
-
+        #endregion
+        #region Encoder Selection
+        /// <summary>
+        /// Selected encoder: 0=AMF (AMD HEVC), 1=NVENC (NVIDIA HEVC), 2=CPU (x264)
+        /// </summary>
         public static int SelectedEncoderTab { get; set; } = 0;
+        #endregion
+        #region AMF Settings
+        public static float AmfQualitySlider { get; set; } = 0.5f; // Quality ↔ File Size slider (0–1)
 
-        // ============================================================
-        // AMF (AMD HEVC) SETTINGS
-        // ============================================================
-
-        // Quality ↔ File Size slider (0–1)
-        public static float AmfQualitySlider { get; set; } = 0.5f;
-
-        // 0 = CQP, 1 = VBR, 2 = CBR
+        /// <summary>
+        ///  0 = CQP, 1 = VBR, 2 = CBR
+        /// </summary>
         public static int AmfRateControlMode { get; set; } = 0;
-
-        // Mbps (used for VBR / CBR)
-        public static int AmfTargetBitrate { get; set; } = 80;
-
-        // 0 = Speed, 1 = Balanced, 2 = Quality
+        public static int AmfTargetBitrate { get; set; } = 80; // Mbps (used for VBR / CBR)
+        /// <summary>
+        /// 0 = Fast, 1 = Balanced, 2 = Quality
+        /// </summary>
         public static int AmfEncoderSpeed { get; set; } = 2;
-
         public static bool AmfShowAdvanced { get; set; } = false;
-
         public static bool AmfUseBlueNoiseDither { get; set; } = true; // Default ON for quality
 
-        // Derived QP (16–28, lower = better quality)
+        /// <summary>
+        /// Calculates QP value (0-28) from quality slider. Lower is better quality.
+        /// </summary>
         public static int AmfCqpValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, AmfQualitySlider));
-
-        // ============================================================
-        // NVENC (NVIDIA HEVC) SETTINGS
-        // ============================================================
-
+        #endregion
+        #region NVENC Settings
         public static float NvencQualitySlider { get; set; } = 0.5f;
-
-        // 0 = CQ, 1 = VBR, 2 = CBR
+        /// <summary>
+        /// 0 = CQ, 1 = VBR, 2 = CBR
+        /// </summary>
         public static int NvencRateControlMode { get; set; } = 0;
-
-        // Mbps
-        public static int NvencTargetBitrate { get; set; } = 80;
-
-        // 0 = Speed, 1 = Balanced, 2 = Quality
-        // (maps cleanly to NVENC presets internally)
+        public static int NvencTargetBitrate { get; set; } = 80; // Mbps
+        /// <summary>
+        /// Encoder preset 0 = Fast, 1 = Balanced, 2 = Quality
+        /// </summary>
         public static int NvencPreset { get; set; } = 2;
-
         public static bool NvencShowAdvanced { get; set; } = false;
-
-        // Derived CQ value (mapped like QP)
+        /// <summary>
+        /// Calculates NVENC CQ value (0-28) from quality slider. Lower is better quality.
+        /// </summary>
         public static int NvencCqValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, NvencQualitySlider));
-
-        // ============================================================
-        // CPU (x264) SETTINGS
-        // ============================================================
-
+        #endregion
+        #region CPU Settings  
         public static float CpuQualitySlider { get; set; } = 0.5f;
-
-        // 0 = CRF, 1 = VBR, 2 = CBR
+        /// <summary>
+        /// 0 = CRF, 1 = VBR, 2 = CBR
+        /// </summary>
         public static int CpuRateControlMode { get; set; } = 0;
-
-        // Mbps
-        public static int CpuTargetBitrate { get; set; } = 80;
-
-        // 0 = Speed, 1 = Balanced, 2 = Quality
+        public static int CpuTargetBitrate { get; set; } = 80; // Mbps
+        /// <summary>
+        /// 0 = Speed, 1 = Balanced, 2 = Quality
+        /// </summary>
         public static int CpuPreset { get; set; } = 2;
-
         public static bool CpuShowAdvanced { get; set; } = false;
-
-        // Derived CRF (16–28, lower = better)
+        /// <summary>
+        /// Calculates x264 CRF value (0-28) from quality slider. Lower is better quality.
+        /// </summary>
         public static int CpuCrfValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, CpuQualitySlider));
-
-        // ============================================================
-        // RAMP TUNING
-        // ============================================================
-
+        #endregion
+        #region Ramp Configuration
         public static float RampDurationDefault { get; set; } = 0.5f;  // 0.1 to 3.0 seconds
         public static float RampExponent { get; set; } = 2.0f;         // 0.3 (rush start) to 3.0 (rush end)
         public const float RampExponentMin = 0.05f;
         public const float RampExponentMax = 3.0f;
-
-
-        // ============================================================
-        // HELPERS
-        // ============================================================
-
+        #endregion
+        #region CameraTools Integration
+        /// <summary>
+        /// When true, pathing cameras advance by video frame time (1/60s per frame).
+        /// When false (default), pathing cameras advance by physics time.
+        /// Used for Kraken-Time recording where physics runs at 10,000fps but video outputs at 60fps.
+        /// </summary>
+        public static bool CameraPathPlaybackTiming { get; set; } = false;
+        #endregion
+        #region Utility Methods
         public static void ResetCaptureSettings()
         {
             DurationSeconds = 10f;
         }
-
-        public static string GetQualityLabel(float sliderValue)
-        {
-            int qp = Mathf.RoundToInt(Mathf.Lerp(24f, 0f, sliderValue));
-
-            if (qp <= 8) return "Near Lossless (QP " + qp + ")";
-            if (qp <= 14) return "Master Quality (QP " + qp + ")";
-            if (qp <= 20) return "High Quality (QP " + qp + ")";
-            return "Compressed (QP " + qp + ")";
-        }
-
         public static int ValidateRateControlMode(int mode)
         {
             if (mode > 1) return 1; // Force VBR if somehow CBR was selected
             return mode;
         }
-
         /// <summary>
         /// Rough bitrate estimate for UI display / planning.
         /// </summary>
@@ -167,5 +140,7 @@ namespace CinematicRecorder.Core
             // CRF / CQ / CQP heuristic
             return Mathf.Lerp(20f, 120f, quality);
         }
+        #endregion
+
     }
 }

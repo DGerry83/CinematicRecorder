@@ -1,22 +1,42 @@
-﻿using System;
-using System.IO;
+﻿using CinematicRecorder.Capture;
+using CinematicRecorder.Integration;
+using CinematicRecorder.UI;
+using System;
 using System.Collections;
 using System.Diagnostics;
+using System.IO;
 using UnityEngine;
-using CinematicRecorder.Capture;
-using CinematicRecorder.UI;
 
 namespace CinematicRecorder.Core
 {
     public static class DeterministicCaptureSession
     {
-        public static bool IsRunning { get; private set; }
-        public static bool StopRequested { get; private set; }
+        #region Session State
+        private static volatile bool _isRunning;
+        public static bool IsRunning
+        {
+            get => _isRunning;
+            private set => _isRunning = value;
+        }
+        private static volatile bool _stopRequested;
+        public static bool StopRequested
+        {
+            get => _stopRequested;
+            private set => _stopRequested = value;
+        }
+        private static volatile bool _isUnlimitedMode;
+        public static bool IsUnlimitedMode
+        {
+            get => _isUnlimitedMode;
+            private set => _isUnlimitedMode = value;
+        }
+        /// <summary>Fired every physics step during deterministic capture. Parameter = physics delta time for this step.</summary>
+        public static event Action<float> OnPhysicsStepped;
 
-        // NEW: Unlimited mode flag
-        public static bool IsUnlimitedMode { get; private set; }
-
-        // UI Fields
+        /// <summary>Active deterministic zoom controller during capture. Null when not running.</summary>
+        public static DeterministicZoomController ActiveZoomController { get; private set; }
+        #endregion
+        #region Progress Tracking  
         public static float CaptureFPS { get; internal set; }
         public static float CapturedSeconds { get; internal set; }
         public static int CapturedFrames { get; internal set; }
@@ -28,7 +48,6 @@ namespace CinematicRecorder.Core
             {
                 if (!IsRunning) return _targetFramesBacking;
 
-                // NEW: If unlimited, just return captured frames (no target)
                 if (IsUnlimitedMode) return CapturedFrames;
 
                 // Dynamic: current capture + (remaining time at current sim rate)
@@ -38,18 +57,13 @@ namespace CinematicRecorder.Core
             }
             internal set { _targetFramesBacking = value; } // Backing field for non-running state
         }
-
-        // Rate Control
+        #endregion
+        #region Rate Control
         public static int SimulationFPS { get; internal set; }
         public static int PlaybackFPS { get; internal set; }
         public static float PlaybackSpeed { get; internal set; }
-
-        // ============================================================
-        // NEW: Time Scale Management (Kraken Time API)
-        // ============================================================
-
-        public enum TransitionDirection { None, Slowing, Resuming }
-
+        #endregion
+        #region Time Scale Control
         /// <summary>Current time scale (1.0 = normal, 0.1 = 10% speed)</summary>
         public static float CurrentTimeScale { get; private set; } = 1.0f;
 
@@ -58,7 +72,7 @@ namespace CinematicRecorder.Core
 
         /// <summary>True when ramping between time scales</summary>
         public static bool IsTransitioning { get; private set; } = false;
-
+        public enum TransitionDirection { None, Slowing, Resuming }
         /// <summary>Direction of current transition for UI feedback</summary>
         public static TransitionDirection CurrentTransitionDirection { get; private set; } = TransitionDirection.None;
 
@@ -68,22 +82,17 @@ namespace CinematicRecorder.Core
         /// <summary>Accumulated simulated seconds (replaces frame count for progress)</summary>
         public static float AccumulatedSimulatedSeconds { get; internal set; } = 0f;
 
-        // Time Scale Constants
         public const float KRAKEN_TIME_FPS = 10000f;
         public const float KRAKEN_TIME_THRESHOLD = 0.015f;
         public const float SUPER_SLOW_SCALE = 0.1f;
         public const float SLOW_SCALE = 0.35f;
         public const float KRAKEN_TIME_SCALE = 0.01f;
 
-        // Ramp state
         private static float rampStartScale;
         private static float rampDuration;
         private static float rampElapsed;
-
-        // ============================================================
-        // NEW: Public Events for UI Subscription
-        // ============================================================
-
+        #endregion
+        #region Events
         /// <summary>Fired when recording begins</summary>
         public static event Action OnRecordingStarted;
 
@@ -92,10 +101,25 @@ namespace CinematicRecorder.Core
 
         /// <summary>Fired whenever time scale changes (parameter = new scale value)</summary>
         public static event Action<float> OnTimeScaleChanged;
-
-        // Internal state
         private static Stopwatch realWorldTimer;
+        #endregion
+        #region Public API
+        public static void InvokeOnPhysicsStepped(float physicsDeltaTime)
+        {
+            OnPhysicsStepped?.Invoke(physicsDeltaTime);
 
+            // Drive CameraTools deterministic camera updates if available
+            // CameraTools uses the physicsDeltaTime or playbackDeltaTime based on LockPathingToPlaybackRate setting
+            if (CameraToolsAPIManager.IsAvailable)
+            {
+                float playbackDt = 1.0f / PlaybackFPS;
+                CameraToolsAPIManager.PhysicsStepUpdate(physicsDeltaTime, playbackDt);
+            }
+        }
+        /// <summary>
+        /// Begins deterministic capture with specified simulation and playback parameters.
+        /// Creates capture runner GameObject and initializes zoom controller.
+        /// </summary>
         public static void Run(
             int simulationFps,
             int playbackFps,
@@ -109,7 +133,7 @@ namespace CinematicRecorder.Core
             IsRunning = true;
             StopRequested = false;
 
-            // NEW: Determine unlimited mode and set targets accordingly
+            // Determine unlimited mode and set targets accordingly
             IsUnlimitedMode = durationSeconds <= 0;
             if (IsUnlimitedMode)
             {
@@ -130,7 +154,7 @@ namespace CinematicRecorder.Core
             CapturedFrames = 0;
             CaptureFPS = 0f;
 
-            // NEW: Initialize Time Scale State
+            // Initialize Time Scale State
             OriginalSimulationFps = simulationFps;
             CurrentTimeScale = 1.0f;
             TargetTimeScale = 1.0f;
@@ -157,9 +181,26 @@ namespace CinematicRecorder.Core
 
             Directory.CreateDirectory(outputDir);
 
-            string outputPath = Path.Combine(
-                outputDir,
-                $"Cinematic_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.mkv");
+            string baseName = $"Cinematic_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}";
+            string outputPath;
+
+            if (SessionState.PngSequence)
+            {
+                // PNG Sequence: Create a directory named after what would have been the video file
+                outputPath = Path.Combine(outputDir, baseName);
+                Directory.CreateDirectory(outputPath);
+                UnityEngine.Debug.Log($"[DeterministicCaptureSession] PNG Sequence mode - output directory: {outputPath}");
+            }
+            else
+            {
+                // Video mode: Standard MKV file path
+                outputPath = Path.Combine(outputDir, $"{baseName}.mkv");
+            }
+
+            // Force software encoding and disable zero-copy for PNG mode 
+            // (hardware encoders can't output PNGs, and we need the CPU readback pathway)
+            bool effectiveForceSoftware = forceSoftwareEncoding || SessionState.PngSequence;
+            bool effectiveZeroCopy = useGpuZeroCopy && !SessionState.PngSequence;
 
             var controller = new OfflineCaptureController(
                 cam,
@@ -177,16 +218,13 @@ namespace CinematicRecorder.Core
 
             var captureRunner = runner.AddComponent<CaptureRunner>();
 
-            // NEW: Fire recording started event
+            ActiveZoomController = runner.AddComponent<DeterministicZoomController>();
+
+            TakeControlOfActivePathingCamera(playbackFps);
             OnRecordingStarted?.Invoke();
 
             captureRunner.StartCoroutine(RunAndCleanup(controller, runner));
         }
-
-        // ============================================================
-        // NEW: Public API Methods for Mod Access
-        // ============================================================
-
         /// <summary>Request 10,000 FPS Kraken time (1% speed)</summary>
         public static void RequestKrakenTime() =>
             SetTargetTimeScale(KRAKEN_TIME_SCALE);
@@ -220,11 +258,117 @@ namespace CinematicRecorder.Core
                     TransitionDirection.Slowing : TransitionDirection.Resuming;
             }
         }
+        /// <summary>
+        /// Increases recording duration mid-capture. Silently ignored in unlimited mode.
+        /// </summary>
+        public static void ExtendDuration(float additionalSeconds)
+        {
+            if (!IsRunning)
+                return;
 
-        // ============================================================
-        // NEW: Internal Time Scale Update Logic
-        // ============================================================
+            // Silently ignore extension requests in unlimited mode
+            if (IsUnlimitedMode)
+                return;
 
+            TargetSeconds += additionalSeconds;
+            TargetFrames = Mathf.RoundToInt(TargetSeconds * SimulationFPS);
+
+            UnityEngine.Debug.Log(
+                $"[DeterministicCaptureSession] Duration extended by {additionalSeconds}s → {TargetSeconds}s");
+        }
+        /// <summary>
+        /// Signals the capture loop to finish after current frame. Idempotent.
+        /// </summary>
+        public static void RequestStop()
+        {
+            if (!IsRunning || StopRequested)
+                return;
+
+            StopRequested = true;
+            UnityEngine.Debug.Log("[DeterministicCaptureSession] Stop requested");
+        }
+        public static void EndSession()
+        {
+            IsRunning = false;
+            StopRequested = false;
+            IsUnlimitedMode = false; // Reset unlimited flag
+
+            CapturedSeconds = 0f;
+            CapturedFrames = 0;
+            CaptureFPS = 0f;
+            TargetSeconds = 0f;
+            TargetFrames = 0;
+
+            realWorldTimer?.Stop();
+            realWorldTimer = null;
+
+            ActiveZoomController = null;
+
+            // Reset time scale state
+            CurrentTimeScale = 1.0f;
+            TargetTimeScale = 1.0f;
+            IsTransitioning = false;
+            CurrentTransitionDirection = TransitionDirection.None;
+            AccumulatedSimulatedSeconds = 0f;
+        }
+        public static void UpdateProgress(int frames, float seconds, float fps)
+        {
+            CapturedFrames = frames;
+            CapturedSeconds = seconds;
+            CaptureFPS = fps;
+        }
+        #endregion
+        #region Internal Implementation
+        /// <summary>
+        /// If a CameraTools pathing camera is already active when recording starts,
+        /// enable deterministic control and capture current path progress without jumping.
+        /// </summary>
+        private static void TakeControlOfActivePathingCamera(int playbackFps)
+        {
+            if (!CameraToolsAPIManager.IsAvailable)
+                return;
+
+            // Check if CT is active and in pathing mode
+            if (!CameraToolsAPIManager.IsCameraActive())
+                return;
+
+            var currentMode = CameraToolsAPIManager.GetToolMode();
+            if (currentMode != ToolModes.Pathing)
+                return;
+
+            // Get current state - this populates internal _lastState for helper methods
+            var state = CameraToolsAPIManager.GetCurrentState();
+            if (state == null)
+                return;
+
+            // Get state values via API helper methods (state is object, not typed)
+            bool isPlayingPath = CameraToolsAPIManager.GetIsPlayingPathFromState();
+            float currentPathTime = CameraToolsAPIManager.GetCurrentPathTime();
+
+            UnityEngine.Debug.Log($"[DeterministicCaptureSession] Taking control of active pathing camera. " +
+                $"IsPlaying: {isPlayingPath}, CurrentTime: {currentPathTime}s");
+
+            // Configure timing mode based on slot settings
+            bool usePlaybackTiming = false;
+            var activeSlot = CinematicCameraManager.Instance.ActiveSlot;
+            if (activeSlot?.isCameraToolsSlot == true && activeSlot.ctSettings != null)
+            {
+                usePlaybackTiming = activeSlot.ctSettings.LockPathingToPlaybackRate;
+            }
+
+            CameraToolsAPIManager.SetLockPathingToPlaybackRate(usePlaybackTiming);
+
+            //  Enable deterministic control - captures current elapsed time if playing
+            CameraToolsAPIManager.SetCinematicRecorderControl(enabled: true, deterministicMode: true);
+
+            UnityEngine.Debug.Log("[DeterministicCaptureSession] Deterministic control enabled for pathing camera");
+
+            // Only start playback if not already playing
+            if (!isPlayingPath)
+            {
+                CameraToolsAPIManager.StartPathPlayback();
+            }
+        }
         /// <summary>Call each physics frame to interpolate time scale</summary>
         internal static void UpdateTimeScale()
         {
@@ -262,7 +406,6 @@ namespace CinematicRecorder.Core
 
             OnTimeScaleChanged?.Invoke(CurrentTimeScale);
         }
-
         /// <summary>Calculate simulation FPS based on current time scale</summary>
         internal static float GetCurrentSimulationFps()
         {
@@ -272,32 +415,6 @@ namespace CinematicRecorder.Core
             // Use original requested FPS as the base, not PlaybackFPS
             return OriginalSimulationFps / CurrentTimeScale;
         }
-
-        public static void ExtendDuration(float additionalSeconds)
-        {
-            if (!IsRunning)
-                return;
-
-            // NEW: Silently ignore extension requests in unlimited mode
-            if (IsUnlimitedMode)
-                return;
-
-            TargetSeconds += additionalSeconds;
-            TargetFrames = Mathf.RoundToInt(TargetSeconds * SimulationFPS);
-
-            UnityEngine.Debug.Log(
-                $"[DeterministicCaptureSession] Duration extended by {additionalSeconds}s → {TargetSeconds}s");
-        }
-
-        public static void RequestStop()
-        {
-            if (!IsRunning || StopRequested)
-                return;
-
-            StopRequested = true;
-            UnityEngine.Debug.Log("[DeterministicCaptureSession] Stop requested");
-        }
-
         private static IEnumerator RunAndCleanup(
             OfflineCaptureController controller,
             GameObject runner)
@@ -306,7 +423,7 @@ namespace CinematicRecorder.Core
 
             // Capture final stats BEFORE reset
             int finalFrames = CapturedFrames;
-            float finalSimSeconds = AccumulatedSimulatedSeconds; // MODIFIED: Use accumulated instead of CapturedSeconds
+            float finalSimSeconds = AccumulatedSimulatedSeconds; // Use accumulated instead of CapturedSeconds
             float finalRealSeconds = (float)realWorldTimer.Elapsed.TotalSeconds;
 
             // Output duration is based on playback FPS
@@ -329,9 +446,9 @@ namespace CinematicRecorder.Core
                 finalRealSeconds,
                 encodingMode,
                 outputPath,
-                IsUnlimitedMode); // NEW: Pass unlimited flag
+                IsUnlimitedMode); // Pass unlimited flag
 
-            // NEW: Fire stopped event before cleanup
+            // Fire stopped event before cleanup
             OnRecordingStopped?.Invoke();
 
             EndSession();
@@ -339,7 +456,6 @@ namespace CinematicRecorder.Core
             UnityEngine.Object.Destroy(runner);
             UnityEngine.Debug.Log("[DeterministicCaptureSession] Capture completed");
         }
-
         private static void ShowFinalReport(
             int frames,
             float simulatedSeconds,
@@ -347,7 +463,7 @@ namespace CinematicRecorder.Core
             float realWorldSeconds,
             string encodingMode,
             string outputPath,
-            bool wasUnlimited) // NEW: Parameter to indicate unlimited recording
+            bool wasUnlimited) // Parameter to indicate unlimited recording
         {
             FinalReportWindow report = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
 
@@ -365,38 +481,8 @@ namespace CinematicRecorder.Core
                 realWorldSeconds,
                 encodingMode,
                 outputPath,
-                wasUnlimited); // NEW: Pass flag
+                wasUnlimited); // Pass flag
         }
-
-        public static void EndSession()
-        {
-            IsRunning = false;
-            StopRequested = false;
-            IsUnlimitedMode = false; // NEW: Reset unlimited flag
-
-            CapturedSeconds = 0f;
-            CapturedFrames = 0;
-            CaptureFPS = 0f;
-            TargetSeconds = 0f;
-            TargetFrames = 0;
-
-            realWorldTimer?.Stop();
-            realWorldTimer = null;
-
-            // NEW: Reset time scale state
-            CurrentTimeScale = 1.0f;
-            TargetTimeScale = 1.0f;
-            IsTransitioning = false;
-            CurrentTransitionDirection = TransitionDirection.None;
-            AccumulatedSimulatedSeconds = 0f;
-        }
-
-        // Called by controller
-        public static void UpdateProgress(int frames, float seconds, float fps)
-        {
-            CapturedFrames = frames;
-            CapturedSeconds = seconds;
-            CaptureFPS = fps;
-        }
+        #endregion
     }
 }
