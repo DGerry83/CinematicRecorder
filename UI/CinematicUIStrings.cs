@@ -98,6 +98,7 @@
             public const string EnableAudioLabel = " Enable Audio Capture";
             public const string AudioTooltip = "Records synchronized WAV audio alongside video. Does not work above 48fps capture rates.";
             public const string AudioDisabledScreenMsg = "Audio capture disabled: max 48fps";
+
         }
 
         public static class Recording
@@ -249,6 +250,10 @@
             public const string OpeningFolderLog = "[CinematicRecorder] Opening folder: {0}";
             public const string CannotOpenFolderLog = "[CinematicRecorder] Cannot open folder, directory not found: {0}";
             public const string FailedToOpenFolderLog = "[CinematicRecorder] Failed to open folder: {0}";
+            public const string MuxAudioButton = "Mux Audio";
+            public const string MuxingInProgress = "Muxing...";
+            public const string MuxingComplete = "Muxing complete!";
+            public const string FfmpegNotFound = "FFmpeg not found";
         }
 
         public static class CurveDescriptions

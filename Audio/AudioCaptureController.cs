@@ -222,7 +222,7 @@ namespace CinematicRecorder.Audio
                     float v2 = (-0.5f * p0) + (0.5f * p2);
                     float v3 = p1;
 
-                    output[i] = (v0 * frac3) + (v1 * frac2) + (v2 * frac) + v3;
+                    output[i] = ((v0 * frac3) + (v1 * frac2) + (v2 * frac) + v3) * AudioListener.volume;
                 }
 
                 _encoder.AddSamples(output);

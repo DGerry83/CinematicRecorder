@@ -147,6 +147,12 @@ namespace CinematicRecorder.UI
         }
         private void StartRecording()
         {
+            // Close any open report windows from previous recordings
+            FinalReportWindow existingReport = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
+            if (existingReport != null && existingReport.IsVisible)
+            {
+                existingReport.HideReport();
+            }
             stopRequested = false;
             int simFps = frameratePresets[SessionState.SimFpsIndex];
             int playbackFps = frameratePresets[SessionState.PlaybackFpsIndex];

@@ -12,6 +12,9 @@ namespace CinematicRecorder.Core
 {
     public static class DeterministicCaptureSession
     {
+        #region Fields
+        private static string _ffmpegPath;
+        #endregion
         #region Session State
         private static volatile bool _isRunning;
         public static bool IsRunning
@@ -130,6 +133,13 @@ namespace CinematicRecorder.Core
         {
             if (IsRunning)
                 return;
+
+            _ffmpegPath = Path.Combine(Path.GetDirectoryName(typeof(DeterministicCaptureSession).Assembly.Location),"..", "PluginData", "FFMpeg", "ffmpeg.exe");
+
+            if (!File.Exists(_ffmpegPath))
+            {
+                _ffmpegPath = null; // Will check in UI
+            }
 
             IsRunning = true;
             StopRequested = false;
@@ -469,7 +479,8 @@ namespace CinematicRecorder.Core
                 encodingMode,
                 outputPath,
                 audioPath,
-                IsUnlimitedMode); // Pass unlimited flag
+                IsUnlimitedMode,
+                _ffmpegPath); // Pass unlimited flag
 
             // Fire stopped event before cleanup
             OnRecordingStopped?.Invoke();
@@ -487,7 +498,8 @@ namespace CinematicRecorder.Core
             string encodingMode,
             string outputPath,
             string audioPath,
-            bool wasUnlimited) // Parameter to indicate unlimited recording
+            bool wasUnlimited,
+            string ffmpegPath) // Parameter to indicate unlimited recording
         {
             FinalReportWindow report = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
 
@@ -506,7 +518,8 @@ namespace CinematicRecorder.Core
                 encodingMode,
                 outputPath,
                 audioPath,
-                wasUnlimited); // Pass flag
+                wasUnlimited,
+                ffmpegPath); // Pass flag
         }
         #endregion
     }
