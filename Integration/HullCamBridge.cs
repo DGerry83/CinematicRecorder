@@ -8,6 +8,7 @@ namespace CinematicRecorder.Integration
 {
     public static class HullCamBridge
     {
+        #region Fields
         private static Type s_HullCamType;
         private static MethodInfo s_ActivateMethod;
         private static MethodInfo s_RestoreMethod;
@@ -16,18 +17,11 @@ namespace CinematicRecorder.Integration
         private static FieldInfo s_CamEnabledField;
         private static FieldInfo s_CameraNameField;
 
-        //FOV Controls
         private static FieldInfo s_CameraFoVField;
         private static FieldInfo s_CameraFoVMinField;
         private static FieldInfo s_CameraFoVMaxField;
-
-        public static bool IsAvailable => s_HullCamType != null;
-
-        static HullCamBridge()
-        {
-            Initialize();
-        }
-
+        #endregion
+        #region Static Initialization
         private static void Initialize()
         {
             try
@@ -60,7 +54,13 @@ namespace CinematicRecorder.Integration
                 s_HullCamType = null;
             }
         }
-
+        static HullCamBridge()
+        {
+            Initialize();
+        }
+        #endregion
+        #region Public API
+        public static bool IsAvailable => s_HullCamType != null;
         public static void Activate(object cam)
         {
             if (!IsAvailable || cam == null || s_ActivateMethod == null) return;
@@ -75,7 +75,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError($"[HullCamBridge] Activate failed: {ex.Message}");
             }
         }
-
         public static void RestoreMain()
         {
             if (!IsAvailable || s_RestoreMethod == null) return;
@@ -89,33 +88,44 @@ namespace CinematicRecorder.Integration
                 Debug.LogError("[HullCamBridge] RestoreMain failed: " + ex.Message);
             }
         }
-
         public static object GetCurrentCamera()
         {
             if (!IsAvailable || s_CurrentCameraField == null) return null;
-            return s_CurrentCameraField.GetValue(null);
+            try
+            {
+                return s_CurrentCameraField.GetValue(null);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCurrentCamera (field.GetValue) failed: {ex.Message}");
+                return null;
+            }
         }
-
         public static bool IsAnyCameraActive()
         {
             return GetCurrentCamera() != null;
         }
-
         public static IEnumerable<object> GetAllCameras()
         {
             if (!IsAvailable || s_CamerasField == null)
                 return Enumerable.Empty<object>();
 
-            var list = s_CamerasField.GetValue(null) as System.Collections.IEnumerable;
-            return list?.Cast<object>() ?? Enumerable.Empty<object>();
+            try
+            {
+                var list = s_CamerasField.GetValue(null) as System.Collections.IEnumerable;
+                return list?.Cast<object>() ?? Enumerable.Empty<object>();
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetAllCameras reflection failed: {ex.Message}");
+                return Enumerable.Empty<object>();
+            }
         }
-
         public static bool IsCameraActive(object cam)
         {
             if (cam == null) return false;
             return ReferenceEquals(cam, GetCurrentCamera());
         }
-
         public static bool IsCameraAvailable(object cam)
         {
             if (cam == null || s_CamEnabledField == null) return false;
@@ -134,45 +144,83 @@ namespace CinematicRecorder.Integration
 
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                UnityEngine.Debug.LogError($"[HullCamBridge] IsCameraAvailable reflection failed for {cam}: {ex.Message}");
                 return false;
             }
         }
-
-        //Camera FOV Controls
-
         public static float GetCameraFoV(object cam)
         {
             if (cam == null || s_CameraFoVField == null) return 60f;
-            return (float)(s_CameraFoVField.GetValue(cam) ?? 60f);
+            try
+            {
+                return (float)(s_CameraFoVField.GetValue(cam) ?? 60f);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraFoV (field.GetValue) failed for {cam}: {ex.Message}");
+                return 60f;
+            }
         }
-
         public static void SetCameraFoV(object cam, float fov)
         {
             if (cam == null || s_CameraFoVField == null) return;
-            float min = GetCameraFoVMin(cam);
-            float max = GetCameraFoVMax(cam);
-            s_CameraFoVField.SetValue(cam, Mathf.Clamp(fov, min, max));
+            try
+            {
+                float min = GetCameraFoVMin(cam);
+                float max = GetCameraFoVMax(cam);
+                s_CameraFoVField.SetValue(cam, Mathf.Clamp(fov, min, max));
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] SetCameraFoV (field.SetValue) failed for {cam}: {ex.Message}");
+            }
         }
-
-        public static float GetCameraFoVMin(object cam) =>
-            cam != null && s_CameraFoVMinField != null ? (float)s_CameraFoVMinField.GetValue(cam) : 10f;
-
-        public static float GetCameraFoVMax(object cam) =>
-            cam != null && s_CameraFoVMaxField != null ? (float)s_CameraFoVMaxField.GetValue(cam) : 120f;
-
+        public static float GetCameraFoVMin(object cam)
+        {
+            if (cam == null || s_CameraFoVMinField == null) return 10f;
+            try
+            {
+                return (float)s_CameraFoVMinField.GetValue(cam);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraFoVMin (field.GetValue) failed for {cam}: {ex.Message}");
+                return 10f;
+            }
+        }
+        public static float GetCameraFoVMax(object cam)
+        {
+            if (cam == null || s_CameraFoVMaxField == null) return 120f;
+            try
+            {
+                return (float)s_CameraFoVMaxField.GetValue(cam);
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraFoVMax (field.GetValue) failed for {cam}: {ex.Message}");
+                return 120f;
+            }
+        }
         public static Transform GetCameraTransform(object cam)
         {
             if (cam == null) return null;
             var comp = cam as Component;
             return comp?.transform;
         }
-
         public static string GetCameraName(object cam)
         {
             if (cam == null || s_CameraNameField == null) return "Unknown";
-            return s_CameraNameField.GetValue(cam) as string ?? "Unknown";
+            try
+            {
+                return s_CameraNameField.GetValue(cam) as string ?? "Unknown";
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[HullCamBridge] GetCameraName (field.GetValue) failed for {cam}: {ex.Message}");
+                return "Unknown";
+            }
         }
 
         /// <summary>
@@ -217,7 +265,6 @@ namespace CinematicRecorder.Integration
 
             return null;
         }
-
         public static void ClearHullCamStaticState()
         {
             if (s_HullCamType == null) return;
@@ -267,61 +314,6 @@ namespace CinematicRecorder.Integration
                 Debug.LogError("[HullCamBridge] Emergency reset failed: " + ex);
             }
         }
-    }
-
-    [Serializable]
-    public class CameraSlot
-    {
-        public string buttonID;
-        public string cameraName;
-        public uint partPersistentId;
-        public string vesselId;
-        public bool allowAnyVessel;
-
-        public SlotStatus GetStatus(Vessel currentVessel = null)
-        {
-            if (!HullCamBridge.IsAvailable) return SlotStatus.Unavailable;
-
-            // Gray: No assignment
-            if (partPersistentId == 0 && string.IsNullOrEmpty(cameraName))
-                return SlotStatus.Unassigned;
-
-            var cam = HullCamBridge.ResolveCameraSlot(this, currentVessel);
-
-            // Red: Assigned but not found or destroyed
-            if (cam == null)
-                return SlotStatus.Unavailable;
-
-            if (!HullCamBridge.IsCameraAvailable(cam))
-                return SlotStatus.Unavailable;
-
-            // Green: Currently viewing
-            if (HullCamBridge.IsCameraActive(cam))
-                return SlotStatus.Active;
-
-            // Aqua: Different vessel but still usable (add this check)
-            if (currentVessel != null)
-            {
-                Component comp = cam as Component;
-                if (comp != null)
-                {
-                    Part part = comp.GetComponentInParent<Part>();
-                    if (part != null && part.vessel != null && part.vessel != currentVessel)
-                        return SlotStatus.Remote;
-                }
-            }
-
-            // Yellow: Assigned, available, on this vessel, but inactive
-            return SlotStatus.Assigned;
-        }
-
-        public enum SlotStatus
-        {
-            Unassigned,
-            Assigned,
-            Active,
-            Remote,
-            Unavailable
-        }
+        #endregion
     }
 }

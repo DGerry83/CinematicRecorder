@@ -8,37 +8,42 @@ using CinematicRecorder.Core;
 
 namespace CinematicRecorder.Capture
 {
+    /// <summary>
+    /// Manages deterministic offline rendering with physics timestep control and hardware encoding.
+    /// </summary>
     public sealed class OfflineCaptureController
     {
+        #region Fields
         private readonly Camera camera;
         private readonly int width;
         private readonly int height;
         private readonly int playbackFps;
         private readonly string outputPath;
         private readonly bool useGpuZeroCopy;
+
         private AmfZeroCopyEncoder zeroCopyEncoder;
         private bool usingZeroCopyPath;
         private GraphicsFence prevFence;
+        private NvencZeroCopyEncoder nvencZeroCopyEncoder;
+        private bool usingNvencPath;
 
-        // Sim speed tracking (rolling window)
         private const int SimSpeedWindowFrames = 5;
         private int framesSinceSpeedSample = 0;
         private float realTimeAtLastSample;
 
-        // NEW: Dynamic simulation state
+
         private float simFrameDelta;  // Current physics step size, updated each frame
-        private int frameIndex;       // Sequential counter for encoder (0, 1, 2...)
+        private int frameIndex;       
         private float startTime;
 
-        private RenderTexture[] renderTextures; // Double-buffered: [0] and [1]
+        private RenderTexture[] renderTextures;
         private Texture2D readbackTexture;
         private HardwareEncoder encoder;
         private CommandBuffer captureBuffer;
 
-        // Track actual frames captured for final report
         private int actualCapturedFrames = 0;
-        public string OutputPath => outputPath;
-
+        #endregion
+        #region Constructor
         public OfflineCaptureController(
                     Camera camera,
                     int width,
@@ -63,10 +68,16 @@ namespace CinematicRecorder.Capture
                 ForceSoftwareEncoding = forceSoftwareEncoding
             };
         }
-
+        // OfflineCaptureController constructor
+        #endregion
+        #region Public API
+        public string OutputPath => outputPath;
+        /// <summary>
+        /// Primary coroutine that manages the full capture lifecycle: initialization, capture loop, and finalization.
+        /// Restores original time settings in finally block to ensure game state is preserved.
+        /// </summary>
         public IEnumerator RunCoroutine()
         {
-            // Store original values for restoration
             float originalFixedDelta = Time.fixedDeltaTime;
             float originalMaxDelta = Time.maximumDeltaTime;
             int originalCaptureFramerate = Time.captureFramerate;
@@ -74,13 +85,8 @@ namespace CinematicRecorder.Capture
 
             try
             {
-                // Phase 1: Setup
                 yield return InitializeCaptureSession();
-
-                // Phase 2: Main capture loop (dynamic time scale)
                 yield return RunCaptureLoop();
-
-                // Phase 3: Drain encoder queues
                 yield return FinalizeEncoding();
             }
             finally
@@ -88,17 +94,21 @@ namespace CinematicRecorder.Capture
                 Cleanup(originalFixedDelta, originalMaxDelta, originalCaptureFramerate, originalPlanetariumDelta);
             }
         }
-
+        #endregion
+        #region Capture Session
+        /// <summary>
+        /// Ramps physics timestep from current to target over multiple frames to avoid physics explosions.
+        /// Configures double-buffered render targets and initializes appropriate encoder.
+        /// </summary>
         private IEnumerator InitializeCaptureSession()
         {
             startTime = Time.realtimeSinceStartup;
             actualCapturedFrames = 0;
             frameIndex = 0;
 
-            // Enable override IMMEDIATELY so we can go below 0.02s
             TimeWarp_FixedDeltaTime_Patch.IsOverridden = true;
 
-            // RAMP IN: Linear ramp from current physics step to target
+            // Linear ramp from current physics step to target
             float currentDelta = Time.fixedDeltaTime;
             float targetSimFps = DeterministicCaptureSession.GetCurrentSimulationFps();
             float targetDelta = 1f / targetSimFps;
@@ -117,7 +127,8 @@ namespace CinematicRecorder.Capture
                 TimeWarp_FixedDeltaTime_Patch.OverrideValue = currentDelta;
                 Time.fixedDeltaTime = currentDelta;
                 Time.maximumDeltaTime = currentDelta;
-                Planetarium.fetch.fixedDeltaTime = currentDelta;
+                if (Planetarium.fetch != null)
+                    Planetarium.fetch.fixedDeltaTime = currentDelta;
 
                 yield return null; // One frame per step
             }
@@ -139,14 +150,16 @@ namespace CinematicRecorder.Capture
 
             yield break;
         }
-
+        /// <summary>
+        /// Main capture loop supporting both limited duration and unlimited (manual stop) modes.
+        /// Updates physics timestep dynamically based on SessionState time scale changes.
+        /// </summary>
         private IEnumerator RunCaptureLoop()
         {
             framesSinceSpeedSample = 0;
-            // NEW: Check unlimited mode for loop condition
             bool isUnlimited = DeterministicCaptureSession.IsUnlimitedMode;
 
-            // MODIFIED: While-loop supports both unlimited and limited modes
+            // While-loop supports both unlimited and limited modes
             while (true)
             {
                 // Check stop request first (works for both modes)
@@ -156,32 +169,28 @@ namespace CinematicRecorder.Capture
                     break;
                 }
 
-                // MODIFIED: For limited mode, check if we've reached target duration
+                // For limited mode, check if we've reached target duration
                 if (!isUnlimited && DeterministicCaptureSession.AccumulatedSimulatedSeconds > DeterministicCaptureSession.TargetSeconds + 0.0001f)
                     break;
 
-                // NEW: Step 1 - Update time scale ramping (smooth transitions)
                 DeterministicCaptureSession.UpdateTimeScale();
 
-                // NEW: Step 2 - Calculate current simulation FPS based on time scale
                 float currentSimFps = DeterministicCaptureSession.GetCurrentSimulationFps();
 
-                // NEW: Step 3 - Update physics timestep for THIS frame
                 simFrameDelta = 1f / currentSimFps;
                 Time.fixedDeltaTime = simFrameDelta;
                 Time.maximumDeltaTime = simFrameDelta;
                 Time.captureFramerate = Mathf.RoundToInt(currentSimFps);
                 TimeWarp_FixedDeltaTime_Patch.OverrideValue = simFrameDelta;
-                Planetarium.fetch.fixedDeltaTime = simFrameDelta;
+                if (Planetarium.fetch != null)
+                    Planetarium.fetch.fixedDeltaTime = simFrameDelta;
 
-                // NEW: Safety clamp to prevent infinite loops or divide-by-zero
                 if (simFrameDelta < 0.0001f)
                 {
                     UnityEngine.Debug.LogError("[OfflineCapture] Sim frame delta too small, clamping to 0.0001s");
                     simFrameDelta = 0.0001f;
                 }
 
-                // Step 4 - Capture frame with sequential index
                 if (usingZeroCopyPath)
                 {
                     yield return CaptureFrameZeroCopy(frameIndex);
@@ -191,17 +200,16 @@ namespace CinematicRecorder.Capture
                     yield return CaptureFrameStandard();
                 }
 
-                // NEW: Step 5 - Increment accumulated simulated time
                 DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
 
-                // Step 6 - Update progress (using accumulated time for seconds)
+                DeterministicCaptureSession.InvokeOnPhysicsStepped(simFrameDelta);
+
                 DeterministicCaptureSession.UpdateProgress(
                     actualCapturedFrames,
                     DeterministicCaptureSession.AccumulatedSimulatedSeconds,
                     DeterministicCaptureSession.CaptureFPS
                 );
 
-                // Rolling FPS calculation (real-world performance metric)
                 framesSinceSpeedSample++;
                 if (framesSinceSpeedSample >= SimSpeedWindowFrames)
                 {
@@ -213,11 +221,15 @@ namespace CinematicRecorder.Capture
                     framesSinceSpeedSample = 0;
                 }
 
-                // Step 7 - Sequential frame index for next iteration
                 frameIndex++;
             }
         }
-
+        #endregion
+        #region Frame Capture
+        /// <summary>
+        /// Zero-copy capture path using GPU texture handles. Double-buffers render textures to pipeline
+        /// rendering and encoding asynchronously.
+        /// </summary>
         private IEnumerator CaptureFrameZeroCopy(int frameIndex)
         {
             int renderIdx = frameIndex % 2;
@@ -228,18 +240,30 @@ namespace CinematicRecorder.Capture
 
             yield return new WaitForEndOfFrame();
 
-            // Encode previous frame (frameIndex - 1) 
+            // Encode previous frame
             if (frameIndex > 0)
             {
                 Graphics.WaitOnAsyncGraphicsFence(prevFence);
                 IntPtr nativeTexPtr = renderTextures[encodeIdx].GetNativeTexturePtr();
-                zeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+
+                // Route to active zero-copy encoder
+                if (usingNvencPath && nvencZeroCopyEncoder != null)
+                {
+                    nvencZeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                }
+                else if (usingZeroCopyPath && zeroCopyEncoder != null) // AMF
+                {
+                    zeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                }
+
                 actualCapturedFrames++;
             }
 
             prevFence = captureBuffer.CreateAsyncGraphicsFence();
         }
-
+        /// <summary>
+        /// Standard CPU readback path using Texture2D.ReadPixels. Slower but universally compatible.
+        /// </summary>
         private IEnumerator CaptureFrameStandard()
         {
             yield return new WaitForEndOfFrame();
@@ -249,16 +273,29 @@ namespace CinematicRecorder.Capture
             readbackTexture.Apply(false, false);
             RenderTexture.active = null;
 
-            NativeArray<byte> data = new NativeArray<byte>(
-                readbackTexture.GetRawTextureData<byte>(),
-                Allocator.Persistent
-            );
-            encoder.EncodeFrame(data);
+            if (SessionState.PngSequence)
+            {
+                // PNG Mode: Encode to PNG and write to disk synchronously
+                byte[] pngData = readbackTexture.EncodeToPNG();
+                string frameFileName = Path.Combine(outputPath, $"frame_{actualCapturedFrames + 1:D6}.png");
+                File.WriteAllBytes(frameFileName, pngData);
+            }
+            else
+            {
+                // Video Mode: Send to hardware encoder
+                NativeArray<byte> data = new NativeArray<byte>(
+                    readbackTexture.GetRawTextureData<byte>(),
+                    Allocator.Persistent
+                );
+                encoder.EncodeFrame(data);
+            }
 
             actualCapturedFrames++;
             yield break;
         }
-
+        /// <summary>
+        /// Encodes the final pending frame from the zero-copy double buffer and logs capture statistics.
+        /// </summary>
         private IEnumerator FinalizeEncoding()
         {
             // Encode final buffered frame for zero-copy path
@@ -274,7 +311,8 @@ namespace CinematicRecorder.Capture
                 $"({DeterministicCaptureSession.AccumulatedSimulatedSeconds:F2}s simulated)");
             yield break;
         }
-
+        #endregion
+        #region Encoder Setup
         private void SetupRenderTargets()
         {
             readbackTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
@@ -326,61 +364,138 @@ namespace CinematicRecorder.Capture
                 );
             }
         }
-
+        /// <summary>
+        /// Selects and initializes the best available encoder: NVENC Zero-Copy -> AMF Zero-Copy -> Standard Hardware -> CPU.
+        /// </summary>
         private void SetupEncoder()
         {
-            usingZeroCopyPath = useGpuZeroCopy;
-
-            if (usingZeroCopyPath)
+            // >>> CRITICAL FIX: PNG Sequence mode must skip ALL video encoder initialization
+            if (SessionState.PngSequence)
             {
-                IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();
-
-                zeroCopyEncoder = new AmfZeroCopyEncoder();
-
-                // Build AMF settings from SessionState
-                var amfSettings = new AmfZeroCopyEncoder.AmfEncoderSettings
-                {
-                    RateControlMode = SessionState.AmfRateControlMode,
-                    TargetBitrateKbps = SessionState.AmfTargetBitrate * 1000,
-                    QpI = SessionState.AmfCqpValue,
-                    QpP = SessionState.AmfCqpValue + 2,
-                    QpB = SessionState.AmfCqpValue + 4,
-                    QualityPreset = SessionState.AmfEncoderSpeed,
-                    Codec = 1,  // HEVC
-                    GopSize = playbackFps * 2,
-                    EnableVbaq = 1,
-                    UseBlueNoiseDither = SessionState.AmfUseBlueNoiseDither ? 1 : 0,  // NEW
-                };
-
-                if (!zeroCopyEncoder.Initialize(
-                    width,
-                    height,
-                    playbackFps,
-                    outputPath,
-                    firstTexturePtr,
-                    amfSettings))  // Pass the settings struct
-                {
-                    UnityEngine.Debug.LogError("[OfflineCapture] Zero-copy encoder failed to init, " +
-                        "falling back to standard hardware encoder");
-                    usingZeroCopyPath = false;
-                }
-                else
-                {
-                    UnityEngine.Debug.Log("[OfflineCapture] Using GPU Zero-Copy encoding path with " +
-                        $"RC={amfSettings.RateControlMode}, Bitrate={amfSettings.TargetBitrateKbps}kbps");
-
-                    if (camera != null)
-                        camera.targetTexture = null;
-
-                    return;
-                }
+                UnityEngine.Debug.Log("[OfflineCapture] PNG Sequence mode active - skipping video encoder initialization");
+                usingZeroCopyPath = false;
+                usingNvencPath = false;
+                // Do NOT initialize 'encoder' at all - we won't use it
+                return;
             }
 
-            // Standard path (existing behavior)
-            if (!encoder.Initialize(width, height, playbackFps, outputPath))
-                throw new Exception("Failed to initialize encoder");
-        }
+            // Only proceed with video encoder setup if NOT in PNG mode
+            if (!useGpuZeroCopy)
+            {
+                // CPU/Software path only
+                InitCpuEncoder();
+                return;
+            }
 
+            // GPU Zero-Copy Priority: NVENC -> AMF -> CPU
+            if (TryInitNvenc())
+            {
+                Debug.Log("[OfflineCapture] Using NVENC Zero-Copy path");
+                return;
+            }
+
+            if (TryInitAmf())
+            {
+                Debug.Log("[OfflineCapture] Using AMF Zero-Copy path");
+                return;
+            }
+
+            Debug.Log("[OfflineCapture] GPU zero-copy unavailable, attempting standard hardware encoder...");
+            if (encoder.Initialize(width, height, playbackFps, outputPath))
+            {
+                usingZeroCopyPath = false;
+                return;
+            }
+
+            Debug.LogWarning("[OfflineCapture] All hardware encoders failed, falling back to CPU");
+            InitCpuEncoder();
+        }
+        /// <summary>
+        /// Attempts to initialize NVENC zero-copy encoder. Fails gracefully on non-NVIDIA systems.
+        /// </summary>
+        private bool TryInitNvenc()
+        {
+            // Quick check: Only try NVENC if we have a chance (avoid log spam on AMD systems)
+            // This checks for nvEncodeAPI64.dll presence via native code, but we can also check here
+            // by attempting a dummy load, or just let the native code handle it gracefully.
+
+            nvencZeroCopyEncoder = new NvencZeroCopyEncoder();
+
+            var settings = new NvencZeroCopyEncoder.NvencEncoderSettings
+            {
+                RateControlMode = SessionState.NvencRateControlMode,
+                TargetBitrateKbps = SessionState.NvencTargetBitrate,
+                QpI = SessionState.NvencCqValue,
+                QpP = SessionState.NvencCqValue,  // NVENC CQP uses same QP for I/P usually, or P+2
+                QpB = SessionState.NvencCqValue + 2,
+                QualityPreset = SessionState.NvencPreset, // 0,1,2 maps to P1,P4,P7
+                Codec = 1, // HEVC primary
+                GopSize = playbackFps * 2,
+                Reserved1 = 0,
+                Reserved2 = 0
+            };
+
+            IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();
+
+            if (!nvencZeroCopyEncoder.Initialize(width, height, playbackFps, outputPath, firstTexturePtr, settings))
+            {
+                Debug.LogWarning("[OfflineCapture] NVENC initialization failed (expected on non-NVIDIA systems)");
+                nvencZeroCopyEncoder.Dispose();
+                nvencZeroCopyEncoder = null;
+                return false;
+            }
+
+            usingNvencPath = true;
+            usingZeroCopyPath = true;
+
+            if (camera != null)
+                camera.targetTexture = null;
+
+            return true;
+        }
+        /// <summary>
+        /// Attempts to initialize AMF zero-copy encoder for AMD GPUs.
+        /// </summary>
+        private bool TryInitAmf()
+        {
+            zeroCopyEncoder = new AmfZeroCopyEncoder();
+
+            var amfSettings = new AmfZeroCopyEncoder.AmfEncoderSettings
+            {
+                RateControlMode = SessionState.AmfRateControlMode,
+                TargetBitrateKbps = SessionState.AmfTargetBitrate * 1000,
+                QpI = SessionState.AmfCqpValue,
+                QpP = SessionState.AmfCqpValue + 2,
+                QpB = SessionState.AmfCqpValue + 4,
+                QualityPreset = SessionState.AmfEncoderSpeed,
+                Codec = 1,
+                GopSize = playbackFps * 2,
+                EnableVbaq = 1,
+                UseBlueNoiseDither = SessionState.AmfUseBlueNoiseDither ? 1 : 0,
+            };
+
+            IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();
+
+            if (!zeroCopyEncoder.Initialize(width, height, playbackFps, outputPath, firstTexturePtr, amfSettings))
+            {
+                zeroCopyEncoder.Dispose();
+                zeroCopyEncoder = null;
+                return false;
+            }
+
+            usingZeroCopyPath = true;
+            if (camera != null)
+                camera.targetTexture = null;
+
+            return true;
+        }
+        private void InitCpuEncoder()
+        {
+            if (!encoder.Initialize(width, height, playbackFps, outputPath))
+                throw new Exception("Failed to initialize CPU encoder");
+            usingZeroCopyPath = false;
+            usingNvencPath = false;
+        }
         private void FinalizeEncoder()
         {
             if (captureBuffer != null && camera != null)
@@ -390,19 +505,33 @@ namespace CinematicRecorder.Capture
                 captureBuffer = null;
             }
 
-            if (usingZeroCopyPath && zeroCopyEncoder != null)
+            // NVENC cleanup
+            if (usingNvencPath && nvencZeroCopyEncoder != null)
+            {
+                nvencZeroCopyEncoder.Shutdown();
+                nvencZeroCopyEncoder.Dispose();
+                nvencZeroCopyEncoder = null;
+                usingNvencPath = false;
+                Debug.Log("[OfflineCapture] NVENC encoder finalized");
+            }
+
+            // AMF cleanup
+            if (usingZeroCopyPath && zeroCopyEncoder != null && !usingNvencPath)
             {
                 zeroCopyEncoder.Shutdown();
                 zeroCopyEncoder.Dispose();
                 zeroCopyEncoder = null;
-                UnityEngine.Debug.Log("[OfflineCapture] Zero-copy encoder finalized");
+                Debug.Log("[OfflineCapture] AMF encoder finalized");
             }
-            else if (encoder != null)
+
+            // Standard encoder cleanup
+            if (!usingZeroCopyPath && encoder != null)
             {
                 encoder.RequestStop();
                 encoder.Dispose();
             }
 
+            // Texture cleanup 
             if (renderTextures != null)
             {
                 for (int i = 0; i < 2; i++)
@@ -423,13 +552,16 @@ namespace CinematicRecorder.Capture
                 readbackTexture = null;
             }
         }
+        #endregion
+        #region Cleanup
         private void Cleanup(float originalFixedDelta, float originalMaxDelta, int originalCaptureFramerate, double originalPlanetariumDelta)
         {
             TimeWarp_FixedDeltaTime_Patch.IsOverridden = false;
             Time.captureFramerate = 0;
             Time.fixedDeltaTime = originalFixedDelta;
             Time.maximumDeltaTime = originalMaxDelta;
-            Planetarium.fetch.fixedDeltaTime = originalPlanetariumDelta;
+            if (Planetarium.fetch != null)
+                Planetarium.fetch.fixedDeltaTime = originalPlanetariumDelta;
 
             FinalizeEncoder();
 
@@ -445,5 +577,6 @@ namespace CinematicRecorder.Capture
                 );
             }
         }
+        #endregion
     }
 }

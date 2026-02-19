@@ -1,39 +1,37 @@
-﻿using System;
+﻿using CinematicRecorder.Core;
+using System;
+using System.IO;
 using UnityEngine;
+using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
     public class FinalReportWindow : MonoBehaviour
     {
-        private Rect windowRect = new Rect(320, 480, 400, 240);
+        #region Fields & State
+        private Rect windowRect = new Rect(
+            CinematicUIResources.Windows.FinalReport.DEFAULT_X,
+            CinematicUIResources.Windows.FinalReport.DEFAULT_Y,
+            CinematicUIResources.Windows.FinalReport.WIDTH,
+            CinematicUIResources.Windows.FinalReport.HEIGHT
+        );
+
         private GUIStyle windowStyle;
         private bool hasInitStyles = false;
         private bool shouldShow = false;
 
-        // Report data
         private int capturedFrames;
         private float simulatedSeconds;
         private float outputDuration;
         private float realWorldCaptureTime;
         private string encodingModeUsed;
         private string outputFilePath;
-        private bool wasUnlimitedRecording; // NEW: Track if this was an unlimited recording
-
+        private bool wasUnlimitedRecording;
+        private float showStartTime = -1f;
+        private const float REPORT_TIMEOUT_SECONDS = 30f;
+        #endregion
+        #region Public API
         public bool IsVisible => shouldShow;
-
-        void Start()
-        {
-            InitStyles();
-        }
-
-        private void InitStyles()
-        {
-            if (hasInitStyles) return;
-            windowStyle = new GUIStyle(HighLogic.Skin.window);
-            hasInitStyles = true;
-        }
-
-        // NEW: Added unlimited parameter
         public void ShowReport(
             int frames,
             float simSeconds,
@@ -52,84 +50,90 @@ namespace CinematicRecorder.UI
             wasUnlimitedRecording = unlimited;
 
             shouldShow = true;
+            showStartTime = Time.realtimeSinceStartup;
 
-            Debug.Log($"[CinematicRecorder] Final Report - Frames: {frames}, " +
-                     $"SimTime: {simSeconds:F1}s, RealTime: {realTimeSeconds:F1}s, " +
-                     $"Mode: {encodingMode}, Unlimited: {unlimited}, File: {filePath}");
+            Debug.Log(string.Format(Report.FinalReportLog, frames, simSeconds, realTimeSeconds, encodingMode, unlimited, filePath));
         }
-
         public void HideReport()
         {
             shouldShow = false;
+            showStartTime = -1f;
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                UnityEngine.Debug.Log("[FinalReportWindow] HideReport called while session still running. Forcing EndSession.");
+                DeterministicCaptureSession.EndSession();
+            }
         }
-
-        void OnGUI()
+        #endregion
+        #region Private Implementation
+        private void InitStyles()
         {
-            if (!shouldShow) return;
-
-            windowRect = GUILayout.Window(12346, windowRect, OnWindow,
-                "Recording Complete", windowStyle);
+            if (hasInitStyles) return;
+            windowStyle = CinematicUIResources.Styles.Window();
+            hasInitStyles = true;
         }
-
         private void OnWindow(int windowId)
         {
             GUILayout.BeginVertical();
 
-            // Summary Stats
-            GUIStyle headerStyle = new GUIStyle(HighLogic.Skin.label);
-            headerStyle.fontStyle = FontStyle.Bold;
-            headerStyle.fontSize = 14;
+            GUIStyle headerStyle = CinematicUIResources.Styles.Header();
 
-            GUILayout.Label("Capture Summary", headerStyle);
-            GUILayout.Space(10);
+            GUILayout.Label(Report.SummaryHeader, headerStyle);
+            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // Stats grid
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Frames Captured:", GUILayout.Width(130));
+            GUILayout.Label(Report.FramesCaptured, GUILayout.Width(130));
             GUILayout.Label(capturedFrames.ToString("N0"), GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Simulated Time:", GUILayout.Width(130));
-            GUILayout.Label($"{simulatedSeconds:F2} sec", GUILayout.Width(100));
-            GUILayout.EndHorizontal();
-
-            // MODIFIED: Indicate if this was an unlimited recording
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(wasUnlimitedRecording ? "Output Duration (Unlimited):" : "Output Duration:", GUILayout.Width(130));
-            GUILayout.Label($"{outputDuration:F2} sec", GUILayout.Width(100));
+            GUILayout.Label(Report.SimulatedTime, GUILayout.Width(130));
+            GUILayout.Label(simulatedSeconds.ToString("F2") + Report.SecondsUnit, GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Real Capture Time:", GUILayout.Width(130));
-            GUILayout.Label($"{FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime))}", GUILayout.Width(150));
+            GUILayout.Label(wasUnlimitedRecording ? Report.OutputDurationUnlimited : Report.OutputDuration, GUILayout.Width(130));
+            GUILayout.Label(outputDuration.ToString("F2") + Report.SecondsUnit, GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Encoding Mode:", GUILayout.Width(130));
+            GUILayout.Label(Report.RealCaptureTime, GUILayout.Width(130));
+            GUILayout.Label(FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime)), GUILayout.Width(150));
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Report.EncodingMode, GUILayout.Width(130));
             GUILayout.Label(encodingModeUsed);
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(10);
+            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            // File path (clickable to open folder)
-            GUILayout.Label("Output File:", HighLogic.Skin.label);
-            string displayPath = outputFilePath;
-            if (displayPath.Length > 45)
-                displayPath = "..." + displayPath.Substring(displayPath.Length - 42);
+            GUILayout.Label(Report.FilenameLabel, HighLogic.Skin.label);
+
+            GUILayout.BeginHorizontal();
+
+            // Display relative path from GameData if possible, otherwise truncate
+            string displayPath = GetDisplayPath(outputFilePath);
             GUI.enabled = false;
             GUILayout.TextField(displayPath, HighLogic.Skin.textField);
             GUI.enabled = true;
 
-            GUILayout.Space(20);
+            // Open Folder button
+            if (GUILayout.Button(Report.OpenFolder, GUILayout.Width(90), GUILayout.Height(25)))
+            {
+                OpenContainingFolder();
+            }
 
-            // Centered Okay button
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+
             GUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button("Okay", HighLogic.Skin.button, GUILayout.Width(100), GUILayout.Height(30)))
+            if (GUILayout.Button(Common.Okay, HighLogic.Skin.button, GUILayout.Width(100), GUILayout.Height(30)))
             {
-                shouldShow = false;
+                HideReport();
             }
 
             GUILayout.FlexibleSpace();
@@ -139,12 +143,102 @@ namespace CinematicRecorder.UI
 
             GUI.DragWindow();
         }
+        /// <summary>
+        /// Returns just the filename without any path
+        /// </summary>
+        private string GetDisplayPath(string fullPath)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return string.Empty;
 
+            // If path is a directory (PNG sequence), show folder name with indicator
+            if (Directory.Exists(fullPath))
+            {
+                return Path.GetFileName(fullPath) + " (PNG Sequence)";
+            }
+
+            return Path.GetFileName(fullPath);
+        }
+        /// <summary>
+        /// Opens the file explorer to the directory containing the output file
+        /// </summary>
+        private void OpenContainingFolder()
+        {
+            try
+            {
+                string folderPath;
+
+                // PNG sequence paths point directly to the folder
+                if (Directory.Exists(outputFilePath))
+                {
+                    folderPath = outputFilePath;
+                }
+                else
+                {
+                    folderPath = Path.GetDirectoryName(outputFilePath);
+                }
+
+                if (!string.IsNullOrEmpty(folderPath) && Directory.Exists(folderPath))
+                {
+                    string url = "file:///" + folderPath.Replace("\\", "/");
+                    Application.OpenURL(url);
+                    Debug.Log(string.Format(Report.OpeningFolderLog, folderPath));
+                }
+                else
+                {
+                    Debug.Log(string.Format(Report.CannotOpenFolderLog, folderPath));
+                    ScreenMessages.PostScreenMessage(Report.FolderNotFound, 3f, ScreenMessageStyle.UPPER_CENTER);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log(string.Format(Report.FailedToOpenFolderLog, ex.Message));
+                ScreenMessages.PostScreenMessage(Report.FailedToOpenFolder, 3f, ScreenMessageStyle.UPPER_CENTER);
+            }
+        }
         private string FormatTimeSpan(TimeSpan ts)
         {
             if (ts.TotalHours >= 1)
                 return $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}";
             return $"{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds / 100:D1}";
         }
+        #endregion
+        #region Unity Lifecycle
+        void Start()
+        {
+            InitStyles();
+        }
+        /// <summary>
+        /// Checks for timeout condition to force session cleanup if user leaves report open.
+        /// </summary>
+        void Update()
+        {
+            if (shouldShow && showStartTime > 0 && DeterministicCaptureSession.IsRunning)
+            {
+                float elapsed = Time.realtimeSinceStartup - showStartTime;
+                if (elapsed > REPORT_TIMEOUT_SECONDS)
+                {
+                    UnityEngine.Debug.LogWarning(string.Format(
+                        "[FinalReportWindow] Report timeout reached ({0}s). Forcing session end.",
+                        REPORT_TIMEOUT_SECONDS));
+
+                    DeterministicCaptureSession.EndSession();
+                    showStartTime = -1f; 
+                }
+            }
+        }
+        void OnGUI()
+        {
+            if (!shouldShow) return;
+
+            windowRect = GUILayout.Window(
+                CinematicUIResources.Windows.IDs.FinalReport,
+                windowRect,
+                OnWindow,
+                Report.WindowTitle,
+                windowStyle
+            );
+        }
+        #endregion
+
     }
 }

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using CinematicRecorder.Integration;
+using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
@@ -11,30 +12,29 @@ namespace CinematicRecorder.UI
     [Serializable]
     public class CameraPanelPreset
     {
+        #region Fields
         public string presetName;
-        public string vesselId; // "GLOBAL" or specific vessel GUID string
-        public bool autoLoadForVessel; // Auto-switch when vessel changes
+        public string vesselId; 
+        public bool autoLoadForVessel; 
 
-        // Window position (optional persistence)
         public float panelX;
         public float panelY;
 
         // 16 camera slots (4x4 grid)
         public List<CameraSlot> buttonAssignments;
-
+        #endregion
+        #region Public API
         public CameraPanelPreset()
         {
             buttonAssignments = new List<CameraSlot>();
-            // Initialize empty slots 0-15
             for (int i = 0; i < 16; i++)
             {
                 buttonAssignments.Add(new CameraSlot
                 {
-                    buttonID = $"Cam_{i}"
+                    buttonID = string.Format(CameraController.ButtonIdFormat, i)
                 });
             }
         }
-
         public CameraSlot GetSlot(int index)
         {
             if (index < 0 || index >= 16) return null;
@@ -45,13 +45,12 @@ namespace CinematicRecorder.UI
                 {
                     buttonAssignments.Add(new CameraSlot
                     {
-                        buttonID = $"Cam_{buttonAssignments.Count}"
+                        buttonID = string.Format(CameraController.ButtonIdFormat, buttonAssignments.Count)
                     });
                 }
             }
             return buttonAssignments[index];
         }
-
         public void SetSlot(int index, CameraSlot slot)
         {
             if (index < 0 || index >= 16) return;
@@ -61,7 +60,7 @@ namespace CinematicRecorder.UI
                 {
                     buttonAssignments.Add(new CameraSlot
                     {
-                        buttonID = $"Cam_{buttonAssignments.Count}"
+                        buttonID = string.Format(CameraController.ButtonIdFormat, buttonAssignments.Count)
                     });
                 }
             }
@@ -69,13 +68,13 @@ namespace CinematicRecorder.UI
         }
 
         /// <summary>
-        /// Creates a deep copy for "Save As" operations.
+        /// Creates a deep copy of this preset for "Save As" operations.
         /// </summary>
         public CameraPanelPreset Clone()
         {
             var clone = new CameraPanelPreset
             {
-                presetName = this.presetName + " (Copy)",
+                presetName = this.presetName + CameraController.PresetCopySuffix,
                 vesselId = this.vesselId,
                 autoLoadForVessel = this.autoLoadForVessel,
                 panelX = this.panelX,
@@ -91,11 +90,73 @@ namespace CinematicRecorder.UI
                     cameraName = slot.cameraName,
                     partPersistentId = slot.partPersistentId,
                     vesselId = slot.vesselId,
-                    allowAnyVessel = slot.allowAnyVessel
+                    allowAnyVessel = slot.allowAnyVessel,
+                    isCameraToolsSlot = slot.isCameraToolsSlot,
+                    ctSettings = slot.ctSettings != null ? new CameraToolsSettings
+                    {
+                        Mode = slot.ctSettings.Mode,
+                        DogfightDistance = slot.ctSettings.DogfightDistance,
+                        DogfightOffsetX = slot.ctSettings.DogfightOffsetX,
+                        DogfightOffsetY = slot.ctSettings.DogfightOffsetY,
+                        DogfightChasePlaneMode = slot.ctSettings.DogfightChasePlaneMode,
+                        DogfightTargetId = slot.ctSettings.DogfightTargetId,
+
+                        // Geographic positioning
+                        UseGeographicPosition = slot.ctSettings.UseGeographicPosition,
+                        Latitude = slot.ctSettings.Latitude,
+                        Longitude = slot.ctSettings.Longitude,
+                        Altitude = slot.ctSettings.Altitude,
+                        BodyName = slot.ctSettings.BodyName,
+
+                        // Positioning modes
+                        AutoFlybyPosition = slot.ctSettings.AutoFlybyPosition,
+                        AutoLandingPosition = slot.ctSettings.AutoLandingPosition,
+                        ManualOffset = slot.ctSettings.ManualOffset,
+                        ManualOffsetForward = slot.ctSettings.ManualOffsetForward,
+                        ManualOffsetRight = slot.ctSettings.ManualOffsetRight,
+                        ManualOffsetUp = slot.ctSettings.ManualOffsetUp,
+
+                        // Target tracking
+                        HasTarget = slot.ctSettings.HasTarget,
+                        TargetSelf = slot.ctSettings.TargetSelf,
+                        TargetPartPersistentId = slot.ctSettings.TargetPartPersistentId,
+                        TargetCoM = slot.ctSettings.TargetCoM,
+
+                        // Camera settings
+                        MaintainInitialVelocity = slot.ctSettings.MaintainInitialVelocity,
+                        UseOrbital = slot.ctSettings.UseOrbital,
+                        AutoZoom = slot.ctSettings.AutoZoom,
+                        ManualFOV = slot.ctSettings.ManualFOV,
+                        InitialVelocity = slot.ctSettings.InitialVelocity,
+
+                        // Additional CameraTools settings
+                        SaveRotation = slot.ctSettings.SaveRotation,
+                        FmPivotMode = slot.ctSettings.FmPivotMode,
+                        PathingSecondarySmoothing = slot.ctSettings.PathingSecondarySmoothing,
+
+                        // Pathing settings
+                        SelectedPathIndex = slot.ctSettings.SelectedPathIndex,
+                        PathTimeScale = slot.ctSettings.PathTimeScale,
+                        CurrentKeyframeIndex = slot.ctSettings.CurrentKeyframeIndex,
+                        IsPlayingPath = slot.ctSettings.IsPlayingPath,
+                        UseRealTime = slot.ctSettings.UseRealTime,
+                        PathStartTime = slot.ctSettings.PathStartTime,
+
+                        // Playback timing controls 
+                        LockPathingToPlaybackRate = slot.ctSettings.LockPathingToPlaybackRate,
+
+                        // Deterministic control flag 
+                        UseDeterministicControl = slot.ctSettings.UseDeterministicControl,
+
+                        // Custom Auto-Zoom settings
+                        UseConsistentAutoZoom = slot.ctSettings.UseConsistentAutoZoom,
+                        ZoomPadding = slot.ctSettings.ZoomPadding
+                    } : null
                 });
             }
 
             return clone;
         }
+        #endregion
     }
 }

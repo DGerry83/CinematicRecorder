@@ -7,11 +7,13 @@ namespace CinematicRecorder.Capture
 {
     public unsafe class AmfZeroCopyEncoder : IDisposable
     {
+        #region Fields
         private IntPtr _encoderHandle;
         private bool _isInitialized;
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
-
+        #endregion
+        #region Static Initialization
         static AmfZeroCopyEncoder()
         {
             try
@@ -62,22 +64,9 @@ namespace CinematicRecorder.Capture
                 Debug.LogError($"[AmfZeroCopyEncoder] Static init error: {ex}");
             }
         }
+        #endregion
+        #region Native Imports
 
-        [StructLayout(LayoutKind.Sequential)]
-        public struct AmfEncoderSettings
-        {
-            public int RateControlMode;
-            public int TargetBitrateKbps;
-            public int QpI;
-            public int QpP;
-            public int QpB;
-            public int QualityPreset;
-            public int Codec;
-            public int GopSize;
-            public int EnableVbaq;
-            public int UseBlueNoiseDither;   // NEW: 0 = disabled, 1 = enabled
-            public int Reserved2;
-        }
 
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool SetDllDirectory(string lpPathName);
@@ -88,11 +77,11 @@ namespace CinematicRecorder.Capture
         [DllImport("kernel32", SetLastError = true)]
         private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
 
-        // NEW: Import for explicit device setting (alternative to InitFromTexture)
+        // Import for explicit device setting (alternative to InitFromTexture)
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern void CR_SetUnityD3D11Device(IntPtr device);
 
-        // MODIFIED: Removed device parameter from import (now global)
+        // Removed device parameter from import (now global)
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern IntPtr CR_InitEncoder(
             int width,
@@ -120,11 +109,30 @@ namespace CinematicRecorder.Capture
 
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr CR_GetLastError();
-
+        #endregion
+        #region Structs
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AmfEncoderSettings
+        {
+            public int RateControlMode;
+            public int TargetBitrateKbps;
+            public int QpI;
+            public int QpP;
+            public int QpB;
+            public int QualityPreset;
+            public int Codec;
+            public int GopSize;
+            public int EnableVbaq;
+            public int UseBlueNoiseDither;
+            public int Reserved2;
+        }
+        #endregion
+        #region Public API
         public bool IsInitialized => _isInitialized;
 
-        // NEW: Optional explicit device initialization (call once before first encoder init)
-        // You can get the native device pointer from Unity's Rendering.GraphicsDevice interfaces
+        /// <summary>
+        /// Initializes the global D3D11 device for all AMF encoder instances. Must be called once before first encoder initialization.
+        /// </summary>
         public static bool InitializeDevice(IntPtr d3d11DevicePtr)
         {
             if (d3d11DevicePtr == IntPtr.Zero)
@@ -145,15 +153,16 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
-
-        // Maintains backward compatibility: extracts device from texture internally
+        /// <summary>
+        /// Initializes the encoder from a D3D11 texture handle using AMF hardware acceleration.
+        /// </summary>
         public bool Initialize(
             int width,
             int height,
             int fps,
             string outputPath,
             IntPtr d3d11TexturePtr,
-            AmfEncoderSettings settings)  // <-- Added parameter
+            AmfEncoderSettings settings)
         {
             if (_isInitialized)
                 return true;
@@ -170,14 +179,13 @@ namespace CinematicRecorder.Capture
 
             try
             {
-                // Pass settings by ref to native code
                 _encoderHandle = CR_InitEncoderFromTexture(
                     d3d11TexturePtr,
                     width,
                     height,
                     fps,
                     outputPath,
-                    ref settings);  // <-- Pass settings here
+                    ref settings);
 
                 if (_encoderHandle == IntPtr.Zero)
                 {
@@ -206,7 +214,9 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
-
+        /// <summary>
+        /// Encodes a single frame using the provided D3D11 texture without GPU readback.
+        /// </summary>
         public bool EncodeFrame(IntPtr d3d11TexturePtr, long frameIndex)
         {
             if (!_isInitialized || _encoderHandle == IntPtr.Zero)
@@ -220,7 +230,6 @@ namespace CinematicRecorder.Capture
 
             try
             {
-                // Native code will CopyResource from unityTexture to internal owned texture
                 int result = CR_EncodeFrame(_encoderHandle, d3d11TexturePtr, frameIndex);
 
                 if (result != 0)
@@ -238,7 +247,6 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
-
         public void Shutdown()
         {
             if (!_isInitialized || _encoderHandle == IntPtr.Zero)
@@ -262,7 +270,8 @@ namespace CinematicRecorder.Capture
             _isInitialized = false;
             Debug.Log("[AmfZeroCopyEncoder] Shutdown complete");
         }
-
+        #endregion
+        #region IDisposable
         public void Dispose()
         {
             if (_isDisposed)
@@ -271,5 +280,6 @@ namespace CinematicRecorder.Capture
             _isDisposed = true;
             Shutdown();
         }
+        #endregion
     }
 }

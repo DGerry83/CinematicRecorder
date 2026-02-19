@@ -2,6 +2,9 @@
 
 namespace CinematicRecorder.Capture
 {
+    /// <summary>
+    /// Renders a Unity camera to a specific RenderTexture with proper state preservation.
+    /// </summary>
     public sealed class OfflineFrameRenderer
     {
         private readonly Camera camera;
@@ -12,7 +15,9 @@ namespace CinematicRecorder.Capture
             this.camera = camera;
             this.target = target;
         }
-
+        /// <summary>
+        /// Renders the camera to the target texture, restoring the previous active render texture afterward.
+        /// </summary>
         public void Render()
         {
             var prev = RenderTexture.active;

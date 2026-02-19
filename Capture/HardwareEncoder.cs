@@ -13,6 +13,7 @@ namespace CinematicRecorder.Capture
 {
     public unsafe class HardwareEncoder : IDisposable
     {
+        #region Native Resources
         private AVCodecContext* codecContext;
         private AVFormatContext* formatContext;
         private AVStream* videoStream;
@@ -25,16 +26,11 @@ namespace CinematicRecorder.Capture
         private string outputPath;
         private bool isInitialized;
         private bool stopping;
-
-        public bool ForceSoftwareEncoding { get; set; }
-
+        #endregion
+        #region Threading
         private ConcurrentQueue<EncoderCommandItem> commandQueue;
         private Thread encoderThread;
         private volatile bool encoderAlive;
-
-        public enum EncoderType { NVENC, AMF, QuickSync, CPU }
-        public EncoderType ActiveEncoder { get; private set; }
-
         private struct EncoderCommandItem
         {
             public EncoderCommand Command;
@@ -46,7 +42,16 @@ namespace CinematicRecorder.Capture
             Frame,
             Stop
         }
-
+        #endregion
+        #region Configuration
+        public bool ForceSoftwareEncoding { get; set; }
+        public enum EncoderType { NVENC, AMF, QuickSync, CPU }
+        public EncoderType ActiveEncoder { get; private set; }
+        #endregion
+        #region Public API
+        /// <summary>
+        /// Attempts to initialize hardware encoding with fallback chain: HEVC (NVENC->AMF->QSV) -> H.264 (NVENC->AMF->QSV) -> CPU.
+        /// </summary>
         public bool Initialize(int w, int h, int frameRate, string outputFile)
         {
             width = w;
@@ -54,7 +59,6 @@ namespace CinematicRecorder.Capture
             fps = frameRate;
             outputPath = outputFile;
 
-            // Test FFmpeg load and log available encoders
             try
             {
                 TestAvailableEncoders();
@@ -87,7 +91,66 @@ namespace CinematicRecorder.Capture
             UnityEngine.Debug.Log("[HardwareEncoder] No hardware encoder available, falling back to CPU");
             return InitCpu();
         }
+        /// <summary>
+        /// Queues a frame for encoding. For CPU encoding, this is asynchronous; for hardware encoders, blocks until complete.
+        /// Disposes the NativeArray after encoding (caller should not reuse).
+        /// </summary>
+        public void EncodeFrame(NativeArray<byte> rgba)
+        {
+            if (!isInitialized || stopping)
+            {
+                if (rgba.IsCreated) rgba.Dispose();
+                return;
+            }
 
+            //if (ActiveEncoder == EncoderType.CPU)
+            //{
+            //    if (!encoderAlive)
+            //    {
+            //        if (rgba.IsCreated) rgba.Dispose();
+            //        return;
+            //    }
+            //    commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Frame, Frame = rgba });
+            //}
+            //else
+            //{
+                EncodeFrameInternal(rgba);
+                if (rgba.IsCreated) rgba.Dispose();
+            //}
+        }
+        /// <summary>
+        /// Signals the encoder to finish and flush remaining frames. Blocks until complete for CPU path.
+        /// </summary>
+        public void RequestStop()
+        {
+            if (!isInitialized || stopping)
+                return;
+
+            stopping = true;
+
+            //Synchronous flush
+            //if (ActiveEncoder == EncoderType.CPU)
+            //{
+            //    if (encoderAlive)
+            //    {
+            //        commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Stop });
+            //        if (encoderThread != null)
+            //            encoderThread.Join();
+            //    }
+            //    Cleanup();
+            //}
+            //else
+            //{
+                FlushEncoder();
+                Cleanup();
+            //}
+        }
+        public void Dispose()
+        {
+            RequestStop();
+        }
+        #endregion
+        #region Encoder Implementation
         private void TestAvailableEncoders()
         {
             UnityEngine.Debug.Log("[HardwareEncoder] Testing available encoders...");
@@ -124,25 +187,24 @@ namespace CinematicRecorder.Capture
             else
                 UnityEngine.Debug.Log("[HardwareEncoder] CPU encoder not available");
         }
-
         private bool InitCpu()
         {
             if (!TryInitializeEncoder("libx264", EncoderType.CPU))
                 return false;
 
-            commandQueue = new ConcurrentQueue<EncoderCommandItem>();
-            encoderAlive = true;
+            //No background thread processing
+            //commandQueue = new ConcurrentQueue<EncoderCommandItem>();
+            //encoderAlive = true;
 
-            encoderThread = new Thread(EncoderThreadMain)
-            {
-                IsBackground = false,
-                Name = "CinematicRecorder_Encoder"
-            };
-            encoderThread.Start();
+            //encoderThread = new Thread(EncoderThreadMain)
+            //{
+            //    IsBackground = false,
+            //    Name = "CinematicRecorder_Encoder"
+            //};
+            //encoderThread.Start();
 
             return true;
         }
-
         private bool TryInitializeEncoder(string codecName, EncoderType type)
         {
             UnityEngine.Debug.Log("[HardwareEncoder] >>> Trying encoder: " + codecName);
@@ -168,7 +230,7 @@ namespace CinematicRecorder.Capture
             if (codec == null)
             {
                 ffmpeg.avformat_free_context(localFormatContext);
-                return false; // Codec not available, don't log as severe error since this is expected in fallback chain
+                return false; // Codec not available, this is expected in fallback chain
             }
 
             AVCodecContext* localCodecContext = ffmpeg.avcodec_alloc_context3(codec);
@@ -271,273 +333,32 @@ namespace CinematicRecorder.Capture
             UnityEngine.Debug.Log("[HardwareEncoder] SUCCESS: Initialized " + type + " encoder (" + codecName + ")");
             return true;
         }
+        //private void EncoderThreadMain()
+        //{
+        //    UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread started");
 
-        private bool ApplyQualitySettings(AVCodecContext* ctx, EncoderType type)
-        {
-            try
-            {
-                switch (type)
-                {
-                    case EncoderType.CPU:
-                        ApplyCpuSettings(ctx);
-                        break;
-                    case EncoderType.NVENC:
-                        ApplyNvencSettings(ctx);
-                        break;
-                    case EncoderType.AMF:
-                        ApplyAmfSettings(ctx);
-                        break;
-                    case EncoderType.QuickSync:
-                        ApplyQuickSyncSettings(ctx);
-                        break;
-                }
-                return true;
-            }
-            catch (Exception ex)
-            {
-                UnityEngine.Debug.LogError("[HardwareEncoder] Failed to apply quality settings: " + ex.Message);
-                return false;
-            }
-        }
+        //    while (true)
+        //    {
+        //        EncoderCommandItem item;
+        //        if (!commandQueue.TryDequeue(out item))
+        //        {
+        //            Thread.Sleep(1);
+        //            continue;
+        //        }
 
-        private void ApplyCpuSettings(AVCodecContext* ctx)
-        {
-            // Map SessionState preset (0=Speed, 1=Balanced, 2=Quality) to x264 presets
-            string preset;
-            switch (SessionState.CpuPreset)
-            {
-                case 0:
-                    preset = "fast";
-                    break;
-                case 2:
-                    preset = "slow";
-                    break;
-                default:
-                    preset = "medium";
-                    break;
-            }
+        //        if (item.Command == EncoderCommand.Stop)
+        //        {
+        //            FlushEncoder();
+        //            break;
+        //        }
 
-            ffmpeg.av_opt_set(ctx->priv_data, "preset", preset, 0);
-            ffmpeg.av_opt_set(ctx->priv_data, "profile", "high", 0);
-            ffmpeg.av_opt_set(ctx->priv_data, "level", "5.2", 0);
-            ffmpeg.av_opt_set(ctx->priv_data, "threads", "0", 0); // Auto-detect optimal threads
+        //        EncodeFrameInternal(item.Frame);
+        //        if (item.Frame.IsCreated) item.Frame.Dispose();
+        //    }
 
-            if (SessionState.CpuRateControlMode == 0) // CRF (Quality-based)
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "crf", SessionState.CpuCrfValue.ToString(), 0);
-            }
-            else // VBR or CBR (Bitrate-based)
-            {
-                long bitrate = SessionState.CpuTargetBitrate * 1000L;
-                ctx->bit_rate = bitrate;
-                ctx->rc_max_rate = bitrate;
-                ctx->rc_buffer_size = (int)bitrate;
-
-                if (SessionState.CpuRateControlMode == 2) // CBR
-                    ffmpeg.av_opt_set(ctx->priv_data, "nal-hrd", "cbr", 0);
-            }
-
-            UnityEngine.Debug.Log("[HardwareEncoder] CPU settings: preset=" + preset + ", " +
-                (SessionState.CpuRateControlMode == 0 ? "crf=" + SessionState.CpuCrfValue : "bitrate=" + SessionState.CpuTargetBitrate + "Mbps"));
-        }
-
-        private void ApplyNvencSettings(AVCodecContext* ctx)
-        {
-            // Map SessionState preset (0=Speed, 1=Balanced, 2=Quality) to NVENC presets (p1-p7)
-            string preset;
-            switch (SessionState.NvencPreset)
-            {
-                case 0:
-                    preset = "p1"; // Speed
-                    break;
-                case 2:
-                    preset = "p7"; // Quality
-                    break;
-                default:
-                    preset = "p4"; // Balanced (P4 is FFmpeg NVENC default)
-                    break;
-            }
-
-            ffmpeg.av_opt_set(ctx->priv_data, "preset", preset, 0);
-
-            if (SessionState.NvencRateControlMode == 0) // CQ (Constant Quality)
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "rc", "constqp", 0);
-                ffmpeg.av_opt_set(ctx->priv_data, "cq", SessionState.NvencCqValue.ToString(), 0);
-            }
-            else if (SessionState.NvencRateControlMode == 1) // VBR
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "rc", "vbr", 0);
-                ctx->bit_rate = SessionState.NvencTargetBitrate * 1000L;
-                ctx->rc_max_rate = SessionState.NvencTargetBitrate * 1000L;
-            }
-            else // CBR
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "rc", "cbr", 0);
-                ctx->bit_rate = SessionState.NvencTargetBitrate * 1000L;
-                ctx->rc_min_rate = SessionState.NvencTargetBitrate * 1000L;
-                ctx->rc_max_rate = SessionState.NvencTargetBitrate * 1000L;
-            }
-
-            UnityEngine.Debug.Log("[HardwareEncoder] NVENC settings: preset=" + preset + ", " +
-                (SessionState.NvencRateControlMode == 0 ? "cq=" + SessionState.NvencCqValue : "bitrate=" + SessionState.NvencTargetBitrate + "Mbps"));
-        }
-
-        private void ApplyAmfSettings(AVCodecContext* ctx)
-        {
-            // Map SessionState preset to AMF quality setting
-            string quality;
-            switch (SessionState.AmfEncoderSpeed)
-            {
-                case 0:
-                    quality = "speed";
-                    break;
-                case 2:
-                    quality = "quality";
-                    break;
-                default:
-                    quality = "balanced";
-                    break;
-            }
-
-            ffmpeg.av_opt_set(ctx->priv_data, "quality", quality, 0);
-
-            if (SessionState.AmfRateControlMode == 0) // CQP (Constant QP)
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "rc", "cqp", 0);
-
-                // Staggered QP values like original: I < P < B (though B-frames disabled anyway)
-                int baseQp = SessionState.AmfCqpValue;
-                ffmpeg.av_opt_set(ctx->priv_data, "qp_i", baseQp.ToString(), 0);
-                ffmpeg.av_opt_set(ctx->priv_data, "qp_p", (baseQp + 2).ToString(), 0);
-                ffmpeg.av_opt_set(ctx->priv_data, "qp_b", (baseQp + 4).ToString(), 0);
-            }
-            else if (SessionState.AmfRateControlMode == 1) // VBR
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "rc", "vbr", 0);
-                ctx->bit_rate = SessionState.AmfTargetBitrate * 1000L;
-                ctx->rc_max_rate = SessionState.AmfTargetBitrate * 1000L;
-            }
-            else // CBR
-            {
-                ffmpeg.av_opt_set(ctx->priv_data, "rc", "cbr", 0);
-                ctx->bit_rate = SessionState.AmfTargetBitrate * 1000L;
-            }
-
-            UnityEngine.Debug.Log("[HardwareEncoder] AMF settings: quality=" + quality + ", " +
-                (SessionState.AmfRateControlMode == 0 ? "cqp_i=" + SessionState.AmfCqpValue : "bitrate=" + SessionState.AmfTargetBitrate + "Mbps"));
-        }
-
-        private void ApplyQuickSyncSettings(AVCodecContext* ctx)
-        {
-            // QuickSync uses similar rate control concepts but different option names
-            if (SessionState.NvencRateControlMode == 0) // Use NVENC settings as proxy for QuickSync
-            {
-                // QSV global quality (similar to CQ)
-                ffmpeg.av_opt_set(ctx->priv_data, "global_quality", SessionState.NvencCqValue.ToString(), 0);
-            }
-            else
-            {
-                ctx->bit_rate = SessionState.NvencTargetBitrate * 1000L;
-                ctx->rc_max_rate = SessionState.NvencTargetBitrate * 1000L;
-            }
-
-            // QSV preset: veryfast, faster, fast, medium, slow, slower, veryslow
-            string preset;
-            switch (SessionState.NvencPreset)
-            {
-                case 0:
-                    preset = "veryfast";
-                    break;
-                case 2:
-                    preset = "slow";
-                    break;
-                default:
-                    preset = "medium";
-                    break;
-            }
-
-            ffmpeg.av_opt_set(ctx->priv_data, "preset", preset, 0);
-        }
-
-        private static string AvErrorToString(int err)
-        {
-            const int bufferSize = 1024;
-            byte* buffer = stackalloc byte[bufferSize];
-            ffmpeg.av_strerror(err, buffer, (ulong)bufferSize);
-            return Marshal.PtrToStringAnsi((IntPtr)buffer);
-        }
-
-        public void EncodeFrame(NativeArray<byte> rgba)
-        {
-            if (!isInitialized || stopping)
-            {
-                if (rgba.IsCreated) rgba.Dispose();
-                return;
-            }
-
-            if (ActiveEncoder == EncoderType.CPU)
-            {
-                if (!encoderAlive)
-                {
-                    if (rgba.IsCreated) rgba.Dispose();
-                    return;
-                }
-                commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Frame, Frame = rgba });
-            }
-            else
-            {
-                EncodeFrameInternal(rgba);
-                if (rgba.IsCreated) rgba.Dispose();
-            }
-        }
-
-        private void EncoderThreadMain()
-        {
-            UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread started");
-
-            while (true)
-            {
-                EncoderCommandItem item;
-                if (!commandQueue.TryDequeue(out item))
-                {
-                    Thread.Sleep(1);
-                    continue;
-                }
-
-                if (item.Command == EncoderCommand.Stop)
-                {
-                    FlushEncoder();
-                    break;
-                }
-
-                EncodeFrameInternal(item.Frame);
-                if (item.Frame.IsCreated) item.Frame.Dispose();
-            }
-
-            encoderAlive = false;
-            UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread exited cleanly");
-        }
-
-        private void FlushEncoder()
-        {
-            ffmpeg.avcodec_send_frame(codecContext, null);
-
-            while (true)
-            {
-                int ret = ffmpeg.avcodec_receive_packet(codecContext, packet);
-                if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF || ret < 0)
-                    break;
-
-                ffmpeg.av_packet_rescale_ts(packet, codecContext->time_base, videoStream->time_base);
-                packet->stream_index = videoStream->index;
-                ffmpeg.av_interleaved_write_frame(formatContext, packet);
-                ffmpeg.av_packet_unref(packet);
-            }
-
-            ffmpeg.av_write_trailer(formatContext);
-        }
-
+        //    encoderAlive = false;
+        //    UnityEngine.Debug.Log("[HardwareEncoder] Encoder thread exited cleanly");
+        //}
         private void EncodeFrameInternal(NativeArray<byte> rgba)
         {
             byte* srcPtr = (byte*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(rgba);
@@ -579,31 +400,219 @@ namespace CinematicRecorder.Capture
                 ffmpeg.av_packet_unref(packet);
             }
         }
-
-        public void RequestStop()
+        private void FlushEncoder()
         {
-            if (!isInitialized || stopping)
-                return;
+            ffmpeg.avcodec_send_frame(codecContext, null);
 
-            stopping = true;
-
-            if (ActiveEncoder == EncoderType.CPU)
+            while (true)
             {
-                if (encoderAlive)
+                int ret = ffmpeg.avcodec_receive_packet(codecContext, packet);
+                if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF || ret < 0)
+                    break;
+
+                ffmpeg.av_packet_rescale_ts(packet, codecContext->time_base, videoStream->time_base);
+                packet->stream_index = videoStream->index;
+                ffmpeg.av_interleaved_write_frame(formatContext, packet);
+                ffmpeg.av_packet_unref(packet);
+            }
+
+            ffmpeg.av_write_trailer(formatContext);
+        }
+        #endregion
+        #region Quality Settings
+        /// <summary>
+        /// Applies encoder-specific quality and rate control settings based on SessionState configuration.
+        /// </summary>
+        private bool ApplyQualitySettings(AVCodecContext* ctx, EncoderType type)
+        {
+            try
+            {
+                switch (type)
                 {
-                    commandQueue.Enqueue(new EncoderCommandItem { Command = EncoderCommand.Stop });
-                    if (encoderThread != null)
-                        encoderThread.Join();
+                    case EncoderType.CPU:
+                        ApplyCpuSettings(ctx);
+                        break;
+                    case EncoderType.NVENC:
+                        ApplyNvencSettings(ctx);
+                        break;
+                    case EncoderType.AMF:
+                        ApplyAmfSettings(ctx);
+                        break;
+                    case EncoderType.QuickSync:
+                        ApplyQuickSyncSettings(ctx);
+                        break;
                 }
-                Cleanup();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError("[HardwareEncoder] Failed to apply quality settings: " + ex.Message);
+                return false;
+            }
+        }
+        private void ApplyCpuSettings(AVCodecContext* ctx)
+        {
+            string preset;
+            switch (SessionState.CpuPreset)
+            {
+                case 0:
+                    preset = "fast";
+                    break;
+                case 2:
+                    preset = "slow";
+                    break;
+                default:
+                    preset = "medium";
+                    break;
+            }
+
+            ffmpeg.av_opt_set(ctx->priv_data, "preset", preset, 0);
+            ffmpeg.av_opt_set(ctx->priv_data, "profile", "high", 0);
+            ffmpeg.av_opt_set(ctx->priv_data, "level", "5.2", 0);
+            ffmpeg.av_opt_set(ctx->priv_data, "threads", "0", 0);
+
+            if (SessionState.CpuRateControlMode == 0) // CRF (Quality-based)
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "crf", SessionState.CpuCrfValue.ToString(), 0);
+            }
+            else // VBR or CBR (Bitrate-based)
+            {
+                long bitrate = SessionState.CpuTargetBitrate * 1000L;
+                ctx->bit_rate = bitrate;
+                ctx->rc_max_rate = bitrate;
+                ctx->rc_buffer_size = (int)bitrate;
+
+                if (SessionState.CpuRateControlMode == 2) // CBR
+                    ffmpeg.av_opt_set(ctx->priv_data, "nal-hrd", "cbr", 0);
+            }
+
+            UnityEngine.Debug.Log("[HardwareEncoder] CPU settings: preset=" + preset + ", " +
+                (SessionState.CpuRateControlMode == 0 ? "crf=" + SessionState.CpuCrfValue : "bitrate=" + SessionState.CpuTargetBitrate + "Mbps"));
+        }
+        private void ApplyNvencSettings(AVCodecContext* ctx)
+        {
+            // Map SessionState preset (0=Speed, 1=Balanced, 2=Quality) to NVENC presets (p1-p7)
+            string preset;
+            switch (SessionState.NvencPreset)
+            {
+                case 0:
+                    preset = "p1"; // Speed
+                    break;
+                case 2:
+                    preset = "p7"; // Quality
+                    break;
+                default:
+                    preset = "p4"; // Balanced (P4 is FFmpeg NVENC default)
+                    break;
+            }
+
+            ffmpeg.av_opt_set(ctx->priv_data, "preset", preset, 0);
+
+            if (SessionState.NvencRateControlMode == 0) // CQ (Constant Quality)
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "rc", "constqp", 0);
+                ffmpeg.av_opt_set(ctx->priv_data, "cq", SessionState.NvencCqValue.ToString(), 0);
+            }
+            else if (SessionState.NvencRateControlMode == 1) // VBR
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "rc", "vbr", 0);
+                ctx->bit_rate = SessionState.NvencTargetBitrate * 1000L;
+                ctx->rc_max_rate = SessionState.NvencTargetBitrate * 1000L;
+            }
+            else // CBR
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "rc", "cbr", 0);
+                ctx->bit_rate = SessionState.NvencTargetBitrate * 1000L;
+                ctx->rc_min_rate = SessionState.NvencTargetBitrate * 1000L;
+                ctx->rc_max_rate = SessionState.NvencTargetBitrate * 1000L;
+            }
+
+            UnityEngine.Debug.Log("[HardwareEncoder] NVENC settings: preset=" + preset + ", " +
+                (SessionState.NvencRateControlMode == 0 ? "cq=" + SessionState.NvencCqValue : "bitrate=" + SessionState.NvencTargetBitrate + "Mbps"));
+        }
+        private void ApplyAmfSettings(AVCodecContext* ctx)
+        {
+            // Map SessionState preset to AMF quality setting
+            string quality;
+            switch (SessionState.AmfEncoderSpeed)
+            {
+                case 0:
+                    quality = "speed";
+                    break;
+                case 2:
+                    quality = "quality";
+                    break;
+                default:
+                    quality = "balanced";
+                    break;
+            }
+
+            ffmpeg.av_opt_set(ctx->priv_data, "quality", quality, 0);
+
+            if (SessionState.AmfRateControlMode == 0) // CQP (Constant QP)
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "rc", "cqp", 0);
+
+                int baseQp = SessionState.AmfCqpValue;
+                ffmpeg.av_opt_set(ctx->priv_data, "qp_i", baseQp.ToString(), 0);
+                ffmpeg.av_opt_set(ctx->priv_data, "qp_p", (baseQp + 2).ToString(), 0);
+                ffmpeg.av_opt_set(ctx->priv_data, "qp_b", (baseQp + 4).ToString(), 0);
+            }
+            else if (SessionState.AmfRateControlMode == 1) // VBR
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "rc", "vbr", 0);
+                ctx->bit_rate = SessionState.AmfTargetBitrate * 1000L;
+                ctx->rc_max_rate = SessionState.AmfTargetBitrate * 1000L;
+            }
+            else // CBR
+            {
+                ffmpeg.av_opt_set(ctx->priv_data, "rc", "cbr", 0);
+                ctx->bit_rate = SessionState.AmfTargetBitrate * 1000L;
+            }
+
+            UnityEngine.Debug.Log("[HardwareEncoder] AMF settings: quality=" + quality + ", " +
+                (SessionState.AmfRateControlMode == 0 ? "cqp_i=" + SessionState.AmfCqpValue : "bitrate=" + SessionState.AmfTargetBitrate + "Mbps"));
+        }
+        private void ApplyQuickSyncSettings(AVCodecContext* ctx)
+        {
+            // QuickSync uses similar rate control concepts but different option names
+            if (SessionState.NvencRateControlMode == 0) // Use NVENC settings as proxy for QuickSync
+            {
+                // QSV global quality (similar to CQ)
+                ffmpeg.av_opt_set(ctx->priv_data, "global_quality", SessionState.NvencCqValue.ToString(), 0);
             }
             else
             {
-                FlushEncoder();
-                Cleanup();
+                ctx->bit_rate = SessionState.NvencTargetBitrate * 1000L;
+                ctx->rc_max_rate = SessionState.NvencTargetBitrate * 1000L;
             }
-        }
 
+            // QSV preset: veryfast, faster, fast, medium, slow, slower, veryslow
+            string preset;
+            switch (SessionState.NvencPreset)
+            {
+                case 0:
+                    preset = "veryfast";
+                    break;
+                case 2:
+                    preset = "slow";
+                    break;
+                default:
+                    preset = "medium";
+                    break;
+            }
+
+            ffmpeg.av_opt_set(ctx->priv_data, "preset", preset, 0);
+        }
+        #endregion
+        #region Helpers
+        private static string AvErrorToString(int err)
+        {
+            const int bufferSize = 1024;
+            byte* buffer = stackalloc byte[bufferSize];
+            ffmpeg.av_strerror(err, buffer, (ulong)bufferSize);
+            return Marshal.PtrToStringAnsi((IntPtr)buffer);
+        }
         private void Cleanup()
         {
             if (!isInitialized)
@@ -640,10 +649,6 @@ namespace CinematicRecorder.Capture
             swsContext = null;
             isInitialized = false;
         }
-
-        public void Dispose()
-        {
-            RequestStop();
-        }
+        #endregion
     }
 }

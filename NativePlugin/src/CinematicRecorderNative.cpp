@@ -35,7 +35,7 @@ extern "C" {
 #define AMF_COLOR_TRANSFER_CHARACTERISTIC_SRGB 13
 #endif
 
-static thread_local char g_errorBuffer[1024];
+thread_local char g_errorBuffer[1024];
 
 // Global Unity device storage (owned by plugin, released on DLL unload or new set)
 static ID3D11Device* g_UnityD3D11Device = nullptr;
