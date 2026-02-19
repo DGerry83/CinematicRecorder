@@ -1,10 +1,11 @@
-﻿using System;
+﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Core;
+using System;
 using System.Collections;
 using System.IO;
-using UnityEngine.Rendering;
 using Unity.Collections;
 using UnityEngine;
-using CinematicRecorder.Core;
+using UnityEngine.Rendering;
 
 namespace CinematicRecorder.Capture
 {
@@ -42,6 +43,7 @@ namespace CinematicRecorder.Capture
         private CommandBuffer captureBuffer;
 
         private int actualCapturedFrames = 0;
+        private readonly AudioCaptureController _audioController;
         #endregion
         #region Constructor
         public OfflineCaptureController(
@@ -53,7 +55,8 @@ namespace CinematicRecorder.Capture
                     float durationSeconds,
                     string outputPath,
                     bool forceSoftwareEncoding,
-                    bool useGpuZeroCopy)
+                    bool useGpuZeroCopy,
+                    AudioCaptureController audioController)
         {
             this.camera = camera;
             this.width = width;
@@ -62,6 +65,7 @@ namespace CinematicRecorder.Capture
             this.playbackFps = playbackFps;
             this.outputPath = outputPath;
             this.useGpuZeroCopy = useGpuZeroCopy;
+            this._audioController = audioController;
 
             encoder = new HardwareEncoder
             {
@@ -72,6 +76,7 @@ namespace CinematicRecorder.Capture
         #endregion
         #region Public API
         public string OutputPath => outputPath;
+        public AudioCaptureController AudioController => _audioController;
         /// <summary>
         /// Primary coroutine that manages the full capture lifecycle: initialization, capture loop, and finalization.
         /// Restores original time settings in finally block to ensure game state is preserved.
@@ -145,6 +150,9 @@ namespace CinematicRecorder.Capture
             SetupRenderTargets();
             SetupEncoder();
 
+            if (_audioController != null)
+                _audioController.Initialize();
+
             DeterministicCaptureSession.CaptureFPS = 0f;
             realTimeAtLastSample = Time.realtimeSinceStartup;
 
@@ -191,6 +199,8 @@ namespace CinematicRecorder.Capture
                     simFrameDelta = 0.0001f;
                 }
 
+                _audioController?.CaptureSubFrame(simFrameDelta);
+
                 if (usingZeroCopyPath)
                 {
                     yield return CaptureFrameZeroCopy(frameIndex);
@@ -201,6 +211,8 @@ namespace CinematicRecorder.Capture
                 }
 
                 DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
+
+                _audioController?.FinalizeOutputFrame(currentSimFps);
 
                 DeterministicCaptureSession.InvokeOnPhysicsStepped(simFrameDelta);
 
@@ -562,6 +574,12 @@ namespace CinematicRecorder.Capture
             Time.maximumDeltaTime = originalMaxDelta;
             if (Planetarium.fetch != null)
                 Planetarium.fetch.fixedDeltaTime = originalPlanetariumDelta;
+
+            if (_audioController != null)
+            {
+                _audioController.Shutdown();
+                _audioController.Dispose();
+            }
 
             FinalizeEncoder();
 

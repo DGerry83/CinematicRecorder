@@ -26,6 +26,7 @@ namespace CinematicRecorder.UI
         private float realWorldCaptureTime;
         private string encodingModeUsed;
         private string outputFilePath;
+        private string audioFilePath;
         private bool wasUnlimitedRecording;
         private float showStartTime = -1f;
         private const float REPORT_TIMEOUT_SECONDS = 30f;
@@ -39,6 +40,7 @@ namespace CinematicRecorder.UI
             float realTimeSeconds,
             string encodingMode,
             string filePath,
+            string audioPath,
             bool unlimited = false)
         {
             capturedFrames = frames;
@@ -47,6 +49,7 @@ namespace CinematicRecorder.UI
             realWorldCaptureTime = realTimeSeconds;
             encodingModeUsed = encodingMode;
             outputFilePath = filePath;
+            audioFilePath = audioPath;
             wasUnlimitedRecording = unlimited;
 
             shouldShow = true;
@@ -125,6 +128,17 @@ namespace CinematicRecorder.UI
             }
 
             GUILayout.EndHorizontal();
+
+            if (!string.IsNullOrEmpty(audioFilePath))
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Audio File:", GUILayout.Width(130));
+                GUI.enabled = false;
+                GUILayout.TextField(Path.GetFileName(audioFilePath), HighLogic.Skin.textField);
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+            }
 
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
 

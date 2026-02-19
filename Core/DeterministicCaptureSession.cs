@@ -1,4 +1,5 @@
-﻿using CinematicRecorder.Capture;
+﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Capture;
 using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
 using System;
@@ -183,6 +184,7 @@ namespace CinematicRecorder.Core
 
             string baseName = $"Cinematic_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}";
             string outputPath;
+            string audioPath = null;
 
             if (SessionState.PngSequence)
             {
@@ -195,12 +197,30 @@ namespace CinematicRecorder.Core
             {
                 // Video mode: Standard MKV file path
                 outputPath = Path.Combine(outputDir, $"{baseName}.mkv");
+                if (SessionState.EnableAudioCapture)
+                    audioPath = Path.ChangeExtension(outputPath, ".wav");
             }
 
             // Force software encoding and disable zero-copy for PNG mode 
             // (hardware encoders can't output PNGs, and we need the CPU readback pathway)
             bool effectiveForceSoftware = forceSoftwareEncoding || SessionState.PngSequence;
             bool effectiveZeroCopy = useGpuZeroCopy && !SessionState.PngSequence;
+
+            AudioCaptureController audioController = null;
+            if (SessionState.EnableAudioCapture && !string.IsNullOrEmpty(audioPath))
+            {
+                // Audio capture only works reliably at 48fps or lower
+                if (simulationFps > 48)
+                {
+                    UnityEngine.Debug.LogWarning($"[DeterministicCaptureSession] Audio capture disabled: capture rate {simulationFps}fps exceeds 48fps limit");
+                    ScreenMessages.PostScreenMessage(CinematicUIStrings.Settings.AudioDisabledScreenMsg, 5f, ScreenMessageStyle.UPPER_CENTER);
+                }
+                else
+                {
+                    audioController = new AudioCaptureController(audioPath, playbackFps);
+                    UnityEngine.Debug.Log($"[DeterministicCaptureSession] Audio capture enabled: {audioPath}");
+                }
+            }
 
             var controller = new OfflineCaptureController(
                 cam,
@@ -211,7 +231,8 @@ namespace CinematicRecorder.Core
                 durationSeconds,
                 outputPath,
                 forceSoftwareEncoding,
-                useGpuZeroCopy);
+                useGpuZeroCopy,
+                audioController);
 
             var runner = new GameObject("DeterministicCaptureRunner");
             UnityEngine.Object.DontDestroyOnLoad(runner);
@@ -437,6 +458,7 @@ namespace CinematicRecorder.Core
 
             // Pull output path from controller
             string outputPath = controller.OutputPath;
+            string audioPath = controller.AudioController?.OutputPath;
 
             // Show report
             ShowFinalReport(
@@ -446,6 +468,7 @@ namespace CinematicRecorder.Core
                 finalRealSeconds,
                 encodingMode,
                 outputPath,
+                audioPath,
                 IsUnlimitedMode); // Pass unlimited flag
 
             // Fire stopped event before cleanup
@@ -463,6 +486,7 @@ namespace CinematicRecorder.Core
             float realWorldSeconds,
             string encodingMode,
             string outputPath,
+            string audioPath,
             bool wasUnlimited) // Parameter to indicate unlimited recording
         {
             FinalReportWindow report = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
@@ -481,6 +505,7 @@ namespace CinematicRecorder.Core
                 realWorldSeconds,
                 encodingMode,
                 outputPath,
+                audioPath,
                 wasUnlimited); // Pass flag
         }
         #endregion
