@@ -368,3 +368,4 @@ FodyWeavers.xsd
 /FolderList.txt
 /NativePlugin/build
 /dll_copy_config.txt
+/NativePlugin/nvenc/nvEncodeAPI.h
