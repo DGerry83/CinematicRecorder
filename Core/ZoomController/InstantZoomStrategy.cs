@@ -6,6 +6,7 @@
     public class InstantZoomStrategy : IZoomStrategy
     {
         private readonly float _targetFOV;
+        public float TargetFOV => _targetFOV;
         private bool _isComplete;
         public InstantZoomStrategy(float targetFOV)
         {

@@ -16,9 +16,12 @@ namespace CinematicRecorder.Integration
         public string vesselId;
         public bool allowAnyVessel;
 
-        // CameraTools specific
         public bool isCameraToolsSlot;
         private CameraToolsSettings _ctSettings;
+
+        public bool hullCamUseConsistentAutoZoom = false;
+        public float hullCamZoomPadding = 1.5f;
+        public float hullCamManualFOV = 60f;
         #endregion
         #region Properties
         public CameraToolsSettings ctSettings
@@ -27,13 +30,78 @@ namespace CinematicRecorder.Integration
             set { _ctSettings = value?.Clone(); }
         }
         #endregion
+        #region Zoom Settings Abstraction
+        /// <summary>
+        /// Gets whether consistent auto-zoom is enabled for this slot (works for both HullCam and CT).
+        /// </summary>
+        public bool GetUseConsistentAutoZoom()
+        {
+            if (isCameraToolsSlot)
+                return _ctSettings?.UseConsistentAutoZoom ?? false;
+            return hullCamUseConsistentAutoZoom;
+        }
+
+        /// <summary>
+        /// Sets whether consistent auto-zoom is enabled for this slot (works for both HullCam and CT).
+        /// </summary>
+        public void SetUseConsistentAutoZoom(bool value)
+        {
+            if (isCameraToolsSlot && _ctSettings != null)
+                _ctSettings.UseConsistentAutoZoom = value;
+            else
+                hullCamUseConsistentAutoZoom = value;
+        }
+
+        /// <summary>
+        /// Gets the zoom padding for this slot (works for both HullCam and CT).
+        /// </summary>
+        public float GetZoomPadding()
+        {
+            if (isCameraToolsSlot)
+                return _ctSettings?.ZoomPadding ?? 1.5f;
+            return hullCamZoomPadding;
+        }
+
+        /// <summary>
+        /// Sets the zoom padding for this slot (works for both HullCam and CT).
+        /// </summary>
+        public void SetZoomPadding(float value)
+        {
+            if (isCameraToolsSlot && _ctSettings != null)
+                _ctSettings.ZoomPadding = value;
+            else
+                hullCamZoomPadding = value;
+        }
+
+        /// <summary>
+        /// Gets the manual FOV for this slot (works for both HullCam and CT).
+        /// </summary>
+        public float GetManualFOV()
+        {
+            if (isCameraToolsSlot)
+                return _ctSettings?.ManualFOV ?? 60f;
+            return hullCamManualFOV;
+        }
+
+        /// <summary>
+        /// Sets the manual FOV for this slot (works for both HullCam and CT).
+        /// </summary>
+        public void SetManualFOV(float value)
+        {
+            if (isCameraToolsSlot && _ctSettings != null)
+                _ctSettings.ManualFOV = value;
+            else
+                hullCamManualFOV = value;
+        }
+        #endregion
         #region Public API
         public string GetDisplayName()
         {
             if (isCameraToolsSlot)
-                return ctSettings?.GetDisplayName() ?? "CameraTools";
+                return _ctSettings?.GetDisplayName() ?? "CameraTools";
             return cameraName ?? "Unknown";
         }
+
         /// <summary>
         /// Determines slot status considering current vessel and explicit activation state
         /// </summary>
@@ -43,13 +111,13 @@ namespace CinematicRecorder.Integration
             {
                 var controller = new CameraToolsCameraController();
                 if (!controller.IsAvailable) return SlotStatus.Unavailable;
-                if (ctSettings == null) return SlotStatus.Unassigned;
+                if (_ctSettings == null) return SlotStatus.Unassigned;
 
                 // Only this specific slot is "Active" if it's the explicitly selected one
                 if (isExplicitlyActive && controller.IsActive)
                 {
                     // Verify the active camera actually matches this slot's mode
-                    if (controller.CurrentMode == ctSettings.Mode)
+                    if (controller.CurrentMode == _ctSettings.Mode)
                         return SlotStatus.Active;
                 }
 
@@ -58,9 +126,9 @@ namespace CinematicRecorder.Integration
                 if (controller.IsActive)
                 {
                     // Special check for Pathing - validate path still exists
-                    if (ctSettings.Mode == ToolModes.Pathing)
+                    if (_ctSettings.Mode == ToolModes.Pathing)
                     {
-                        if (!controller.PathExists(ctSettings.SelectedPathIndex))
+                        if (!controller.PathExists(_ctSettings.SelectedPathIndex))
                             return SlotStatus.Unavailable;
                     }
 
@@ -69,9 +137,9 @@ namespace CinematicRecorder.Integration
                 }
 
                 // Pathing validation when not active
-                if (ctSettings.Mode == ToolModes.Pathing)
+                if (_ctSettings.Mode == ToolModes.Pathing)
                 {
-                    if (!controller.PathExists(ctSettings.SelectedPathIndex))
+                    if (!controller.PathExists(_ctSettings.SelectedPathIndex))
                         return SlotStatus.Unavailable;
                 }
 

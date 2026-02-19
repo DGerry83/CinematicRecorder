@@ -273,11 +273,22 @@ namespace CinematicRecorder.Capture
             readbackTexture.Apply(false, false);
             RenderTexture.active = null;
 
-            NativeArray<byte> data = new NativeArray<byte>(
-                readbackTexture.GetRawTextureData<byte>(),
-                Allocator.Persistent
-            );
-            encoder.EncodeFrame(data);
+            if (SessionState.PngSequence)
+            {
+                // PNG Mode: Encode to PNG and write to disk synchronously
+                byte[] pngData = readbackTexture.EncodeToPNG();
+                string frameFileName = Path.Combine(outputPath, $"frame_{actualCapturedFrames + 1:D6}.png");
+                File.WriteAllBytes(frameFileName, pngData);
+            }
+            else
+            {
+                // Video Mode: Send to hardware encoder
+                NativeArray<byte> data = new NativeArray<byte>(
+                    readbackTexture.GetRawTextureData<byte>(),
+                    Allocator.Persistent
+                );
+                encoder.EncodeFrame(data);
+            }
 
             actualCapturedFrames++;
             yield break;
@@ -358,6 +369,17 @@ namespace CinematicRecorder.Capture
         /// </summary>
         private void SetupEncoder()
         {
+            // >>> CRITICAL FIX: PNG Sequence mode must skip ALL video encoder initialization
+            if (SessionState.PngSequence)
+            {
+                UnityEngine.Debug.Log("[OfflineCapture] PNG Sequence mode active - skipping video encoder initialization");
+                usingZeroCopyPath = false;
+                usingNvencPath = false;
+                // Do NOT initialize 'encoder' at all - we won't use it
+                return;
+            }
+
+            // Only proceed with video encoder setup if NOT in PNG mode
             if (!useGpuZeroCopy)
             {
                 // CPU/Software path only
@@ -366,22 +388,18 @@ namespace CinematicRecorder.Capture
             }
 
             // GPU Zero-Copy Priority: NVENC -> AMF -> CPU
-
-            // Priority 1: NVENC (NVIDIA)
             if (TryInitNvenc())
             {
                 Debug.Log("[OfflineCapture] Using NVENC Zero-Copy path");
                 return;
             }
 
-            // Priority 2: AMF (AMD) - existing fallback
             if (TryInitAmf())
             {
                 Debug.Log("[OfflineCapture] Using AMF Zero-Copy path");
                 return;
             }
 
-            // Priority 3: Standard hardware encoder (FFmpeg fallback)
             Debug.Log("[OfflineCapture] GPU zero-copy unavailable, attempting standard hardware encoder...");
             if (encoder.Initialize(width, height, playbackFps, outputPath))
             {
@@ -389,7 +407,6 @@ namespace CinematicRecorder.Capture
                 return;
             }
 
-            // Final fallback: CPU
             Debug.LogWarning("[OfflineCapture] All hardware encoders failed, falling back to CPU");
             InitCpuEncoder();
         }

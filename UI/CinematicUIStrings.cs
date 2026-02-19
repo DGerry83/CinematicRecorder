@@ -88,6 +88,11 @@
             public const string QualityMaster = "Master Quality";
             public const string QualityHigh = "High Quality";
             public const string QualityCompressed = "Compressed";
+
+            // PNG Sequence Strings
+            public const string PngSequenceToggle = " PNG Sequence";
+            public const string PngSequenceTooltip = "Output individual PNG frames instead of video. Useful for post-processing. Forces software encoding and disables hardware acceleration.";
+            public const string PngSequenceCompleteLog = "[CinematicRecorder] PNG Sequence complete: {0} frames written to {1}";
         }
 
         public static class Recording

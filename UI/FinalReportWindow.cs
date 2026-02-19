@@ -149,6 +149,13 @@ namespace CinematicRecorder.UI
         private string GetDisplayPath(string fullPath)
         {
             if (string.IsNullOrEmpty(fullPath)) return string.Empty;
+
+            // If path is a directory (PNG sequence), show folder name with indicator
+            if (Directory.Exists(fullPath))
+            {
+                return Path.GetFileName(fullPath) + " (PNG Sequence)";
+            }
+
             return Path.GetFileName(fullPath);
         }
         /// <summary>
@@ -158,15 +165,22 @@ namespace CinematicRecorder.UI
         {
             try
             {
-                string folderPath = Path.GetDirectoryName(outputFilePath);
+                string folderPath;
+
+                // PNG sequence paths point directly to the folder
+                if (Directory.Exists(outputFilePath))
+                {
+                    folderPath = outputFilePath;
+                }
+                else
+                {
+                    folderPath = Path.GetDirectoryName(outputFilePath);
+                }
 
                 if (!string.IsNullOrEmpty(folderPath) && Directory.Exists(folderPath))
                 {
-                    // Use Unity's cross-platform URL opener with file protocol
-                    // Convert backslashes to forward slashes for URL format
                     string url = "file:///" + folderPath.Replace("\\", "/");
                     Application.OpenURL(url);
-
                     Debug.Log(string.Format(Report.OpeningFolderLog, folderPath));
                 }
                 else

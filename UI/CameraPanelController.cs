@@ -17,9 +17,13 @@ namespace CinematicRecorder.UI
         #region Services
         private readonly CameraSlotManager slotManager;
         private readonly CameraTransitionCoordinator transitionCoordinator;
-        private readonly ZoomControlService zoomService;
         private readonly CinematicCameraManager cameraManager;
         private readonly CameraToolsCameraController ctController;
+        private readonly HullCamZoomController _hullCamZoom;
+        private readonly CameraToolsZoomController _cameraToolsZoom;
+        private DeterministicZoomController _deterministicZoom; // Set when recording starts
+
+        private float _zoomIntent;
         #endregion
         #region UI State
         private readonly GUIStyle[] cameraButtonStyles = new GUIStyle[7];
@@ -71,9 +75,10 @@ namespace CinematicRecorder.UI
 
             slotManager = new CameraSlotManager();
             transitionCoordinator = new CameraTransitionCoordinator();
-            zoomService = new ZoomControlService();
             ctController = new CameraToolsCameraController();
             cameraManager = CinematicCameraManager.Instance;
+            _hullCamZoom = new HullCamZoomController();
+            _cameraToolsZoom = new CameraToolsZoomController();
 
             InitializeStyles();
             SubscribeToEvents();
@@ -220,11 +225,13 @@ namespace CinematicRecorder.UI
                     {
                         if (activeSlot.ctSettings.UseConsistentAutoZoom)
                         {
-                            ctController.ApplyConsistentAutoZoom(true, activeSlot.ctSettings.ZoomPadding);
+                            _cameraToolsZoom.UseConsistentAutoZoom = true;
+                            _cameraToolsZoom.ConsistentZoomPadding = activeSlot.ctSettings.ZoomPadding;
+                            _cameraToolsZoom.ApplyConsistentFraming();
                         }
                         else if (activeSlot.ctSettings.AutoZoom)
                         {
-                            ApplyNativeAutoZoom(activeSlot, ctController);
+                            ApplyNativeAutoZoom(activeSlot);
                         }
                     }
                 }
@@ -262,112 +269,117 @@ namespace CinematicRecorder.UI
             slotManager.CheckExternalDeactivation();
             var activeSlot = slotManager.ActiveSlot;
 
+            // Get the appropriate controller for current mode and camera type
+            IZoomController zoomController = GetCurrentZoomController();
+            if (zoomController == null) return;
+
+            // Sync slot settings to controller before processing
+            SyncZoomSettingsFromSlot(zoomController, activeSlot);
+
+            if (currentZoomMode == ZoomMode.Rate)
+            {
+                HandleRateMode(zoomController, activeSlot);
+            }
+            else // Target mode
+            {
+                HandleTargetMode(zoomController, activeSlot);
+            }
+        }
+        private IZoomController GetCurrentZoomController()
+        {
             if (DeterministicCaptureSession.IsRunning)
             {
-                HandleDeterministicZoom(activeSlot);
+                // Cache deterministic controller reference
+                if (_deterministicZoom == null && DeterministicCaptureSession.ActiveZoomController != null)
+                {
+                    _deterministicZoom = DeterministicCaptureSession.ActiveZoomController;
+                }
+                return _deterministicZoom;
+            }
+
+            // Real-time mode: return appropriate controller for active camera
+            if (cameraManager.ActiveCamera is CameraToolsCamera)
+                return _cameraToolsZoom;
+            else if (cameraManager.ActiveCamera is HullCamController)
+                return _hullCamZoom;
+
+            return null;
+        }
+
+        private void SyncZoomSettingsFromSlot(IZoomController zoom, CameraSlot slot)
+        {
+            if (slot == null) return;
+
+            zoom.UseConsistentAutoZoom = slot.GetUseConsistentAutoZoom();
+            zoom.ConsistentZoomPadding = slot.GetZoomPadding();
+        }
+
+        private void PersistZoomSettingsToSlot(IZoomController zoom, CameraSlot slot)
+        {
+            if (slot == null) return;
+
+            slot.SetUseConsistentAutoZoom(zoom.UseConsistentAutoZoom);
+            slot.SetZoomPadding(zoom.ConsistentZoomPadding);
+        }
+
+        private void HandleRateMode(IZoomController zoom, CameraSlot activeSlot)
+        {
+            // Apply rate input from UI
+            zoom.SetRateInput(_zoomIntent);
+
+            // Update based on mode
+            if (zoom.UseConsistentAutoZoom)
+            {
+                zoom.ApplyConsistentFraming();
             }
             else
             {
-                HandleRealTimeZoom(activeSlot);
+                zoom.Update(Time.deltaTime);
+            }
+
+            // Persist any state changes (e.g., auto-activation from transitions)
+            PersistZoomSettingsToSlot(zoom, activeSlot);
+
+            // Decay input for elastic slider behavior (UI-side only)
+            if (!Input.GetMouseButton(0))
+            {
+                _zoomIntent = Mathf.MoveTowards(_zoomIntent, 0f,
+                    Time.deltaTime * CinematicUIResources.Layout.Zoom.RETURN_SPEED);
             }
         }
-        private void HandleDeterministicZoom(CameraSlot activeSlot)
+
+        private void HandleTargetMode(IZoomController zoom, CameraSlot activeSlot)
         {
-            var detZoom = DeterministicCaptureSession.ActiveZoomController;
-            if (detZoom == null) return;
-
-            bool isHullCam = cameraManager.ActiveCamera is HullCamController;
-            bool isCT = cameraManager.ActiveCamera is CameraToolsCamera;
-
-            if (currentZoomMode == ZoomMode.Rate)
+            // Interrupt with rate input if slider moved significantly
+            if (Mathf.Abs(_zoomIntent) > 0.1f)
             {
-                // ALWAYS pass rate input in Rate mode, regardless of consistent framing setting
-                // Consistent framing check happens inside OnPhysicsStepped if UseConsistentAutoZoom is true
-                detZoom.SetRateInput(zoomService.ZoomIntent);
-                if (isCT)
+                zoom.Interrupt(new RateBasedZoomStrategy(CinematicUIResources.Layout.Zoom.MAX_SPEED));
+                zoom.SetRateInput(_zoomIntent);
+
+                // Decay and return (rate mode takes precedence when slider active)
+                if (!Input.GetMouseButton(0))
                 {
-                    detZoom.UseConsistentAutoZoom = ctController.UseConsistentAutoZoom;
-                    detZoom.ConsistentZoomPadding = ctController.ConsistentZoomPadding;
+                    _zoomIntent = Mathf.MoveTowards(_zoomIntent, 0f,
+                        Time.deltaTime * CinematicUIResources.Layout.Zoom.RETURN_SPEED);
                 }
-                else if (isHullCam)
-                {
-                    detZoom.UseConsistentAutoZoom = zoomService.UseConsistentAutoZoom;
-                    detZoom.ConsistentZoomPadding = zoomService.ConsistentZoomPadding;
-                }
-                zoomService.DecayZoomIntent(Time.deltaTime);
+                return;
             }
-            else // Target mode
+
+            // Normal target mode update
+            if (zoom.UseConsistentAutoZoom)
             {
-                // Interrupt target zoom with rate slider
-                if (Mathf.Abs(zoomService.ZoomIntent) > 0.1f)
-                {
-                    detZoom.Interrupt(new RateBasedZoomStrategy(60f));
-                    detZoom.SetRateInput(zoomService.ZoomIntent);
-                    zoomService.DecayZoomIntent(Time.deltaTime);
-                }
+                zoom.ApplyConsistentFraming();
             }
-        }
-        private void HandleRealTimeZoom(CameraSlot activeSlot)
-        {
-            ICamera activeCam = cameraManager.ActiveCamera;
-            bool isCT = activeCam is CameraToolsCamera;
-            bool isHullCam = activeCam is HullCamController;
-
-            // For CT: Check both slot settings (saved state) AND controller (active transition state)
-            // This catches instant transitions that set controller.UseConsistentAutoZoom immediately
-            bool ctConsistentEnabled = (activeSlot?.ctSettings?.UseConsistentAutoZoom ?? false) ||
-                                       (isCT && ctController.UseConsistentAutoZoom);
-            bool hullConsistentEnabled = zoomService.UseConsistentAutoZoom;
-
-            if (currentZoomMode == ZoomMode.Rate)
+            else
             {
-                if (isHullCam)
-                {
-                    if (hullConsistentEnabled)
-                        zoomService.ApplyConsistentFramingToHullCam();
-                    else
-                    {
-                        zoomService.SetRateInput(zoomService.ZoomIntent);
-                        zoomService.Update();
-                    }
-                    zoomService.DecayZoomIntent(Time.deltaTime);
-                }
-                else if (isCT)
-                {
-                    if (ctConsistentEnabled)
-                        ctController.ApplyConsistentFraming();
-                    else
-                        ctController.UpdateRate(zoomService.ZoomIntent);
+                bool hadStrategy = zoom.HasActiveStrategy;
+                zoom.Update(Time.deltaTime);
 
-                    zoomService.DecayZoomIntent(Time.deltaTime);
-                }
-            }
-            else // Target mode
-            {
-                if (isHullCam)
+                // Handoff: When consistent transition completes, persist to slot
+                if (!DeterministicCaptureSession.IsRunning && hadStrategy && !zoom.HasActiveStrategy
+                    && zoom.UseConsistentAutoZoom)
                 {
-                    if (hullConsistentEnabled)
-                        zoomService.ApplyConsistentFramingToHullCam();
-                    else
-                        zoomService.Update();
-                }
-                else if (isCT)
-                {
-                    if (ctConsistentEnabled)
-                    {
-                        ctController.ApplyConsistentFraming();
-                    }
-                    else
-                    {
-                        bool hadStrategy = ctController.HasActiveStrategy;
-                        ctController.UpdateTarget();
-
-                        // Handoff: When consistent transition completes, copy to slot settings
-                        if (hadStrategy && !ctController.HasActiveStrategy && ctController.UseConsistentAutoZoom && activeSlot?.ctSettings != null)
-                        {
-                            activeSlot.ctSettings.UseConsistentAutoZoom = true;
-                        }
-                    }
+                    PersistZoomSettingsToSlot(zoom, activeSlot);
                 }
             }
         }
@@ -453,24 +465,26 @@ namespace CinematicRecorder.UI
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Camera.GRID_TEXT_COLUMN_WIDTH));
 
             ICamera activeCam = cameraManager.ActiveCamera;
+            var activeSlot = slotManager.ActiveSlot; // Moved up to use for both
+
             if (activeCam is CameraToolsCamera)
             {
-                var activeSlot = slotManager.ActiveSlot;
-                if (activeSlot?.ctSettings != null)
+                // Use slot abstraction methods and CameraToolsZoomController
+                if (activeSlot != null)
                 {
                     DrawConsistentFramingControls(
-                        activeSlot.ctSettings.UseConsistentAutoZoom,
-                        activeSlot.ctSettings.ZoomPadding,
-                        activeCam.FieldOfView,
+                        activeSlot.GetUseConsistentAutoZoom(),
+                        activeSlot.GetZoomPadding(),
+                        _cameraToolsZoom.CurrentFoV,
                         (newVal) => {
-                            activeSlot.ctSettings.UseConsistentAutoZoom = newVal;
-                            ctController.UseConsistentAutoZoom = newVal;
-                            if (newVal) ctController.ApplyConsistentFraming();
+                            activeSlot.SetUseConsistentAutoZoom(newVal);
+                            _cameraToolsZoom.UseConsistentAutoZoom = newVal;
+                            if (newVal) _cameraToolsZoom.ApplyConsistentFraming();
                         },
                         (newVal) => {
-                            activeSlot.ctSettings.ZoomPadding = newVal;
-                            ctController.ConsistentZoomPadding = newVal;
-                            if (activeSlot.ctSettings.UseConsistentAutoZoom) ctController.ApplyConsistentFraming();
+                            activeSlot.SetZoomPadding(newVal);
+                            _cameraToolsZoom.ConsistentZoomPadding = newVal;
+                            if (activeSlot.GetUseConsistentAutoZoom()) _cameraToolsZoom.ApplyConsistentFraming();
                         }
                     );
                 }
@@ -481,23 +495,29 @@ namespace CinematicRecorder.UI
             }
             else if (activeCam is HullCamController)
             {
-                DrawConsistentFramingControls(
-                    zoomService.UseConsistentAutoZoom,
-                    zoomService.ConsistentZoomPadding,
-                    zoomService.CurrentFoV,
-                    (newVal) => {
-                        zoomService.UseConsistentAutoZoom = newVal;
-                        if (newVal) zoomService.ApplyConsistentFramingToHullCam();
-                    },
-                    (newVal) => {
-                        zoomService.ConsistentZoomPadding = newVal;
-                        if (zoomService.UseConsistentAutoZoom) zoomService.ApplyConsistentFramingToHullCam();
-                    }
-                );
-            }
-            else
-            {
-                DrawInstructions();
+                // Supports per-slot settings for HullCam too via slot abstraction
+                if (activeSlot != null)
+                {
+                    DrawConsistentFramingControls(
+                        activeSlot.GetUseConsistentAutoZoom(),
+                        activeSlot.GetZoomPadding(),
+                        _hullCamZoom.CurrentFoV,
+                        (newVal) => {
+                            activeSlot.SetUseConsistentAutoZoom(newVal);
+                            _hullCamZoom.UseConsistentAutoZoom = newVal;
+                            if (newVal) _hullCamZoom.ApplyConsistentFraming();
+                        },
+                        (newVal) => {
+                            activeSlot.SetZoomPadding(newVal);
+                            _hullCamZoom.ConsistentZoomPadding = newVal;
+                            if (activeSlot.GetUseConsistentAutoZoom()) _hullCamZoom.ApplyConsistentFraming();
+                        }
+                    );
+                }
+                else
+                {
+                    DrawInstructions();
+                }
             }
 
             GUILayout.FlexibleSpace();
@@ -645,8 +665,9 @@ namespace CinematicRecorder.UI
 
             if (wantRateMode && currentZoomMode != ZoomMode.Rate)
             {
-                zoomService.CancelActiveZoom();
-                ctController.CancelActiveZoom();
+                // Cancel zoom on all controllers
+                _hullCamZoom.CancelActiveZoom();
+                _cameraToolsZoom.CancelActiveZoom();
                 if (DeterministicCaptureSession.IsRunning)
                 {
                     DeterministicCaptureSession.ActiveZoomController?.Clear();
@@ -655,13 +676,14 @@ namespace CinematicRecorder.UI
             }
             else if (wantTargetMode && currentZoomMode != ZoomMode.Target)
             {
-                zoomService.CancelActiveZoom();
-                ctController.CancelActiveZoom();
+                // Cancel zoom on all controllers
+                _hullCamZoom.CancelActiveZoom();
+                _cameraToolsZoom.CancelActiveZoom();
                 if (DeterministicCaptureSession.IsRunning)
                 {
                     DeterministicCaptureSession.ActiveZoomController?.Clear();
                 }
-                zoomService.ZoomIntent = 0f;
+                _zoomIntent = 0f;
                 currentZoomMode = ZoomMode.Target;
             }
 
@@ -686,13 +708,20 @@ namespace CinematicRecorder.UI
 
             GUIStyle intentStyle = new GUIStyle(HighLogic.Skin.horizontalSlider);
             GUIStyle thumbStyle = new GUIStyle(HighLogic.Skin.horizontalSliderThumb);
-            zoomService.ZoomIntent = GUILayout.HorizontalSlider(zoomService.ZoomIntent, -1f, 1f, intentStyle, thumbStyle);
+
+            // Use local _zoomIntent instead of zoomService.ZoomIntent
+            _zoomIntent = GUILayout.HorizontalSlider(_zoomIntent, -1f, 1f, intentStyle, thumbStyle);
 
             GUILayout.Label(CameraController.ZoomIn, GUILayout.Width(CinematicUIResources.Layout.Zoom.LABEL_WIDTH));
             GUILayout.EndHorizontal();
 
             float maxFov = cameraManager.GetMaxFOV();
-            GUILayout.Label(string.Format(CameraController.FOVFormat, zoomService.CurrentFoV, maxFov), HighLogic.Skin.label);
+
+            // Get current FOV from active zoom controller
+            IZoomController currentZoom = GetCurrentZoomController();
+            float currentFOV = currentZoom?.CurrentFoV ?? 60f;
+
+            GUILayout.Label(string.Format(CameraController.FOVFormat, currentFOV, maxFov), HighLogic.Skin.label);
 
             if (GUILayout.Button(CameraController.ResetZoom, GUILayout.Width(CinematicUIResources.Layout.Zoom.RESET_BUTTON_WIDTH)))
             {
@@ -704,8 +733,9 @@ namespace CinematicRecorder.UI
                 }
                 else
                 {
-                    zoomService.ResetZoom(maxFov);
-                    ctController.ResetZoom();
+                    // Reset both controllers (active one will apply, inactive is harmless)
+                    _hullCamZoom.ResetZoom(maxFov);
+                    _cameraToolsZoom.ResetZoom(maxFov);
                 }
             }
         }
@@ -771,49 +801,41 @@ namespace CinematicRecorder.UI
             if (!targetIsConsistentFraming && targetFOVValue <= 0)
                 targetFOVValue = cameraManager.GetCurrentFOV();
 
+            // Get unified controller
+            IZoomController zoom = GetCurrentZoomController();
+            if (zoom == null) return;
+
             if (DeterministicCaptureSession.IsRunning)
             {
-                var detZoom = DeterministicCaptureSession.ActiveZoomController;
-                if (detZoom == null) return;
-
+                // Deterministic path
                 if (targetIsConsistentFraming)
                 {
-                    detZoom.QueueConsistentFramingTransition(targetDuration, targetZoomCurve, zoomService.ConsistentZoomPadding);
+                    zoom.QueueConsistentTransition(targetDuration, targetZoomCurve);
                 }
                 else
                 {
                     if (targetDuration < 0.001f)
-                        detZoom.Interrupt(new InstantZoomStrategy(targetFOVValue));
+                        zoom.Interrupt(new InstantZoomStrategy(targetFOVValue));
                     else
-                        detZoom.Interrupt(new TargetBasedZoomStrategy(targetFOVValue, targetDuration, targetZoomCurve));
+                        zoom.Interrupt(new TargetBasedZoomStrategy(targetFOVValue, targetDuration, targetZoomCurve));
                 }
             }
             else
             {
-                ICamera activeCam = cameraManager.ActiveCamera;
-
+                // Real-time path
                 if (targetIsConsistentFraming)
                 {
-                    if (activeCam is CameraToolsCamera ctCam)
+                    zoom.QueueConsistentTransition(targetDuration, targetZoomCurve);
+
+                    // For instant, update slot immediately so UI reflects it next frame
+                    if (targetDuration < 0.001f && slotManager.ActiveSlot != null)
                     {
-                        ctController.QueueConsistentTransition(targetDuration, targetZoomCurve);
-                        // For instant, update slot immediately so UI reflects it next frame
-                        if (targetDuration < 0.001f && slotManager.ActiveSlot?.ctSettings != null)
-                        {
-                            slotManager.ActiveSlot.ctSettings.UseConsistentAutoZoom = true;
-                        }
-                    }
-                    else if (activeCam is HullCamController)
-                    {
-                        zoomService.QueueConsistentTransition(targetDuration, targetZoomCurve);
+                        slotManager.ActiveSlot.SetUseConsistentAutoZoom(true);
                     }
                 }
                 else
                 {
-                    if (activeCam is CameraToolsCamera)
-                        ctController.QueueTargetZoom(targetFOVValue, targetDuration, targetZoomCurve);
-                    else if (activeCam is HullCamController)
-                        zoomService.QueueTargetZoom(targetFOVValue, targetDuration, targetZoomCurve);
+                    zoom.QueueTargetZoom(targetFOVValue, targetDuration, targetZoomCurve);
                 }
             }
         }
@@ -975,9 +997,10 @@ namespace CinematicRecorder.UI
 
                 BeginCameraSwitch(() =>
                 {
-                    ctController.UseConsistentAutoZoom = slot.ctSettings.UseConsistentAutoZoom;
-                    ctController.ConsistentZoomPadding = slot.ctSettings.ZoomPadding;
-                    ctController.CancelActiveZoom();
+                    // Sync slot settings to CameraToolsZoomController (zoom moved to separate controller)
+                    _cameraToolsZoom.UseConsistentAutoZoom = slot.ctSettings.UseConsistentAutoZoom;
+                    _cameraToolsZoom.ConsistentZoomPadding = slot.ctSettings.ZoomPadding;
+                    _cameraToolsZoom.CancelActiveZoom();
 
                     slotManager.SetActiveSlot(index);
                     _lastCTSlotIndex = index;
@@ -987,11 +1010,11 @@ namespace CinematicRecorder.UI
 
                     if (slot.ctSettings.UseConsistentAutoZoom)
                     {
-                        ctController.ApplyConsistentFraming();
+                        _cameraToolsZoom.ApplyConsistentFraming();
                     }
                     else if (slot.ctSettings.AutoZoom)
                     {
-                        ApplyNativeAutoZoom(slot, ctController);
+                        ApplyNativeAutoZoom(slot);
                     }
 
                     var ctCam = cameraManager.ActiveCamera as CameraToolsCamera;
@@ -1024,7 +1047,19 @@ namespace CinematicRecorder.UI
                     BeginCameraSwitch(() =>
                     {
                         slotManager.SetActiveSlot(index);
+
+                        if (slot != null && !slot.isCameraToolsSlot)
+                        {
+                            _hullCamZoom.UseConsistentAutoZoom = slot.GetUseConsistentAutoZoom();
+                            _hullCamZoom.ConsistentZoomPadding = slot.GetZoomPadding();
+                        }
+
                         cameraManager.SwitchToCamera(slot, immediate: true);
+
+                        if (slot != null && !slot.isCameraToolsSlot && slot.GetUseConsistentAutoZoom())
+                        {
+                            _hullCamZoom.ApplyConsistentFraming();
+                        }
                     });
                     break;
                 case CameraSlot.SlotStatus.Unavailable:
@@ -1046,7 +1081,7 @@ namespace CinematicRecorder.UI
                 var slot = slotManager.GetSlot(_lastCTSlotIndex);
                 if (slot?.isCameraToolsSlot == true && ctController.IsAvailable && ctController.IsActive)
                 {
-                    // Use API to get current FOV instead of reflection
+                    // Use API to get current FOV
                     float currentFOV = CameraToolsAPIManager.GetActualFOV();
 
                     if (currentFOV > 0)
@@ -1054,13 +1089,15 @@ namespace CinematicRecorder.UI
                         // Clone then modify to avoid mutating stored reference
                         var newSettings = slot.ctSettings.Clone();
                         newSettings.ManualFOV = currentFOV;
-                        newSettings.UseConsistentAutoZoom = ctController.UseConsistentAutoZoom;
-                        newSettings.ZoomPadding = ctController.ConsistentZoomPadding;
+
+                        // Read from zoom controller instead of ctController (zoom moved to separate controller)
+                        newSettings.UseConsistentAutoZoom = _cameraToolsZoom.UseConsistentAutoZoom;
+                        newSettings.ZoomPadding = _cameraToolsZoom.ConsistentZoomPadding;
 
                         // Re-assign to trigger property setter cloning
                         slot.ctSettings = newSettings;
 
-                        UnityEngine.Debug.Log($"[FOV Capture] Slot {_lastCTSlotIndex}: Updated ManualFOV to {currentFOV:F1} via API");
+                        UnityEngine.Debug.Log($"[FOV Capture] Slot {_lastCTSlotIndex}: Updated ManualFOV to {currentFOV:F1}, Consistent: {newSettings.UseConsistentAutoZoom}");
                     }
                 }
             }
@@ -1122,13 +1159,13 @@ namespace CinematicRecorder.UI
             vessel = _cachedVessel;
             return vessel != null;
         }
-        private void ApplyNativeAutoZoom(CameraSlot slot, CameraToolsCameraController controller)
+        private void ApplyNativeAutoZoom(CameraSlot slot)
         {
             Vessel currentVessel = _cachedVessel;
             if (currentVessel == null || FlightCamera.fetch == null) return;
 
             Vector3 targetPos = (slot.ctSettings.HasTarget && !slot.ctSettings.TargetSelf)
-                ? controller.CamTarget?.transform.position ?? currentVessel.CoM
+                ? ctController.CamTarget?.transform.position ?? currentVessel.CoM
                 : currentVessel.CoM;
 
             float distance = Vector3.Distance(FlightCamera.fetch.transform.position, targetPos);
@@ -1136,7 +1173,7 @@ namespace CinematicRecorder.UI
             float nativeFOV = (7000f / (distance + 100f)) - 14f + margin;
             nativeFOV = Mathf.Clamp(nativeFOV, 2f, 60f);
 
-            controller.EnforceAutoZoomFOVImmediate(nativeFOV);
+            _cameraToolsZoom.ResetZoom(nativeFOV);
             FlightCamera.fetch.SetFoV(nativeFOV);
         }
         #endregion

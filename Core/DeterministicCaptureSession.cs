@@ -34,7 +34,7 @@ namespace CinematicRecorder.Core
         public static event Action<float> OnPhysicsStepped;
 
         /// <summary>Active deterministic zoom controller during capture. Null when not running.</summary>
-        public static SimulationTimeZoomController ActiveZoomController { get; private set; }
+        public static DeterministicZoomController ActiveZoomController { get; private set; }
         #endregion
         #region Progress Tracking  
         public static float CaptureFPS { get; internal set; }
@@ -181,9 +181,26 @@ namespace CinematicRecorder.Core
 
             Directory.CreateDirectory(outputDir);
 
-            string outputPath = Path.Combine(
-                outputDir,
-                $"Cinematic_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.mkv");
+            string baseName = $"Cinematic_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}";
+            string outputPath;
+
+            if (SessionState.PngSequence)
+            {
+                // PNG Sequence: Create a directory named after what would have been the video file
+                outputPath = Path.Combine(outputDir, baseName);
+                Directory.CreateDirectory(outputPath);
+                UnityEngine.Debug.Log($"[DeterministicCaptureSession] PNG Sequence mode - output directory: {outputPath}");
+            }
+            else
+            {
+                // Video mode: Standard MKV file path
+                outputPath = Path.Combine(outputDir, $"{baseName}.mkv");
+            }
+
+            // Force software encoding and disable zero-copy for PNG mode 
+            // (hardware encoders can't output PNGs, and we need the CPU readback pathway)
+            bool effectiveForceSoftware = forceSoftwareEncoding || SessionState.PngSequence;
+            bool effectiveZeroCopy = useGpuZeroCopy && !SessionState.PngSequence;
 
             var controller = new OfflineCaptureController(
                 cam,
@@ -201,7 +218,7 @@ namespace CinematicRecorder.Core
 
             var captureRunner = runner.AddComponent<CaptureRunner>();
 
-            ActiveZoomController = runner.AddComponent<SimulationTimeZoomController>();
+            ActiveZoomController = runner.AddComponent<DeterministicZoomController>();
 
             TakeControlOfActivePathingCamera(playbackFps);
             OnRecordingStarted?.Invoke();

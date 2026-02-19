@@ -7,20 +7,14 @@ using UnityEngine;
 namespace CinematicRecorder.Integration
 {
     /// <summary>
-    /// High-level operations for CameraTools camera control with unified zoom handling.
-    /// Uses CameraToolsAPIManager for configuration and reflection provider for state queries.
+    /// High-level operations for CameraTools camera control.
+    /// Zoom/FOV control has been moved to CameraToolsZoomController.
+    /// This class handles: activation, mode switching, pathing, and geographic restoration.
     /// </summary>
     public class CameraToolsCameraController
     {
         #region Fields
         private readonly CameraSettingsRepository _settingsRepo;
-        private IZoomStrategy _currentStrategy;
-        private float _rateInput;
-        private float _manualTargetFOV = 60f;
-        private bool _useConsistentAutoZoom;
-        private float _consistentZoomPadding = 1.5f;
-        private bool _enableConsistentOnComplete;
-        private float _rateControlCurrentFOV = 60f;
 
         // Deferred restoration state for PostActivationPositionFixup
         private Vector3 _pendingRestoredPosition;
@@ -32,196 +26,14 @@ namespace CinematicRecorder.Integration
         public ToolModes CurrentMode => CameraToolsAPIManager.GetToolMode();
         public float ManualFOV => CameraToolsAPIManager.GetManualFOV();
         public float CurrentFOV => CameraToolsAPIManager.GetActualFOV();
-        public bool UseConsistentAutoZoom
-        {
-            get => _useConsistentAutoZoom;
-            set
-            {
-                _useConsistentAutoZoom = value;
-                if (value) CancelActiveZoom();
-            }
-        }
-        public float ConsistentZoomPadding
-        {
-            get => _consistentZoomPadding;
-            set => _consistentZoomPadding = value;
-        }
         public Part CamTarget => CameraToolsReflectionProvider.CamTarget;
         public bool UsePresetOffset => CameraToolsReflectionProvider.SetPresetOffset;
-        public bool HasActiveStrategy => _currentStrategy != null;
         public int SelectedPathIndex => CameraToolsReflectionProvider.GetInt(CameraToolsReflectionProvider.SelectedPathIndexField, -1);
         #endregion
         #region Constructor
         public CameraToolsCameraController()
         {
             _settingsRepo = new CameraSettingsRepository();
-        }
-        #endregion
-        #region Rate-Based Zoom
-        /// <summary>
-        /// Applies a single rate-based zoom step. Used by both real-time and deterministic modes.
-        /// </summary>
-        public void ApplyRateStep(float intent, float deltaTime)
-        {
-            if (!IsActive) return;
-
-            // Initialize accumulation on first call
-            if (_currentStrategy == null || !(_currentStrategy is RateBasedZoomStrategy))
-            {
-                _currentStrategy = new RateBasedZoomStrategy(CinematicUIResources.Layout.Zoom.MAX_SPEED);
-                _rateControlCurrentFOV = CameraToolsReflectionProvider.CurrentFOV;
-            }
-
-            if (_currentStrategy is RateBasedZoomStrategy rateStrategy)
-            {
-                rateStrategy.SetInput(intent);
-                float newFOV = rateStrategy.GetTargetFOV(_rateControlCurrentFOV, deltaTime);
-
-                CameraToolsAPIManager.SetExternalFOV(newFOV);
-                _rateControlCurrentFOV = newFOV;
-            }
-        }
-        public void UpdateRate(float intent)
-        {
-            ApplyRateStep(intent, Time.deltaTime);
-        }
-
-        /// <summary>
-        /// Decays rate input for elastic behavior.
-        /// </summary>
-        public void DecayRateInput(float deltaTime)
-        {
-            if (!Input.GetMouseButton(0))
-            {
-                _rateInput = Mathf.MoveTowards(_rateInput, 0f,
-                    deltaTime * CinematicUIResources.Layout.Zoom.RETURN_SPEED);
-            }
-        }
-
-        /// <summary>
-        /// Gets current rate input value (for UI display).
-        /// </summary>
-        public float GetRateInput() => _rateInput;
-        #endregion
-        #region Target-Based Zoom
-        /// <summary>
-        /// Updates target-based zoom. Call this every frame in Target mode.
-        /// </summary>
-        public void UpdateTarget()
-        {
-            if (!IsActive) return;
-            if (_currentStrategy == null) return;
-
-            float newFOV = _currentStrategy.GetTargetFOV(CurrentFOV, Time.deltaTime);
-
-            // Use API for immediate FOV application
-            CameraToolsAPIManager.SetExternalFOV(newFOV);
-
-            if (_currentStrategy.IsComplete)
-            {
-                // Handoff to consistent framing if applicable
-                if (_currentStrategy is ConsistentFramingTransitionStrategy && _enableConsistentOnComplete)
-                {
-                    UseConsistentAutoZoom = true;
-                    _enableConsistentOnComplete = false;
-                }
-                _currentStrategy = null;
-            }
-        }
-
-        /// <summary>
-        /// Queues a target zoom. Zero duration = instant.
-        /// </summary>
-        public void QueueTargetZoom(float targetFOV, float duration, ZoomCurve curve)
-        {
-            CancelActiveZoom();
-            _manualTargetFOV = targetFOV;
-
-            if (duration < 0.001f)
-            {
-                _currentStrategy = new InstantZoomStrategy(targetFOV);
-                // Execute immediately since UpdateTarget might not be called this frame
-                CameraToolsAPIManager.SetExternalFOV(targetFOV);
-            }
-            else
-            {
-                _currentStrategy = new TargetBasedZoomStrategy(targetFOV, duration, curve);
-            }
-        }
-
-        /// <summary>
-        /// Queues transition to consistent framing FOV.
-        /// </summary>
-        public void QueueConsistentTransition(float duration, ZoomCurve curve)
-        {
-            CancelActiveZoom();
-
-            if (duration < 0.001f)
-            {
-                UseConsistentAutoZoom = true;
-                ApplyConsistentFraming();
-                return;
-            }
-
-            _currentStrategy = new ConsistentFramingTransitionStrategy(
-                CurrentFOV, duration, curve, _consistentZoomPadding);
-            _enableConsistentOnComplete = true;
-        }
-
-        /// <summary>
-        /// Cancels any active zoom strategy.
-        /// </summary>
-        public void CancelActiveZoom()
-        {
-            _currentStrategy = null;
-            _enableConsistentOnComplete = false;
-        }
-        #endregion
-        #region Consistent Framing
-        /// <summary>
-        /// Applies consistent auto-zoom settings every frame when enabled.
-        /// Bypasses any active zoom strategies.
-        /// </summary>
-        public void ApplyConsistentFraming()
-        {
-            if (!IsAvailable || !IsActive) return;
-
-            // Disable native auto-zoom when custom is active to prevent conflicts
-            CameraToolsReflectionProvider.SetBool(CameraToolsReflectionProvider.AutoZoomStationaryField, false);
-
-            if (FlightGlobals.ActiveVessel != null && FlightCamera.fetch != null)
-            {
-                Vector3 camPos = FlightCamera.fetch.transform.position;
-                float targetFov = ZoomMathUtility.CalculateConsistentFramingFOV(
-                    FlightGlobals.ActiveVessel, camPos, _consistentZoomPadding);
-
-                targetFov = Mathf.Clamp(targetFov, 2f, 120f);
-
-                CameraToolsAPIManager.SetExternalFOV(targetFov);
-            }
-        }
-
-        /// <summary>
-        /// Legacy support for immediate consistent framing application
-        /// </summary>
-        public void ApplyConsistentAutoZoom(bool enable, float padding)
-        {
-            UseConsistentAutoZoom = enable;
-            ConsistentZoomPadding = padding;
-            if (enable)
-            {
-                ApplyConsistentFraming();
-            }
-        }
-
-        /// <summary>
-        /// Resets zoom to maximum FOV instantly.
-        /// </summary>
-        public void ResetZoom()
-        {
-            CancelActiveZoom();
-            UseConsistentAutoZoom = false;
-            CameraToolsAPIManager.SetExternalFOV(60f); // "Normal" FOV
         }
         #endregion
         #region Core Operations
@@ -248,8 +60,6 @@ namespace CinematicRecorder.Integration
         public void Deactivate()
         {
             CameraToolsAPIManager.DeactivateCamera();
-
-            CancelActiveZoom();
             ClearPendingRestoration();
         }
 
@@ -375,14 +185,36 @@ namespace CinematicRecorder.Integration
             return _settingsRepo.CaptureSettings();
         }
         #endregion
+        #region REMOVED: Rate-Based Zoom Section
+        // REMOVED: ApplyRateStep()
+        // REMOVED: UpdateRate()
+        // REMOVED: DecayRateInput()
+        // REMOVED: GetRateInput()
+        // MOVED TO: CameraToolsZoomController
+        #endregion
+        #region REMOVED: Target-Based Zoom Section
+        // REMOVED: UpdateTarget()
+        // REMOVED: QueueTargetZoom()
+        // REMOVED: QueueConsistentTransition()
+        // REMOVED: CancelActiveZoom()
+        // MOVED TO: CameraToolsZoomController
+        #endregion
+        #region REMOVED: Consistent Framing Section
+        // REMOVED: ApplyConsistentFraming()
+        // REMOVED: ApplyConsistentAutoZoom()
+        // REMOVED: ResetZoom()
+        // MOVED TO: CameraToolsZoomController
+        #endregion
         #region Geographic Restoration
         public bool HasPendingGeographicRestoration() =>
             _pendingGeographicSettings != null && _pendingGeographicSettings.UseGeographicPosition;
+
         public void ClearPendingRestoration()
         {
             _pendingRestoredPosition = Vector3.zero;
             _pendingGeographicSettings = null;
         }
+
         /// <summary>
         /// Executes deferred position correction for geographic coordinates after activation
         /// </summary>
@@ -416,6 +248,7 @@ namespace CinematicRecorder.Integration
 
             CameraToolsReflectionProvider.LastVesselCoM = currentVessel.CoM;
 
+            // Apply FOV if using auto-zoom modes
             if (_pendingGeographicSettings.UseConsistentAutoZoom)
             {
                 float targetFOV = ZoomMathUtility.CalculateConsistentFramingFOV(
@@ -435,34 +268,17 @@ namespace CinematicRecorder.Integration
         #region Helpers
         /// <summary>
         /// Applies FOV using the API for immediate effect.
+        /// KEPT for geographic restoration use.
         /// </summary>
         private void ApplyFOV(float fov)
         {
             fov = Mathf.Clamp(fov, 2f, 120f);
             CameraToolsAPIManager.SetExternalFOV(fov);
         }
-        public void EnforceAutoZoomFOVImmediate(float targetFOV)
-        {
-            ApplyFOV(targetFOV);
-        }
 
         /// <summary>
-        /// Force resets CameraTools to a completely clean state.
-        /// Use when returning to main or when state corruption is detected.
+        /// KEPT for legacy native auto-zoom support in geographic restoration.
         /// </summary>
-        public void ForceReset()
-        {
-            CancelActiveZoom();
-            ClearPendingRestoration();
-            _useConsistentAutoZoom = false;
-            _rateInput = 0f;
-            _currentStrategy = null;
-
-            if (IsActive)
-            {
-                CameraToolsAPIManager.DeactivateCamera();
-            }
-        }
         private float CalculateAutoZoomFOV(CameraToolsSettings settings, Vessel vessel)
         {
             if (vessel == null) return 60f;
@@ -474,18 +290,28 @@ namespace CinematicRecorder.Integration
             Vector3 cameraPos = Vector3.zero;
             if (FlightCamera.fetch != null)
                 cameraPos = FlightCamera.fetch.transform.position;
-            //Vector3 cameraPos = FlightCamera.fetch?.transform.position ?? Vector3.zero;
             float distance = Vector3.Distance(targetPos, cameraPos);
             float margin = CameraToolsReflectionProvider.GetFloat(CameraToolsReflectionProvider.AutoZoomMarginStationaryField, 30f);
 
             float targetFoV = (7000f / (distance + 100f)) - 14f + margin;
             return Mathf.Clamp(targetFoV, 2f, 60f);
         }
-        public float CalculateConsistentAutoZoom(Vessel vessel, Vector3 cameraPosition, float paddingMultiplier)
-        {
-            return ZoomMathUtility.CalculateConsistentFramingFOV(vessel, cameraPosition, paddingMultiplier);
-        }
+
         public bool PathExists(int index) => CameraToolsReflectionProvider.PathExists(index);
+
+        /// <summary>
+        /// Force resets CameraTools to a completely clean state.
+        /// MODIFIED: Removed zoom-specific reset logic (handled by CameraToolsZoomController).
+        /// </summary>
+        public void ForceReset()
+        {
+            ClearPendingRestoration();
+
+            if (IsActive)
+            {
+                CameraToolsAPIManager.DeactivateCamera();
+            }
+        }
         #endregion
     }
 }

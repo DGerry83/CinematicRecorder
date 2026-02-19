@@ -29,7 +29,7 @@ namespace CinematicRecorder.UI
         private bool stylesInitialized;
         private bool showAdvancedPanel = false;
 
-        private readonly int[] frameratePresets = { 24, 30, 60, 120, 240 };
+        private readonly int[] frameratePresets = { 24, 30, 60, 120, 240, 384 };
         private readonly string[] encoderTabNames = { Settings.EncoderAMD, Settings.EncoderNVIDIA, Settings.EncoderCPU };
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
@@ -544,8 +544,9 @@ namespace CinematicRecorder.UI
             GUIStyle headerStyle = CinematicUIResources.Styles.Header();
             GUILayout.Label(Settings.AdvancedOptionsHeader, headerStyle);
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            // Safe Mode (CPU Encoding) Toggle - Added
             DrawSafeModeToggle();
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+            DrawPngSequenceToggle();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
             tooltipStyle.wordWrap = true;
@@ -625,6 +626,45 @@ namespace CinematicRecorder.UI
                 );
                 GUILayout.Label(Settings.SafeModeRecordingWarning, warningStyle);
             }
+
+            GUI.enabled = wasEnabled;
+        }
+        private void DrawPngSequenceToggle()
+        {
+            bool wasEnabled = GUI.enabled;
+            if (DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            // Style: Green + Bold when active (matching Safe Mode pattern)
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.PngSequence)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newValue = GUILayout.Toggle(
+                SessionState.PngSequence,
+                Settings.PngSequenceToggle,
+                toggleStyle
+            );
+
+            if (newValue != SessionState.PngSequence && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.PngSequence = newValue;
+                if (newValue)
+                {
+                    // Force software encoding when PNG mode is enabled (hardware encoders can't output PNGs)
+                    SessionState.ForceSoftwareEncoding = true;
+                    UnityEngine.Debug.Log("[CinematicRecorder] PNG Sequence enabled - forcing software encoding path");
+                }
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+            helpStyle.wordWrap = true;
+            GUILayout.Label(Settings.PngSequenceTooltip, helpStyle);
 
             GUI.enabled = wasEnabled;
         }
