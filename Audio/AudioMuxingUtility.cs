@@ -60,30 +60,18 @@ namespace CinematicRecorder.Audio
                         Arguments = args,
                         CreateNoWindow = true,
                         UseShellExecute = false,
-                        RedirectStandardError = true,
+                        RedirectStandardError = false,  // FIX: Don't redirect - prevents deadlock
+                        RedirectStandardOutput = false, // FIX: Don't redirect
                         WorkingDirectory = outputDir
                     },
                     EnableRaisingEvents = true
                 };
 
+                // Use a completion task instead of Exited event for long files
                 process.Exited += (sender, e) =>
                 {
                     int exitCode = process.ExitCode;
-
-                    string stderr = "";
-                    try
-                    {
-                        stderr = process.StandardError.ReadToEnd();
-                    }
-                    catch { }
-
                     process.Dispose();
-
-                    UnityEngine.Debug.Log($"[AudioMuxingUtility] FFmpeg exit code: {exitCode}");
-                    if (!string.IsNullOrEmpty(stderr))
-                    {
-                        UnityEngine.Debug.Log($"[AudioMuxingUtility] FFmpeg stderr: {stderr}");
-                    }
 
                     if (exitCode == 0)
                     {

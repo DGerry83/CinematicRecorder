@@ -219,10 +219,10 @@ namespace CinematicRecorder.Core
             AudioCaptureController audioController = null;
             if (SessionState.EnableAudioCapture && !string.IsNullOrEmpty(audioPath))
             {
-                // Audio capture only works reliably at 48fps or lower
-                if (simulationFps > 48)
+                // Audio capture only works reliably at 30fps or lower
+                if (simulationFps > 30)
                 {
-                    UnityEngine.Debug.LogWarning($"[DeterministicCaptureSession] Audio capture disabled: capture rate {simulationFps}fps exceeds 48fps limit");
+                    UnityEngine.Debug.LogWarning($"[DeterministicCaptureSession] Audio capture disabled: capture rate {simulationFps}fps exceeds 30fps limit");
                     ScreenMessages.PostScreenMessage(CinematicUIStrings.Settings.AudioDisabledScreenMsg, 5f, ScreenMessageStyle.UPPER_CENTER);
                 }
                 else

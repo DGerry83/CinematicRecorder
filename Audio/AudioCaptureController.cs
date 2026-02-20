@@ -192,7 +192,7 @@ namespace CinematicRecorder.Audio
 
             try
             {
-                // Streaming resampling with cubic interpolation for smoother results
+                // Streaming resampling with linear interpolation (pitch shifts during slow-mo)
                 float step = 1f / stretchRatio; // Consumption rate
 
                 for (int i = 0; i < outputSamplesPerFrame; i++)
@@ -201,28 +201,15 @@ namespace CinematicRecorder.Audio
                     int srcIdx = (int)srcPos;
                     float frac = srcPos - srcIdx;
 
-                    // Wrap read position
+                    // Linear interpolation between two samples
                     int idx0 = (_readPosition + srcIdx) % RING_BUFFER_SIZE;
                     int idx1 = (_readPosition + srcIdx + 1) % RING_BUFFER_SIZE;
-                    int idx2 = (_readPosition + srcIdx + 2) % RING_BUFFER_SIZE;
-                    int idx_1 = (_readPosition + srcIdx - 1 + RING_BUFFER_SIZE) % RING_BUFFER_SIZE; // Previous
 
-                    // Cubic interpolation (Catmull-Rom spline)
-                    float p0 = _ringBuffer[idx_1];
-                    float p1 = _ringBuffer[idx0];
-                    float p2 = _ringBuffer[idx1];
-                    float p3 = _ringBuffer[idx2];
+                    float s0 = _ringBuffer[idx0];
+                    float s1 = _ringBuffer[idx1];
 
-                    float frac2 = frac * frac;
-                    float frac3 = frac2 * frac;
-
-                    // Catmull-Rom weights
-                    float v0 = (-0.5f * p0) + (1.5f * p1) - (1.5f * p2) + (0.5f * p3);
-                    float v1 = p0 - (2.5f * p1) + (2.0f * p2) - (0.5f * p3);
-                    float v2 = (-0.5f * p0) + (0.5f * p2);
-                    float v3 = p1;
-
-                    output[i] = ((v0 * frac3) + (v1 * frac2) + (v2 * frac) + v3) * AudioListener.volume;
+                    // Simple lerp: s0 + (s1 - s0) * frac
+                    output[i] = (s0 + (s1 - s0) * frac) * AudioListener.volume;
                 }
 
                 _encoder.AddSamples(output);

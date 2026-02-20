@@ -96,8 +96,8 @@
 
             // Audio Strings
             public const string EnableAudioLabel = " Enable Audio Capture";
-            public const string AudioTooltip = "Records synchronized WAV audio alongside video. Does not work above 48fps capture rates.";
-            public const string AudioDisabledScreenMsg = "Audio capture disabled: max 48fps";
+            public const string AudioTooltip = "Records synchronized WAV audio alongside video. Does not work above 30fps capture rates.";
+            public const string AudioDisabledScreenMsg = "Audio capture disabled: max 30fps";
 
         }
 

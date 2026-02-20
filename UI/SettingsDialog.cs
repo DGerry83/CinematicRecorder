@@ -29,7 +29,7 @@ namespace CinematicRecorder.UI
         private bool stylesInitialized;
         private bool showAdvancedPanel = false;
 
-        private readonly int[] frameratePresets = { 24, 30, 60, 120, 240, 384 };
+        private readonly int[] frameratePresets = { 24, 30, 48, 60, 120, 240, 384 };
         private readonly string[] encoderTabNames = { Settings.EncoderAMD, Settings.EncoderNVIDIA, Settings.EncoderCPU };
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
