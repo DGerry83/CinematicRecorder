@@ -17,6 +17,7 @@ namespace CinematicRecorder.Core
         public static float DurationSeconds { get; set; } = 10f;
         public static bool ForceSoftwareEncoding { get; set; } = false;
         public static bool PngSequence { get; set; } = false;
+        public static bool EnableAudioCapture { get; set; } = false;
         #endregion
         #region Encoder Selection
         /// <summary>

@@ -1,4 +1,5 @@
-﻿using CinematicRecorder.Capture;
+﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Capture;
 using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
 using System;
@@ -11,6 +12,9 @@ namespace CinematicRecorder.Core
 {
     public static class DeterministicCaptureSession
     {
+        #region Fields
+        private static string _ffmpegPath;
+        #endregion
         #region Session State
         private static volatile bool _isRunning;
         public static bool IsRunning
@@ -130,6 +134,13 @@ namespace CinematicRecorder.Core
             if (IsRunning)
                 return;
 
+            _ffmpegPath = Path.Combine(Path.GetDirectoryName(typeof(DeterministicCaptureSession).Assembly.Location),"..", "PluginData", "FFMpeg", "ffmpeg.exe");
+
+            if (!File.Exists(_ffmpegPath))
+            {
+                _ffmpegPath = null; // Will check in UI
+            }
+
             IsRunning = true;
             StopRequested = false;
 
@@ -183,6 +194,7 @@ namespace CinematicRecorder.Core
 
             string baseName = $"Cinematic_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}";
             string outputPath;
+            string audioPath = null;
 
             if (SessionState.PngSequence)
             {
@@ -195,12 +207,30 @@ namespace CinematicRecorder.Core
             {
                 // Video mode: Standard MKV file path
                 outputPath = Path.Combine(outputDir, $"{baseName}.mkv");
+                if (SessionState.EnableAudioCapture)
+                    audioPath = Path.ChangeExtension(outputPath, ".wav");
             }
 
             // Force software encoding and disable zero-copy for PNG mode 
             // (hardware encoders can't output PNGs, and we need the CPU readback pathway)
             bool effectiveForceSoftware = forceSoftwareEncoding || SessionState.PngSequence;
             bool effectiveZeroCopy = useGpuZeroCopy && !SessionState.PngSequence;
+
+            AudioCaptureController audioController = null;
+            if (SessionState.EnableAudioCapture && !string.IsNullOrEmpty(audioPath))
+            {
+                // Audio capture only works reliably at 30fps or lower
+                if (simulationFps > 30)
+                {
+                    UnityEngine.Debug.LogWarning($"[DeterministicCaptureSession] Audio capture disabled: capture rate {simulationFps}fps exceeds 30fps limit");
+                    ScreenMessages.PostScreenMessage(CinematicUIStrings.Settings.AudioDisabledScreenMsg, 5f, ScreenMessageStyle.UPPER_CENTER);
+                }
+                else
+                {
+                    audioController = new AudioCaptureController(audioPath, playbackFps);
+                    UnityEngine.Debug.Log($"[DeterministicCaptureSession] Audio capture enabled: {audioPath}");
+                }
+            }
 
             var controller = new OfflineCaptureController(
                 cam,
@@ -211,7 +241,8 @@ namespace CinematicRecorder.Core
                 durationSeconds,
                 outputPath,
                 forceSoftwareEncoding,
-                useGpuZeroCopy);
+                useGpuZeroCopy,
+                audioController);
 
             var runner = new GameObject("DeterministicCaptureRunner");
             UnityEngine.Object.DontDestroyOnLoad(runner);
@@ -437,6 +468,7 @@ namespace CinematicRecorder.Core
 
             // Pull output path from controller
             string outputPath = controller.OutputPath;
+            string audioPath = controller.AudioController?.OutputPath;
 
             // Show report
             ShowFinalReport(
@@ -446,7 +478,9 @@ namespace CinematicRecorder.Core
                 finalRealSeconds,
                 encodingMode,
                 outputPath,
-                IsUnlimitedMode); // Pass unlimited flag
+                audioPath,
+                IsUnlimitedMode,
+                _ffmpegPath); // Pass unlimited flag
 
             // Fire stopped event before cleanup
             OnRecordingStopped?.Invoke();
@@ -463,7 +497,9 @@ namespace CinematicRecorder.Core
             float realWorldSeconds,
             string encodingMode,
             string outputPath,
-            bool wasUnlimited) // Parameter to indicate unlimited recording
+            string audioPath,
+            bool wasUnlimited,
+            string ffmpegPath) // Parameter to indicate unlimited recording
         {
             FinalReportWindow report = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
 
@@ -481,7 +517,9 @@ namespace CinematicRecorder.Core
                 realWorldSeconds,
                 encodingMode,
                 outputPath,
-                wasUnlimited); // Pass flag
+                audioPath,
+                wasUnlimited,
+                ffmpegPath); // Pass flag
         }
         #endregion
     }

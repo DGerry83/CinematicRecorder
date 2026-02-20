@@ -29,7 +29,7 @@ namespace CinematicRecorder.UI
         private bool stylesInitialized;
         private bool showAdvancedPanel = false;
 
-        private readonly int[] frameratePresets = { 24, 30, 60, 120, 240, 384 };
+        private readonly int[] frameratePresets = { 24, 30, 48, 60, 120, 240, 384 };
         private readonly string[] encoderTabNames = { Settings.EncoderAMD, Settings.EncoderNVIDIA, Settings.EncoderCPU };
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
@@ -147,6 +147,12 @@ namespace CinematicRecorder.UI
         }
         private void StartRecording()
         {
+            // Close any open report windows from previous recordings
+            FinalReportWindow existingReport = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
+            if (existingReport != null && existingReport.IsVisible)
+            {
+                existingReport.HideReport();
+            }
             stopRequested = false;
             int simFps = frameratePresets[SessionState.SimFpsIndex];
             int playbackFps = frameratePresets[SessionState.PlaybackFpsIndex];
@@ -546,6 +552,8 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawSafeModeToggle();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+            DrawAudioCaptureToggle();
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawPngSequenceToggle();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
@@ -580,6 +588,40 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             GUIStyle placeholderStyle = CinematicUIResources.Styles.Info();
             GUILayout.Label(Settings.PostProcessText, placeholderStyle);
+        }
+        private void DrawAudioCaptureToggle()
+        {
+            bool wasEnabled = GUI.enabled;
+            if (DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            // Style: Green + Bold when active
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.EnableAudioCapture)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newValue = GUILayout.Toggle(
+                SessionState.EnableAudioCapture,
+                Settings.EnableAudioLabel,
+                toggleStyle
+            );
+
+            if (newValue != SessionState.EnableAudioCapture && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.EnableAudioCapture = newValue;
+                UnityEngine.Debug.Log($"[CinematicRecorder] EnableAudioCapture = {newValue}");
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+            helpStyle.wordWrap = true;
+            GUILayout.Label(Settings.AudioTooltip, helpStyle);
+
+            GUI.enabled = wasEnabled;
         }
         private void DrawSafeModeToggle()
         {

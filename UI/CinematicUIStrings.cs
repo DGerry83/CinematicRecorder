@@ -56,7 +56,7 @@
             public const string AMFOnlyWarning = "Advanced options require AMD encoder.";
             public const string PostProcessText = "(Post-processing effects will appear here)";
             public const string SafeModeToggle = " Safe Mode (CPU Encoding)";
-            public const string SafeModeTooltip = "Forces CPU-based x264 encoding instead of GPU hardware acceleration. Use this if you experience crashes, artifacts, or need to test the CPU encoding path.";
+            public const string SafeModeTooltip = "Forces CPU-based x264 encoding. Use this if you experience issues with the GPU paths.";
             public const string SafeModeRecordingWarning = "⚠ Cannot modify while recording";
 
             // Encoder Configuration
@@ -91,8 +91,14 @@
 
             // PNG Sequence Strings
             public const string PngSequenceToggle = " PNG Sequence";
-            public const string PngSequenceTooltip = "Output individual PNG frames instead of video. Useful for post-processing. Forces software encoding and disables hardware acceleration.";
+            public const string PngSequenceTooltip = "Output individual PNG frames. Forces software encoding and disables hardware acceleration.";
             public const string PngSequenceCompleteLog = "[CinematicRecorder] PNG Sequence complete: {0} frames written to {1}";
+
+            // Audio Strings
+            public const string EnableAudioLabel = " Enable Audio Capture";
+            public const string AudioTooltip = "Records synchronized WAV audio alongside video. Does not work above 30fps capture rates.";
+            public const string AudioDisabledScreenMsg = "Audio capture disabled: max 30fps";
+
         }
 
         public static class Recording
@@ -244,6 +250,10 @@
             public const string OpeningFolderLog = "[CinematicRecorder] Opening folder: {0}";
             public const string CannotOpenFolderLog = "[CinematicRecorder] Cannot open folder, directory not found: {0}";
             public const string FailedToOpenFolderLog = "[CinematicRecorder] Failed to open folder: {0}";
+            public const string MuxAudioButton = "Mux Audio";
+            public const string MuxingInProgress = "Muxing...";
+            public const string MuxingComplete = "Muxing complete!";
+            public const string FfmpegNotFound = "FFmpeg not found";
         }
 
         public static class CurveDescriptions

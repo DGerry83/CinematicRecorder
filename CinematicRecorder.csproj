@@ -48,6 +48,8 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Audio\AudioCaptureController.cs" />
+    <Compile Include="Audio\AudioMuxingUtility.cs" />
     <Compile Include="Capture\AmfZeroCopyEncoder.cs" />
     <Compile Include="Capture\CaptureRunner.cs" />
     <Compile Include="Capture\FrameCapture.cs" />
@@ -107,9 +109,7 @@
       <Version>1.1.1</Version>
     </PackageReference>
   </ItemGroup>
-  <ItemGroup>
-    <Folder Include="Audio\" />
-  </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
     <PostBuildEvent>if exist "$(ProjectDir)copy_dll.bat" (

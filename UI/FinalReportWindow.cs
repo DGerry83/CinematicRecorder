@@ -1,4 +1,5 @@
-﻿using CinematicRecorder.Core;
+﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Core;
 using System;
 using System.IO;
 using UnityEngine;
@@ -26,9 +27,13 @@ namespace CinematicRecorder.UI
         private float realWorldCaptureTime;
         private string encodingModeUsed;
         private string outputFilePath;
+        private string audioFilePath;
         private bool wasUnlimitedRecording;
         private float showStartTime = -1f;
         private const float REPORT_TIMEOUT_SECONDS = 30f;
+        private string _ffmpegPath;
+        private bool _isMuxing = false;
+        private bool _muxingCompleted = false;
         #endregion
         #region Public API
         public bool IsVisible => shouldShow;
@@ -39,7 +44,9 @@ namespace CinematicRecorder.UI
             float realTimeSeconds,
             string encodingMode,
             string filePath,
-            bool unlimited = false)
+            string audioPath,
+            bool unlimited = false,
+            string ffmpegPath = null)
         {
             capturedFrames = frames;
             simulatedSeconds = simSeconds;
@@ -47,7 +54,9 @@ namespace CinematicRecorder.UI
             realWorldCaptureTime = realTimeSeconds;
             encodingModeUsed = encodingMode;
             outputFilePath = filePath;
+            audioFilePath = audioPath;
             wasUnlimitedRecording = unlimited;
+            _ffmpegPath = ffmpegPath;
 
             shouldShow = true;
             showStartTime = Time.realtimeSinceStartup;
@@ -58,6 +67,8 @@ namespace CinematicRecorder.UI
         {
             shouldShow = false;
             showStartTime = -1f;
+            _muxingCompleted = false;
+            _isMuxing = false;
             if (DeterministicCaptureSession.IsRunning)
             {
                 UnityEngine.Debug.Log("[FinalReportWindow] HideReport called while session still running. Forcing EndSession.");
@@ -125,6 +136,50 @@ namespace CinematicRecorder.UI
             }
 
             GUILayout.EndHorizontal();
+            // Add Mux Audio button if we have both video and audio
+            if (!string.IsNullOrEmpty(audioFilePath) && !string.IsNullOrEmpty(_ffmpegPath))
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+
+                if (_muxingCompleted)
+                {
+                    // Show completed state - green text, disabled
+                    GUIStyle completedStyle = new GUIStyle(HighLogic.Skin.button);
+                    completedStyle.normal.textColor = Color.green;
+                    completedStyle.fontStyle = FontStyle.Bold;
+                    GUI.enabled = false;
+                    GUILayout.Button("Muxed!", completedStyle, GUILayout.Width(100), GUILayout.Height(25));
+                    GUI.enabled = true;
+                }
+                else
+                {
+                    // Show normal or muxing state
+                    GUI.enabled = !_isMuxing;
+                    string buttonText = _isMuxing ? Report.MuxingInProgress : Report.MuxAudioButton;
+
+                    if (GUILayout.Button(buttonText, GUILayout.Width(100), GUILayout.Height(25)))
+                    {
+                        StartMuxing();
+                    }
+                    GUI.enabled = true;
+                }
+
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+            }
+
+            if (!string.IsNullOrEmpty(audioFilePath))
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Audio File:", GUILayout.Width(130));
+                GUI.enabled = false;
+                GUILayout.TextField(Path.GetFileName(audioFilePath), HighLogic.Skin.textField);
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+            }
 
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
 
@@ -142,6 +197,38 @@ namespace CinematicRecorder.UI
             GUILayout.EndVertical();
 
             GUI.DragWindow();
+        }
+
+        private string NormalizePath(string path)
+        {
+            return path.Replace('/', '\\');
+        }
+        private void StartMuxing()
+        {
+            if (_isMuxing || string.IsNullOrEmpty(_ffmpegPath))
+                return;
+
+            _isMuxing = true;
+
+            AudioMuxingUtility.MuxAudioVideo(
+                outputFilePath,
+                audioFilePath,
+                _ffmpegPath,
+                (success, result) =>
+                {
+                    _isMuxing = false;
+
+                    if (success)
+                    {
+                        _muxingCompleted = true;
+                        outputFilePath = result; // Update to muxed path
+                        ScreenMessages.PostScreenMessage(Report.MuxingComplete, 3f, ScreenMessageStyle.UPPER_CENTER);
+                    }
+                    else
+                    {
+                        ScreenMessages.PostScreenMessage(result, 3f, ScreenMessageStyle.UPPER_CENTER);
+                    }
+                });
         }
         /// <summary>
         /// Returns just the filename without any path
