@@ -89,6 +89,15 @@
             public const string QualityHigh = "High Quality";
             public const string QualityCompressed = "Compressed";
 
+            // Temporal Accumulation Blur Strings
+            public const string TemporalAccumulationToggle = " Temporal Accumulation Blur";
+            public const string TemporalAccumulationTooltip = "Simulates motion blur by accumulating multiple sub-frames per output frame. Only available with GPU encoding. 180° shutter simulation at default settings.";
+            public const string ShutterSoftnessLabel = "Shutter Softness:";
+            public const string EffectiveShutterFormat = "Effective Shutter: {0}°";
+            public const string EffectiveShutter180 = "180°";
+            public const string SubFrameCountLabel = "Sub-frames: {0}";
+            public const string TabAMFOnlyWarning = "Temporal Accumulation requires AMD encoder (NVENC support coming soon).";
+
             // PNG Sequence Strings
             public const string PngSequenceToggle = " PNG Sequence";
             public const string PngSequenceTooltip = "Output individual PNG frames. Forces software encoding and disables hardware acceleration.";

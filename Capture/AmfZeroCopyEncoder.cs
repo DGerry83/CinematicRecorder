@@ -13,6 +13,7 @@ namespace CinematicRecorder.Capture
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
         #endregion
+
         #region Static Initialization
         static AmfZeroCopyEncoder()
         {
@@ -65,9 +66,8 @@ namespace CinematicRecorder.Capture
             }
         }
         #endregion
+
         #region Native Imports
-
-
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool SetDllDirectory(string lpPathName);
 
@@ -109,7 +109,19 @@ namespace CinematicRecorder.Capture
 
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr CR_GetLastError();
+
+        // NEW: Temporal Accumulation Blur imports
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_SetTemporalAccumulation(IntPtr encoder, ref TabSettings settings);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_SubmitSubFrame(IntPtr encoder, IntPtr d3d11Texture, int subFrameIndex);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_FinalizeTemporalFrame(IntPtr encoder, long outputFrameIndex);
         #endregion
+
         #region Structs
         [StructLayout(LayoutKind.Sequential)]
         public struct AmfEncoderSettings
@@ -126,7 +138,17 @@ namespace CinematicRecorder.Capture
             public int UseBlueNoiseDither;
             public int Reserved2;
         }
+
+        // NEW: TabSettings struct - must match native layout exactly
+        [StructLayout(LayoutKind.Sequential)]
+        public struct TabSettings
+        {
+            public int Enabled;       // 0 = Off, 1 = On
+            public int SubFrameCount; // Number of sub-frames (typically 8)
+            public float Sigma;       // Gaussian blur sigma (typically 1.5f)
+        }
         #endregion
+
         #region Public API
         public bool IsInitialized => _isInitialized;
 
@@ -153,6 +175,7 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
+
         /// <summary>
         /// Initializes the encoder from a D3D11 texture handle using AMF hardware acceleration.
         /// </summary>
@@ -214,8 +237,10 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
+
         /// <summary>
         /// Encodes a single frame using the provided D3D11 texture without GPU readback.
+        /// Note: Do not use this when Temporal Accumulation Blur is enabled. Use SubmitSubFrame + FinalizeTemporalFrame instead.
         /// </summary>
         public bool EncodeFrame(IntPtr d3d11TexturePtr, long frameIndex)
         {
@@ -247,6 +272,122 @@ namespace CinematicRecorder.Capture
                 return false;
             }
         }
+
+        // NEW: Enable Temporal Accumulation Blur mode
+        /// <summary>
+        /// Configures Temporal Accumulation Blur mode. Must be called after Initialize but before first frame.
+        /// </summary>
+        /// <param name="enabled">true to enable TAB, false to disable</param>
+        /// <param name="subFrameCount">Number of sub-frames to accumulate (typically 8)</param>
+        /// <param name="sigma">Gaussian blur sigma (typically 1.5f)</param>
+        /// <returns>true on success, false on failure</returns>
+        public bool EnableTemporalAccumulation(bool enabled, int subFrameCount = 8, float sigma = 1.5f)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+            {
+                Debug.LogError("[AmfZeroCopyEncoder] Cannot configure TAB - encoder not initialized");
+                return false;
+            }
+
+            try
+            {
+                var settings = new TabSettings
+                {
+                    Enabled = enabled ? 1 : 0,
+                    SubFrameCount = subFrameCount,
+                    Sigma = sigma
+                };
+
+                int result = CR_SetTemporalAccumulation(_encoderHandle, ref settings);
+
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[AmfZeroCopyEncoder] Failed to configure TAB: {err}");
+                    return false;
+                }
+
+                Debug.Log($"[AmfZeroCopyEncoder] Temporal Accumulation Blur {(enabled ? "enabled" : "disabled")} " +
+                    $"(subframes={subFrameCount}, sigma={sigma})");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AmfZeroCopyEncoder] EnableTemporalAccumulation exception: {ex.Message}");
+                return false;
+            }
+        }
+
+        // NEW: Submit a single sub-frame for accumulation
+        /// <summary>
+        /// Copies a sub-frame to the accumulation array. Call this 8 times per output frame (indices 0-7).
+        /// </summary>
+        /// <param name="d3d11TexturePtr">Native D3D11 texture pointer from RenderTexture.GetNativeTexturePtr()</param>
+        /// <param name="subFrameIndex">Index 0 to (SubFrameCount-1)</param>
+        /// <returns>true on success</returns>
+        public bool SubmitSubFrame(IntPtr d3d11TexturePtr, int subFrameIndex)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+                return false;
+
+            if (d3d11TexturePtr == IntPtr.Zero)
+            {
+                Debug.LogError($"[AmfZeroCopyEncoder] SubmitSubFrame called with null texture");
+                return false;
+            }
+
+            try
+            {
+                int result = CR_SubmitSubFrame(_encoderHandle, d3d11TexturePtr, subFrameIndex);
+
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[AmfZeroCopyEncoder] SubmitSubFrame failed for index {subFrameIndex}: {err}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (SEHException ex)
+            {
+                Debug.LogError($"[AmfZeroCopyEncoder] SubmitSubFrame crashed (SEH): {ex.Message}");
+                return false;
+            }
+        }
+
+        // NEW: Finalize accumulated sub-frames and encode
+        /// <summary>
+        /// Dispatches compute shader to average accumulated sub-frames, then encodes the result.
+        /// This method blocks until encoding is complete (synchronous).
+        /// </summary>
+        /// <param name="outputFrameIndex">Frame index for the encoded output</param>
+        /// <returns>true on success</returns>
+        public bool FinalizeTemporalFrame(long outputFrameIndex)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                int result = CR_FinalizeTemporalFrame(_encoderHandle, outputFrameIndex);
+
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[AmfZeroCopyEncoder] FinalizeTemporalFrame failed for frame {outputFrameIndex}: {err}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (SEHException ex)
+            {
+                Debug.LogError($"[AmfZeroCopyEncoder] FinalizeTemporalFrame crashed (SEH): {ex.Message}");
+                return false;
+            }
+        }
+
         public void Shutdown()
         {
             if (!_isInitialized || _encoderHandle == IntPtr.Zero)
@@ -271,6 +412,7 @@ namespace CinematicRecorder.Capture
             Debug.Log("[AmfZeroCopyEncoder] Shutdown complete");
         }
         #endregion
+
         #region IDisposable
         public void Dispose()
         {

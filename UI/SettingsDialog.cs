@@ -34,6 +34,7 @@ namespace CinematicRecorder.UI
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
         #endregion
+
         #region Unity Lifecycle
         private void OnGUI()
         {
@@ -65,6 +66,7 @@ namespace CinematicRecorder.UI
             );
         }
         #endregion
+
         #region Initialization
         private void InitStyles()
         {
@@ -73,6 +75,7 @@ namespace CinematicRecorder.UI
             stylesInitialized = true;
         }
         #endregion
+
         #region Window Layout
         private void DrawWindow(int id)
         {
@@ -167,6 +170,7 @@ namespace CinematicRecorder.UI
                     zeroCopy);
         }
         #endregion
+
         #region Status Display
         private void DrawStatusSection()
         {
@@ -257,6 +261,7 @@ namespace CinematicRecorder.UI
                 style.normal.textColor = Color.cyan;
         }
         #endregion
+
         #region Capture Settings
         private void DrawCaptureTimingSection()
         {
@@ -330,6 +335,7 @@ namespace CinematicRecorder.UI
             GUILayout.EndHorizontal();
         }
         #endregion
+
         #region Encoding Settings
         private void DrawEncodingFoldout()
         {
@@ -544,6 +550,7 @@ namespace CinematicRecorder.UI
             SessionState.CpuPreset = selectedSpeed;
         }
         #endregion
+
         #region Advanced Panel
         private void DrawAdvancedContent()
         {
@@ -556,9 +563,13 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawPngSequenceToggle();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+
+            // MODIFIED: Reorganized to show TAB first, then Blue Noise (since TAB comes before dither in pipeline)
+            DrawTemporalAccumulationSection();
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+
             GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
             tooltipStyle.wordWrap = true;
-
 
             if (SessionState.SelectedEncoderTab == 0)
             {
@@ -572,7 +583,7 @@ namespace CinematicRecorder.UI
                     ditherStyle
                 );
 
-                
+
                 tooltipStyle.wordWrap = true;
 
                 if (SessionState.AmfUseBlueNoiseDither)
@@ -589,6 +600,95 @@ namespace CinematicRecorder.UI
             GUIStyle placeholderStyle = CinematicUIResources.Styles.Info();
             GUILayout.Label(Settings.PostProcessText, placeholderStyle);
         }
+
+        // NEW: Temporal Accumulation Blur UI Section
+        private void DrawTemporalAccumulationSection()
+        {
+            // Only available when GPU encoder selected (not CPU) and not in PNG mode
+            bool canUseTab = SessionState.SelectedEncoderTab != 2 && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding;
+
+            bool wasEnabled = GUI.enabled;
+            if (!canUseTab || DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            // Main toggle
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.EnableTemporalAccumulation)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newValue = GUILayout.Toggle(
+                SessionState.EnableTemporalAccumulation,
+                Settings.TemporalAccumulationToggle,
+                toggleStyle
+            );
+
+            // Warning for non-AMD encoders
+            if (SessionState.SelectedEncoderTab == 1 && canUseTab) // NVENC selected
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle warningStyle = CinematicUIResources.Styles.Info();
+                warningStyle.wordWrap = true;
+                GUILayout.Label(Settings.TabAMFOnlyWarning, warningStyle);
+                // Force disable if NVENC selected (until implemented)
+                if (SessionState.EnableTemporalAccumulation)
+                {
+                    newValue = false; // Force off
+                }
+            }
+            else if (SessionState.SelectedEncoderTab == 2 || SessionState.PngSequence || SessionState.ForceSoftwareEncoding)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle infoStyle = CinematicUIResources.Styles.Help();
+                infoStyle.wordWrap = true;
+                GUILayout.Label(Settings.TemporalAccumulationTooltip, infoStyle);
+            }
+            else
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+                helpStyle.wordWrap = true;
+                GUILayout.Label(Settings.TemporalAccumulationTooltip, helpStyle);
+            }
+
+            // If TAB enabled and available, show controls
+            if (newValue && canUseTab && SessionState.SelectedEncoderTab == 0)
+            {
+                SessionState.EnableTemporalAccumulation = true;
+
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+                // Sub-frame count (readonly display, fixed at 8 for now)
+                GUILayout.Label(string.Format(Settings.SubFrameCountLabel, SessionState.TabSubFrameCount), HighLogic.Skin.label);
+
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+                // Shutter softness slider (0.5 - 3.0)
+                GUILayout.Label(Settings.ShutterSoftnessLabel, HighLogic.Skin.label);
+                SessionState.TabSigma = GUILayout.HorizontalSlider(SessionState.TabSigma, 0.5f, 3.0f);
+                GUILayout.Label(SessionState.TabSigma.ToString("F1"), CinematicUIResources.Styles.Help());
+
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+
+                // Effective shutter angle display
+                string shutterAngle = SessionState.TabSubFrameCount == 8 ? Settings.EffectiveShutter180 : "Custom";
+                GUIStyle statusStyle = CinematicUIResources.Styles.Label(
+                    CinematicUIResources.Colors.AUTO_TRACK_BLUE,
+                    FontStyle.Bold
+                );
+                GUILayout.Label(string.Format(Settings.EffectiveShutterFormat, shutterAngle), statusStyle);
+            }
+            else
+            {
+                SessionState.EnableTemporalAccumulation = false;
+            }
+
+            GUI.enabled = wasEnabled;
+        }
+
         private void DrawAudioCaptureToggle()
         {
             bool wasEnabled = GUI.enabled;
@@ -650,6 +750,13 @@ namespace CinematicRecorder.UI
             {
                 SessionState.ForceSoftwareEncoding = newValue;
                 UnityEngine.Debug.Log($"[CinematicRecorder] ForceSoftwareEncoding = {newValue}");
+
+                // NEW: Disable TAB if software encoding forced (TAB requires GPU)
+                if (newValue && SessionState.EnableTemporalAccumulation)
+                {
+                    SessionState.EnableTemporalAccumulation = false;
+                    UnityEngine.Debug.Log("[CinematicRecorder] TAB disabled due to software encoding");
+                }
             }
 
             // Help text
@@ -700,6 +807,13 @@ namespace CinematicRecorder.UI
                     // Force software encoding when PNG mode is enabled (hardware encoders can't output PNGs)
                     SessionState.ForceSoftwareEncoding = true;
                     UnityEngine.Debug.Log("[CinematicRecorder] PNG Sequence enabled - forcing software encoding path");
+
+                    // NEW: Also disable TAB since PNG uses CPU path
+                    if (SessionState.EnableTemporalAccumulation)
+                    {
+                        SessionState.EnableTemporalAccumulation = false;
+                        UnityEngine.Debug.Log("[CinematicRecorder] TAB disabled due to PNG sequence mode");
+                    }
                 }
             }
 
@@ -711,6 +825,7 @@ namespace CinematicRecorder.UI
             GUI.enabled = wasEnabled;
         }
         #endregion
+
         #region Public API
         public bool IsVisible => renderDisplay;
         public event Action OnDialogDismissed;

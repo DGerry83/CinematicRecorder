@@ -1,10 +1,12 @@
 #include "CinematicRecorderNative.h"
 #include "EmbeddedResources.h"
+#include "TemporalAccumulation.h"  // NEW: Include the generated header for compute shader bytecode
 
 #include <string>
 #include <vector>
 #include <mutex>
 #include <cstring>
+#include <cmath>  // NEW: For exp() function in Gaussian calculation
 
 // ---------------- AMF 1.5 ----------------
 #include "AMFFactory.h"
@@ -21,6 +23,91 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/opt.h>
 #include <libavutil/imgutils.h>
+}
+// Simple file logger for debugging
+#include <fstream>
+#include <ctime>
+#include <iomanip>
+
+static std::mutex g_logMutex;
+static std::ofstream g_logFile;
+static bool g_logInitialized = false;
+
+static void InitLogFile()
+{
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    if (g_logInitialized) return;
+    
+    // Get the DLL's own path
+    char dllPath[MAX_PATH] = {0};
+    HMODULE hModule = NULL;
+    
+    // Get handle to this DLL using an address within the DLL
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | 
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)&InitLogFile, &hModule))
+    {
+        GetModuleFileNameA(hModule, dllPath, MAX_PATH);
+    }
+    
+    // If we got the path, extract directory and go up one level
+    if (strlen(dllPath) > 0)
+    {
+        // Find last backslash (before DLL filename)
+        char* lastSlash = strrchr(dllPath, '\\');
+        if (lastSlash)
+        {
+            *lastSlash = '\0';  // Remove DLL filename, now ends with \PluginData
+            
+            // Find the next backslash (before PluginData folder)
+            char* secondLastSlash = strrchr(dllPath, '\\');
+            if (secondLastSlash)
+            {
+                *(secondLastSlash + 1) = '\0';  // Keep backslash, remove \PluginData
+                strcat_s(dllPath, MAX_PATH, "CinematicRecorder_Native.log");
+                g_logFile.open(dllPath, std::ios::app);
+            }
+        }
+    }
+    
+    // Fallback if we couldn't get DLL path
+    if (!g_logFile.is_open())
+    {
+        g_logFile.open("CinematicRecorder_Native.log", std::ios::app);
+    }
+    
+    g_logInitialized = true;
+    
+    if (g_logFile.is_open())
+    {
+        auto now = std::time(nullptr);
+        auto tm = *std::localtime(&now);
+        g_logFile << "\n=== Session started at " 
+                  << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") 
+                  << " ===\n" << std::flush;
+    }
+}
+
+static void LogToFile(const char* fmt, ...)
+{
+    InitLogFile();
+    
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    if (!g_logFile.is_open()) return;
+    
+    // Timestamp
+    auto now = std::time(nullptr);
+    auto tm = *std::localtime(&now);
+    g_logFile << "[" << std::put_time(&tm, "%H:%M:%S") << "] ";
+    
+    // Message
+    char buffer[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    
+    g_logFile << buffer << std::endl << std::flush;
 }
 
 #pragma comment(lib, "d3d11.lib")
@@ -52,6 +139,7 @@ static void SetError(const char* msg)
     g_errorBuffer[sizeof(g_errorBuffer) - 1] = 0;
 }
 
+// MODIFIED: Extended EncoderContext with TAB resources
 struct EncoderContext
 {
     ID3D11Device* device = nullptr;
@@ -73,7 +161,8 @@ struct EncoderContext
     bool hevcMode = false;                  // true if using HEVC, false if H.264
     std::mutex writeMutex;
     AmfEncoderSettings settings;            // Store settings for reference
-    // NEW: Blue Noise Dithering Resources (Phase 3)
+    
+    // Blue Noise Dithering Resources (existing)
     ID3D11ComputeShader* ditherShader = nullptr;
     ID3D11Buffer*        constantBuffer = nullptr;
     ID3D11Texture2D*     blueNoiseTexture = nullptr;
@@ -82,10 +171,143 @@ struct EncoderContext
     
     bool useBlueNoiseDither = false;
     UINT frameCounter = 0;
+    
+    // NEW: Temporal Accumulation Blur Resources
+    ID3D11Texture2D* accumulationArray = nullptr;           // ArraySize=8, R16G16B16A16_FLOAT
+    ID3D11ShaderResourceView* accumulationSRV = nullptr;    // SRV for the array
+    ID3D11ComputeShader* tabComputeShader = nullptr;        // TAB compute shader
+    ID3D11Buffer* tabWeightBuffer = nullptr;                // Constant buffer for Gaussian weights
+    bool isTabMode = false;                                 // TAB enabled flag
+    int tabSubFrameCount = 8;                               // Number of sub-frames (typically 8)
+    int currentSubFrame = 0;                                // Current sub-frame index being filled
+    float tabWeights[8] = {0};                              // Gaussian weights
+    float tabTotalWeight = 0;                               // Sum of weights for normalization
 };
 
 // Forward declaration
 static bool WriteHeader(EncoderContext* ctx);
+
+// NEW: Helper function to create TAB resources
+static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
+{
+    HRESULT hr;
+    
+    // Store settings
+    ctx->isTabMode = (settings->Enabled != 0);
+    ctx->tabSubFrameCount = settings->SubFrameCount;
+    if (ctx->tabSubFrameCount < 1 || ctx->tabSubFrameCount > 8)
+        ctx->tabSubFrameCount = 8;
+    
+    // Calculate Gaussian weights
+    float sigma = settings->Sigma;
+    if (sigma <= 0.0f) sigma = 1.5f;
+    
+    ctx->tabTotalWeight = 0.0f;
+    float center = (ctx->tabSubFrameCount - 1) / 2.0f;
+    
+    for (int i = 0; i < ctx->tabSubFrameCount; i++)
+    {
+        float x = i - center;
+        float weight = expf(-(x * x) / (2.0f * sigma * sigma));
+        ctx->tabWeights[i] = weight;
+        ctx->tabTotalWeight += weight;
+    }
+    
+    // Normalize weights (divide by sum)
+    for (int i = 0; i < ctx->tabSubFrameCount; i++)
+    {
+        ctx->tabWeights[i] /= ctx->tabTotalWeight;
+    }
+    
+    // Create accumulation array texture (ArraySize=8, R16G16B16A16_FLOAT)
+    D3D11_TEXTURE2D_DESC arrayDesc = {};
+    arrayDesc.Width = ctx->width;
+    arrayDesc.Height = ctx->height;
+    arrayDesc.MipLevels = 1;
+    arrayDesc.ArraySize = ctx->tabSubFrameCount;  // 8 slices
+    arrayDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    arrayDesc.SampleDesc.Count = 1;
+    arrayDesc.Usage = D3D11_USAGE_DEFAULT;
+    arrayDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;  // Will be read by compute shader
+    
+    hr = ctx->device->CreateTexture2D(&arrayDesc, nullptr, &ctx->accumulationArray);
+    if (FAILED(hr))
+    {
+        SetError("Failed to create accumulation array texture");
+        return false;
+    }
+    
+    // Create SRV for the array
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.ArraySize = ctx->tabSubFrameCount;
+    
+    hr = ctx->device->CreateShaderResourceView(ctx->accumulationArray, &srvDesc, &ctx->accumulationSRV);
+    if (FAILED(hr))
+    {
+        SetError("Failed to create accumulation array SRV");
+        return false;
+    }
+    
+    // Create compute shader from embedded bytecode
+    hr = ctx->device->CreateComputeShader(
+        g_TemporalAccumulationCS, 
+        sizeof(g_TemporalAccumulationCS),
+        nullptr, 
+        &ctx->tabComputeShader
+    );
+    if (FAILED(hr))
+    {
+        SetError("Failed to create TAB compute shader");
+        return false;
+    }
+    
+    // Create constant buffer for weights (16 bytes per float4, 2 float4s + 1 float + padding)
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = 48;  // 2*float4 (32) + float TotalWeight (4) + padding (12) = 48 bytes
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    
+    // Prepare initial data (weights packed into float4s)
+    struct WeightData {
+        float weights[8];  // 2 float4s
+        float totalWeight;
+        float padding[3];  // Align to 16 bytes
+    } weightData;
+    
+    memcpy(weightData.weights, ctx->tabWeights, sizeof(float) * 8);
+    weightData.totalWeight = 1.0f;  // Already normalized, but shader expects this
+    weightData.padding[0] = weightData.padding[1] = weightData.padding[2] = 0.0f;
+    
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = &weightData;
+    
+    hr = ctx->device->CreateBuffer(&cbDesc, &initData, &ctx->tabWeightBuffer);
+    if (FAILED(hr))
+    {
+        SetError("Failed to create TAB weight constant buffer");
+        return false;
+    }
+    
+    ctx->currentSubFrame = 0;
+    
+    LogToFile("[CinematicRecorder] Temporal Accumulation Blur enabled");
+    return true;
+}
+
+// NEW: Helper function to destroy TAB resources
+static void DestroyTabResources(EncoderContext* ctx)
+{
+    if (ctx->tabWeightBuffer) { ctx->tabWeightBuffer->Release(); ctx->tabWeightBuffer = nullptr; }
+    if (ctx->tabComputeShader) { ctx->tabComputeShader->Release(); ctx->tabComputeShader = nullptr; }
+    if (ctx->accumulationSRV) { ctx->accumulationSRV->Release(); ctx->accumulationSRV = nullptr; }
+    if (ctx->accumulationArray) { ctx->accumulationArray->Release(); ctx->accumulationArray = nullptr; }
+    ctx->isTabMode = false;
+    ctx->currentSubFrame = 0;
+}
 
 static bool InitializeFFmpegMuxer(EncoderContext* ctx, const char* outputPath)
 {
@@ -164,7 +386,7 @@ static bool CreateDitheringResources(EncoderContext* ctx) {
         &ctx->ditherShader
     );
     if (FAILED(hr)) {
-        OutputDebugStringA("[CR] Failed to create dither compute shader\n");
+        LogToFile("[CR] Failed to create dither compute shader");
         return false;
     }
 
@@ -177,7 +399,7 @@ static bool CreateDitheringResources(EncoderContext* ctx) {
     
     hr = ctx->device->CreateBuffer(&cbDesc, nullptr, &ctx->constantBuffer);
     if (FAILED(hr)) {
-        OutputDebugStringA("[CR] Failed to create constant buffer\n");
+        LogToFile("[CR] Failed to create constant buffer");
         return false;
     }
 
@@ -197,7 +419,7 @@ static bool CreateDitheringResources(EncoderContext* ctx) {
     
     hr = ctx->device->CreateTexture2D(&noiseDesc, &initData, &ctx->blueNoiseTexture);
     if (FAILED(hr)) {
-        OutputDebugStringA("[CR] Failed to create blue noise texture\n");
+        LogToFile("[CR] Failed to create blue noise texture");
         return false;
     }
     
@@ -405,7 +627,7 @@ CREncoderHandle CR_InitEncoder(
             {
                 res = ctx->encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_ENABLE_VBAQ, true);
                 if (res == AMF_OK) {
-                    OutputDebugStringA("[CinematicRecorder] HQVBR + VBAQ enabled\n");
+                    LogToFile("[CinematicRecorder] HQVBR + VBAQ enabled");
                 }
             }
         }
@@ -576,7 +798,7 @@ CREncoderHandle CR_InitEncoder(
 
     if (ctx->useBlueNoiseDither) {
         if (!CreateDitheringResources(ctx)) {
-            OutputDebugStringA("[CR] Blue Noise init failed, falling back to CopyResource\n");
+            LogToFile("[CR] Blue Noise init failed, falling back to CopyResource");
             ctx->useBlueNoiseDither = false;
         } else {
             // Create UAVs on the encoder textures for compute shader output
@@ -591,7 +813,7 @@ CREncoderHandle CR_InitEncoder(
                     ctx->d3dTextures[i], &uavDesc, &ctx->encoderUAV[i]);
                     
                 if (FAILED(hr)) {
-                    OutputDebugStringA("[CR] Failed to create encoder UAV\n");
+                    LogToFile("[CR] Failed to create encoder UAV");
                     ctx->useBlueNoiseDither = false;
                     DestroyDitheringResources(ctx);
                     break;
@@ -599,7 +821,7 @@ CREncoderHandle CR_InitEncoder(
             }
             
             if (ctx->useBlueNoiseDither) {
-                OutputDebugStringA("[CR] Blue Noise dithering enabled\n");
+                LogToFile("[CR] Blue Noise dithering enabled");
             }
         }
     }
@@ -659,7 +881,510 @@ CREncoderHandle CR_InitEncoderFromTexture(
     return CR_InitEncoder(width, height, fps, outputPath, settings);
 }
 
+// NEW: Configure Temporal Accumulation Blur mode
+extern "C" __declspec(dllexport)
+int CR_SetTemporalAccumulation(CREncoderHandle encoder, const TabSettings* settings)
+{
+    EncoderContext* ctx = (EncoderContext*)encoder;
+    if (!ctx || !ctx->initialized)
+    {
+        SetError("Invalid encoder context");
+        return -1;
+    }
+    
+    if (!settings)
+    {
+        SetError("Null TAB settings");
+        return -1;
+    }
+    
+    // Clean up any existing TAB resources first
+    if (ctx->isTabMode)
+    {
+        DestroyTabResources(ctx);
+    }
+    
+    // If enabling TAB, create resources
+    if (settings->Enabled)
+    {
+        if (!CreateTabResources(ctx, settings))
+        {
+            // Error already set by CreateTabResources
+            return -1;
+        }
+    }
+    
+    return 0;
+}
+
+// NEW: Submit a single sub-frame to the accumulation array
+extern "C" __declspec(dllexport)
+int CR_SubmitSubFrame(CREncoderHandle encoder, ID3D11Texture2D* unityTexture, int subFrameIndex)
+{
+    EncoderContext* ctx = (EncoderContext*)encoder;
+    if (!ctx || !ctx->initialized)
+    {
+        SetError("Invalid encoder context");
+        return -1;
+    }
+    
+    if (!ctx->isTabMode)
+    {
+        SetError("TAB mode not enabled");
+        return -1;
+    }
+    
+    if (!unityTexture)
+    {
+        SetError("Null unity texture");
+        return -1;
+    }
+    
+    if (subFrameIndex < 0 || subFrameIndex >= ctx->tabSubFrameCount)
+    {
+        SetError("Sub-frame index out of range");
+        return -1;
+    }
+
+    LogToFile("[CR] Copying sub-frame %d to accumulation array", subFrameIndex);
+
+    // DEBUG: Check source texture format
+    D3D11_TEXTURE2D_DESC srcDesc;
+    unityTexture->GetDesc(&srcDesc);
+    LogToFile("[CR] SubmitSubFrame %d: Source format = %d (88=R8G8B8A8_UNORM, 91=B8G8R8A8_UNORM)", 
+        subFrameIndex, srcDesc.Format);
+    
+    // Copy from Unity texture to specific array slice
+    ctx->context->CopySubresourceRegion(
+        ctx->accumulationArray,
+        subFrameIndex,
+        0, 0, 0,
+        unityTexture,
+        0,
+        nullptr
+    );
+    
+    LogToFile("[CR] CopySubresourceRegion executed for sub-frame %d", subFrameIndex);
+    
+    // Ensure copy completes immediately for debug verification
+    ctx->context->Flush();
+    
+    return 0;
+}
+
+// NEW: Finalize accumulated frames and encode
+extern "C" __declspec(dllexport)
+int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex)
+{
+    EncoderContext* ctx = (EncoderContext*)encoder;
+    if (!ctx || !ctx->initialized)
+    {
+        SetError("Invalid encoder context");
+        return -1;
+    }
+    
+    if (!ctx->isTabMode)
+    {
+        SetError("TAB mode not enabled");
+        return -1;
+    }
+    
+    int idx = ctx->bufferIndex;
+    ctx->bufferIndex = 1 - idx;
+    
+    // 1. Ensure all sub-frame copies have completed
+    ctx->context->Flush();
+    
+    // 2. Bind compute shader and resources
+    ctx->context->CSSetShader(ctx->tabComputeShader, nullptr, 0);
+    
+    // Bind constant buffer (b0)
+    ctx->context->CSSetConstantBuffers(0, 1, &ctx->tabWeightBuffer);
+    
+    // Bind SRV (t0) - the accumulation array
+    ctx->context->CSSetShaderResources(0, 1, &ctx->accumulationSRV);
+    
+    // Bind UAV (u0) - the encoder output texture
+    ID3D11UnorderedAccessView* uav = ctx->encoderUAV[idx];
+    bool createdTemporaryUav = false;
+
+    ID3D11UnorderedAccessView* bnUav = nullptr;      // Blue Noise output UAV (separate from TAB)
+    bool createdBnUav = false;                       // Track if we allocated bnUav temporarily
+    
+    if (!uav)
+    {
+        // Create temporary UAV (Blue Noise resources missing or disabled)
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Texture2D.MipSlice = 0;
+        
+        HRESULT hr = ctx->device->CreateUnorderedAccessView(ctx->d3dTextures[idx], &uavDesc, &uav);
+        if (FAILED(hr))
+        {
+            SetError("Failed to create UAV for TAB");
+            return -1;
+        }
+        createdTemporaryUav = true;
+    }
+    
+    ctx->context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+    
+    // 3. Dispatch compute shader (16x16 threads per group)
+    UINT dispatchX = (ctx->width + 15) / 16;
+    UINT dispatchY = (ctx->height + 15) / 16;
+
+#ifndef NDEBUG
+    // DEBUG: Verify resources are bound before dispatch
+    LogToFile("[CR] Finalize: About to dispatch compute shader");
+    
+    // DEBUG: Check if accumulation array slice 0 has valid data
+    ID3D11Texture2D* debugAccum = nullptr;
+    D3D11_TEXTURE2D_DESC accumSliceDesc = {};
+    ctx->accumulationArray->GetDesc(&accumSliceDesc);
+    // Create a standard 2D texture (not array) to copy slice 0 into
+    accumSliceDesc.ArraySize = 1;
+    accumSliceDesc.Usage = D3D11_USAGE_STAGING;
+    accumSliceDesc.BindFlags = 0;
+    accumSliceDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    accumSliceDesc.MiscFlags = 0;
+    
+    if (SUCCEEDED(ctx->device->CreateTexture2D(&accumSliceDesc, nullptr, &debugAccum))) {
+        // Copy slice 0 (first sub-frame) to our debug texture
+        ctx->context->CopySubresourceRegion(debugAccum, 0, 0, 0, 0, ctx->accumulationArray, 0, nullptr);
+        
+        D3D11_MAPPED_SUBRESOURCE mappedAccum;
+        if (SUCCEEDED(ctx->context->Map(debugAccum, 0, D3D11_MAP_READ, 0, &mappedAccum))) {
+            // R8G8B8A8_UNORM format in accumulation array
+            uint8_t* pixel = (uint8_t*)mappedAccum.pData;
+            bool hasData = (pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0);
+            LogToFile("[CR] Accumulation slice 0 check: %s (first pixel R=%u G=%u B=%u)", 
+                hasData ? "HAS DATA" : "BLACK/ZERO", pixel[0], pixel[1], pixel[2]);
+            ctx->context->Unmap(debugAccum, 0);
+        }
+        debugAccum->Release();
+    }
+    
+    LogToFile("[CR]   - Compute shader: %s", ctx->tabComputeShader ? "OK (not null)" : "NULL");
+    LogToFile("[CR]   - Accumulation SRV: %s", ctx->accumulationSRV ? "OK (not null)" : "NULL");
+    LogToFile("[CR]   - Weight buffer: %s", ctx->tabWeightBuffer ? "OK (not null)" : "NULL");
+    LogToFile("[CR]   - Output UAV: %s", uav ? "OK (not null)" : "NULL");
+    LogToFile("[CR]   - Dispatch size: %dx%d (texture size: %dx%d)", dispatchX, dispatchY, ctx->width, ctx->height);
+#endif
+
+    ctx->context->Dispatch(dispatchX, dispatchY, 1);
+    
+#ifndef NDEBUG
+    LogToFile("[CR] Finalize: Compute shader dispatch completed");
+
+    // DEBUG: Read back pixel statistics to verify output
+    ID3D11Texture2D* debugTexture = nullptr;
+    D3D11_TEXTURE2D_DESC debugDesc = {};
+    ctx->d3dTextures[idx]->GetDesc(&debugDesc);
+    debugDesc.Usage = D3D11_USAGE_STAGING;
+    debugDesc.BindFlags = 0;
+    debugDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    debugDesc.MiscFlags = 0;
+    
+    if (SUCCEEDED(ctx->device->CreateTexture2D(&debugDesc, nullptr, &debugTexture))) {
+        ctx->context->CopyResource(debugTexture, ctx->d3dTextures[idx]);
+        
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(ctx->context->Map(debugTexture, 0, D3D11_MAP_READ, 0, &mapped))) {
+            
+            uint8_t* data = (uint8_t*)mapped.pData;
+            int width = ctx->width;
+            int height = ctx->height;
+            int pitch = mapped.RowPitch;
+            
+            // Sample grid: 5x5 points across the image
+            uint32_t r_sum = 0, g_sum = 0, b_sum = 0;
+            uint32_t r_min = 255, g_min = 255, b_min = 255;
+            uint32_t r_max = 0, g_max = 0, b_max = 0;
+            int samples = 0;
+            
+            for (int y = 0; y < height; y += height / 4) {
+                for (int x = 0; x < width; x += width / 4) {
+                    uint8_t* pixel = data + (y * pitch) + (x * 4);
+                    uint8_t r = pixel[0];
+                    uint8_t g = pixel[1];
+                    uint8_t b = pixel[2];
+                    
+                    r_sum += r; g_sum += g; b_sum += b;
+                    if (r < r_min) r_min = r;
+                    if (g < g_min) g_min = g;
+                    if (b < b_min) b_min = b;
+                    if (r > r_max) r_max = r;
+                    if (g > g_max) g_max = g;
+                    if (b > b_max) b_max = b;
+                    samples++;
+                }
+            }
+            
+            LogToFile("[CR] Pixel stats after TAB (25 samples):");
+            LogToFile("[CR]   R: min=%u max=%u avg=%u", r_min, r_max, r_sum / samples);
+            LogToFile("[CR]   G: min=%u max=%u avg=%u", g_min, g_max, g_sum / samples);
+            LogToFile("[CR]   B: min=%u max=%u avg=%u", b_min, b_max, b_sum / samples);
+            
+            if (r_max == 0 && g_max == 0 && b_max == 0) {
+                LogToFile("[CR] WARNING: All pixels are BLACK - shader outputting zeros");
+            } else if (r_max < 10 && g_max < 10 && b_max < 10) {
+                LogToFile("[CR] WARNING: Very dark output - possible black with noise");
+            } else {
+                LogToFile("[CR] OK: Valid scene colors detected in output");
+            }
+            
+            ctx->context->Unmap(debugTexture, 0);
+        } else {
+            LogToFile("[CR] Failed to map debug texture for readback");
+        }
+        debugTexture->Release();
+    } else {
+        LogToFile("[CR] Failed to create debug staging texture");
+    }
+#endif
+
+// GPU SYNC: Ensure TAB compute shader has finished writing before we proceed
+    ID3D11Query* syncQuery = nullptr;
+    D3D11_QUERY_DESC queryDesc = {};
+    queryDesc.Query = D3D11_QUERY_EVENT;
+    if (SUCCEEDED(ctx->device->CreateQuery(&queryDesc, &syncQuery))) {
+        ctx->context->End(syncQuery);
+        // Wait for GPU to finish all prior commands
+        while (ctx->context->GetData(syncQuery, nullptr, 0, 0) == S_FALSE) {
+            // Spin-wait for GPU completion (typically 0-1 iterations)
+        }
+        syncQuery->Release();
+    }
+
+    // 4. Unbind UAV (CRITICAL for encoder access)
+    ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+    ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+    
+    // Unbind SRVs and shader (clean state)
+    ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+    ctx->context->CSSetShaderResources(0, 1, nullSRV);
+    ctx->context->CSSetShader(nullptr, nullptr, 0);
+    
+    // 5. Ensure compute shader has finished writing to the texture
+    ctx->context->Flush();
+    
+    // PING-PONG BUFFER FIX:
+    // TAB writes to buffer[idx]. If Blue Noise follows, it must write to buffer[1-idx]
+    // to avoid D3D11 resource hazard (binding same texture as SRV and UAV simultaneously).
+    int outputIdx = idx;
+    if (ctx->useBlueNoiseDither && ctx->ditherShader)
+    {
+        outputIdx = 1 - idx;  // Ping-pong to other buffer
+    }
+
+    // 6. Now proceed with encoding the result
+    // The texture ctx->d3dTextures[idx] now contains the accumulated/averaged frame
+    
+    if (ctx->useBlueNoiseDither && ctx->ditherShader)
+    {
+        // Create SRV to read the TAB result
+        ID3D11ShaderResourceView* tabResultSRV = nullptr;
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        
+        HRESULT hr = ctx->device->CreateShaderResourceView(ctx->d3dTextures[idx], &srvDesc, &tabResultSRV);
+        if (FAILED(hr)) {
+            SetError("Failed to create SRV for Blue Noise input");
+            if (createdTemporaryUav && uav) uav->Release();
+            return -1;
+        }
+        
+        // Apply Blue Noise dithering to the accumulated result
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(ctx->context->Map(ctx->constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+        {
+            struct DitherParams {
+                uint32_t width;
+                uint32_t height;
+                uint32_t frameIdx;
+                uint32_t flags;
+            } params;
+            
+            params.width = ctx->width;
+            params.height = ctx->height;
+            params.frameIdx = ctx->frameCounter++;
+            params.flags = 0;  // TAB output is RGBA
+            
+            memcpy(mapped.pData, &params, sizeof(params));
+            ctx->context->Unmap(ctx->constantBuffer, 0);
+        }
+        
+        ctx->context->CSSetShader(ctx->ditherShader, nullptr, 0);
+        ctx->context->CSSetConstantBuffers(0, 1, &ctx->constantBuffer);
+        
+        // Bind TAB result as first SRV, Blue Noise texture as second
+        ID3D11ShaderResourceView* srvs[2] = { tabResultSRV, ctx->blueNoiseSRV };
+        ctx->context->CSSetShaderResources(0, 2, srvs);
+        
+        // Bind UAV for Blue Noise output (ping-pong to other buffer to avoid SRV/UAV conflict)
+        bnUav = ctx->encoderUAV[outputIdx];
+        if (!bnUav)
+        {
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+            uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            uavDesc.Texture2D.MipSlice = 0;
+            
+            HRESULT hr = ctx->device->CreateUnorderedAccessView(ctx->d3dTextures[outputIdx], &uavDesc, &bnUav);
+            if (FAILED(hr)) {
+                SetError("Failed to create UAV for Blue Noise output");
+                tabResultSRV->Release();
+                if (createdTemporaryUav && uav) uav->Release();
+                return -1;
+            }
+            createdBnUav = true;
+        }
+        ctx->context->CSSetUnorderedAccessViews(0, 1, &bnUav, nullptr);
+        
+        dispatchX = (ctx->width + 15) / 16;
+        dispatchY = (ctx->height + 15) / 16;
+        ctx->context->Dispatch(dispatchX, dispatchY, 1);
+        
+        // Cleanup Blue Noise resources
+        ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+        ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+        ctx->context->CSSetShaderResources(0, 2, nullSRVs);
+        ctx->context->CSSetShader(nullptr, nullptr, 0);
+        
+        ctx->context->Flush();
+        
+        tabResultSRV->Release();  // Release the temporary SRV
+    }
+    
+    // Release temporary UAV if we created one
+    if (createdTemporaryUav && uav)
+    {
+        uav->Release();
+    }
+    
+    // Release Blue Noise UAV if we created it
+    if (createdBnUav && bnUav)
+    {
+        bnUav->Release();
+    }
+    
+    // 7. Submit to AMF encoder - handle INPUT_FULL by draining until accepted
+    AMF_RESULT res;
+    do {
+        res = ctx->encoder->SubmitInput(ctx->amfSurfaces[outputIdx]);
+        if (res == AMF_INPUT_FULL) {
+            // Queue full - must drain an output frame before retrying
+            amf::AMFDataPtr data;
+            if (ctx->encoder->QueryOutput(&data) == AMF_OK && data) {
+                // Process frame immediately to free the slot
+                amf::AMFBufferPtr buffer(data);
+                AVPacket pkt{};
+                av_init_packet(&pkt);
+                
+                amf_int64 outputDataType;
+                const wchar_t* outputTypeProp = ctx->hevcMode ? 
+                    AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE : 
+                    AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE;
+                buffer->GetProperty(outputTypeProp, &outputDataType);
+                
+                if (ctx->hevcMode) {
+                    if (outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR ||
+                        outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I)
+                        pkt.flags |= AV_PKT_FLAG_KEY;
+                } else {
+                    if (outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_IDR ||
+                        outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_I)
+                        pkt.flags |= AV_PKT_FLAG_KEY;
+                }
+
+                pkt.data = (uint8_t*)buffer->GetNative();
+                pkt.size = (int)buffer->GetSize();
+                pkt.pts = ctx->frameCount;
+                pkt.dts = ctx->frameCount;
+                pkt.duration = 1;
+                pkt.stream_index = ctx->videoStream->index;
+                av_packet_rescale_ts(&pkt, ctx->timeBase, ctx->videoStream->time_base);
+
+                {
+                    std::lock_guard<std::mutex> lock(ctx->writeMutex);
+                    av_interleaved_write_frame(ctx->formatContext, &pkt);
+                }
+                ctx->frameCount++;
+            }
+        }
+    } while (res == AMF_INPUT_FULL);
+
+    if (res != AMF_OK)
+    {
+        SetError("AMF SubmitInput failed in TAB finalization");
+        return -1;
+    }
+
+    // 8. Drain encoded packets (blocking until complete)
+    amf::AMFDataPtr data;
+    while (ctx->encoder->QueryOutput(&data) == AMF_OK && data)
+    {
+        amf::AMFBufferPtr buffer(data);
+        AVPacket pkt{};
+        av_init_packet(&pkt);
+
+        amf_int64 outputDataType;
+        const wchar_t* outputTypeProp = ctx->hevcMode ? 
+            AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE : 
+            AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE;
+            
+        if (ctx->hevcMode)
+            outputDataType = AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_P;
+        else
+            outputDataType = AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_P;
+            
+        buffer->GetProperty(outputTypeProp, &outputDataType);
+        
+        if (ctx->hevcMode)
+        {
+            if (outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR ||
+                outputDataType == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I)
+            {
+                pkt.flags |= AV_PKT_FLAG_KEY;
+            }
+        }
+        else
+        {
+            if (outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_IDR ||
+                outputDataType == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_I)
+            {
+                pkt.flags |= AV_PKT_FLAG_KEY;
+            }
+        }
+
+        pkt.data = (uint8_t*)buffer->GetNative();
+        pkt.size = (int)buffer->GetSize();
+        pkt.pts = ctx->frameCount;
+        pkt.dts = ctx->frameCount;
+        pkt.duration = 1;
+        pkt.stream_index = ctx->videoStream->index;
+
+        av_packet_rescale_ts(&pkt, ctx->timeBase, ctx->videoStream->time_base);
+
+        {
+            std::lock_guard<std::mutex> lock(ctx->writeMutex);
+            av_interleaved_write_frame(ctx->formatContext, &pkt);
+        }
+
+        ctx->frameCount++;
+    }
+    
+    // Reset sub-frame counter for next output frame
+    ctx->currentSubFrame = 0;
+
+    return 0;
+}
+
 // CRITICAL: Copy from Unity texture (source) to our encoder texture (destination), then submit owned texture
+// MODIFIED: This is the standard path when TAB is NOT enabled. When TAB is enabled, use CR_SubmitSubFrame + CR_FinalizeTemporalFrame instead.
 extern "C" __declspec(dllexport)
 int CR_EncodeFrame(
     CREncoderHandle encoder,
@@ -670,6 +1395,14 @@ int CR_EncodeFrame(
     if (!ctx || !ctx->initialized || !unityTexture)
     {
         SetError("Invalid encoder context or null texture");
+        return -1;
+    }
+
+    // Check if TAB mode is enabled - if so, CR_EncodeFrame should not be called directly
+    // Instead, use CR_SubmitSubFrame followed by CR_FinalizeTemporalFrame
+    if (ctx->isTabMode)
+    {
+        SetError("TAB mode is enabled. Use CR_SubmitSubFrame and CR_FinalizeTemporalFrame instead of CR_EncodeFrame");
         return -1;
     }
 
@@ -892,6 +1625,12 @@ int CR_ShutdownEncoder(CREncoderHandle encoder)
 {
     EncoderContext* ctx = (EncoderContext*)encoder;
     if (!ctx) return 0;
+
+    // NEW: Clean up TAB resources first
+    if (ctx->isTabMode)
+    {
+        DestroyTabResources(ctx);
+    }
 
     if (ctx->encoder)
     {
