@@ -145,6 +145,33 @@
             public const string AdvancedCameraHeader = "Advanced Camera Settings";
         }
 
+        public static class AdvancedSettings
+        {
+            public const string WindowTitle = "Advanced Settings";
+            public const string EncodingTab = "Encoding";
+            public const string RenderingTab = "Rendering";
+            
+            // Encoding tab
+            public const string SafeModeToggle = " Safe Mode (CPU Encoding)";
+            public const string SafeModeTooltip = "Forces CPU-based x264 encoding. Use this if you experience issues with the GPU paths.";
+            public const string AudioCaptureToggle = " Enable Audio Capture";
+            public const string AudioCaptureTooltip = "Records synchronized WAV audio alongside video. Does not work above 30fps capture rates.";
+            public const string PngSequenceToggle = " PNG Sequence Mode";
+            public const string PngSequenceTooltip = "Outputs individual PNG frames. Forces software encoding and disables hardware acceleration.";
+            
+            // Rendering tab
+            public const string TemporalAccumulationToggle = " Temporal Accumulation Blur";
+            public const string TemporalAccumulationTooltip = "Simulates motion blur by accumulating multiple sub-frames per output frame. Only available with GPU encoding.";
+            public const string ShutterSoftnessLabel = "Shutter Softness:";
+            public const string EffectiveShutterFormat = "Effective Shutter: {0}°";
+            public const string EffectiveShutter180 = "180°";
+            public const string SubFrameCountLabel = "Sub-frames: {0}";
+            public const string TabAMFOnlyWarning = "Temporal Accumulation requires AMD encoder (NVENC support coming soon).";
+            public const string GradientProtectionToggle = " Gradient Protection";
+            public const string GradientProtectionTooltip = "Reduces color banding in dark areas. Only available with AMD encoder.";
+            public const string AMFOnlyWarning = "Advanced options require AMD encoder.";
+        }
+
         public static class AdvancedCameraOptions
         {
             // Window Title

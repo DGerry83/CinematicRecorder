@@ -29,6 +29,7 @@ namespace CinematicRecorder.UI
                 public const int RecordingControls = 12347;
                 public const int AdvancedOptions = 12348;
                 public const int AdvancedCameraDocked = 12349;
+                public const int AdvancedSettingsDocked = 12350;
                 public const int DialogDelete = 99999;
                 public const int DialogUnassign = 99998;
             }
@@ -180,6 +181,13 @@ namespace CinematicRecorder.UI
                 public const float RADIO_WIDTH = 100f;
                 public const float SLIDER_MIN = 0f;
                 public const float SLIDER_MAX = 10f;
+            }
+
+            public static class AdvancedSettings
+            {
+                public const float PANEL_WIDTH = 280f;
+                public const float TAB_HEIGHT = 30f;
+                public const float TAB_BUTTON_WIDTH = 130f;
             }
         }
         #endregion
