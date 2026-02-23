@@ -186,6 +186,10 @@ struct EncoderContext
     float tabWeights[8] = {0};                              // Gaussian weights
     float tabTotalWeight = 0;                               // Sum of weights for normalization
     std::mutex tabMutex;                                    // Protects TAB state during Submit/Finalize
+    
+    // NEW: Non-TAB path synchronization resources
+    std::mutex encodeMutex;                                 // Protects Non-TAB encode operations
+    ID3D11Query* encodeSyncQuery = nullptr;                 // GPU sync query for Non-TAB path
 };
 
 // Forward declaration
@@ -881,6 +885,14 @@ CREncoderHandle CR_InitEncoder(
             }
         }
     }
+    
+    // Create GPU sync query for Non-TAB path (ensures copy/compute complete before encode)
+    D3D11_QUERY_DESC queryDesc = {};
+    queryDesc.Query = D3D11_QUERY_EVENT;
+    if (FAILED(ctx->device->CreateQuery(&queryDesc, &ctx->encodeSyncQuery))) {
+        LogToFile("[CR] Warning: Failed to create Non-TAB encode sync query");
+        // Non-fatal: can still work with Flush() fallback
+    }
 
     ctx->initialized = true;
     return ctx;
@@ -1388,6 +1400,9 @@ int CR_EncodeFrame(
         return -1;
     }
 
+    // CRITICAL: Acquire mutex to protect Non-TAB encode operations
+    std::lock_guard<std::mutex> lock(ctx->encodeMutex);
+
     // Validate format (keep for troubleshooting user reports)
     D3D11_TEXTURE2D_DESC srcDesc;
     unityTexture->GetDesc(&srcDesc);
@@ -1411,6 +1426,13 @@ int CR_EncodeFrame(
             srcDesc.Format, srcDesc.Format);
         SetError(msg);
         return -1;
+    }
+
+    // Validate dimensions
+    if (srcDesc.Width != (UINT)ctx->width || srcDesc.Height != (UINT)ctx->height)
+    {
+        LogToFile("[CR] ENCODE DIMENSION ERROR: Expected %dx%d but got %ux%u", 
+                  ctx->width, ctx->height, srcDesc.Width, srcDesc.Height);
     }
 
     int idx = ctx->bufferIndex;
@@ -1489,6 +1511,23 @@ int CR_EncodeFrame(
 } else {
     // --- Path A: Standard CopyResource ---
     ctx->context->CopyResource(ctx->d3dTextures[idx], unityTexture);
+}
+
+// HARD SYNC: Ensure GPU completion before encoder reads
+if (ctx->encodeSyncQuery) {
+    ctx->context->End(ctx->encodeSyncQuery);  // Insert marker
+    DWORD startTime = GetTickCount();
+    while (S_FALSE == ctx->context->GetData(ctx->encodeSyncQuery, nullptr, 0, 0)) {
+        Sleep(1);  // Yield CPU to allow driver processing
+        // Add timeout detection (5 seconds - should never take this long)
+        if (GetTickCount() - startTime > 5000) {
+            LogToFile("[CR] FATAL: encodeSyncQuery timeout in CR_EncodeFrame - GPU sync broken");
+            break;
+        }
+    }
+} else {
+    // Fallback: Flush if query not available
+    ctx->context->Flush();
 }
 
  // Submit to AMF encoder - handle INPUT_FULL by draining until accepted
@@ -1693,6 +1732,9 @@ int CR_ShutdownEncoder(CREncoderHandle encoder)
         if (ctx->amfSurfaces[i]) ctx->amfSurfaces[i] = nullptr;
         if (ctx->d3dTextures[i]) { ctx->d3dTextures[i]->Release(); ctx->d3dTextures[i] = nullptr; }
     }
+    
+    // Clean up Non-TAB sync query
+    if (ctx->encodeSyncQuery) { ctx->encodeSyncQuery->Release(); ctx->encodeSyncQuery = nullptr; }
 
     if (ctx->amfContext)
     {
