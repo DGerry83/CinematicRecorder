@@ -173,15 +173,19 @@ struct EncoderContext
     UINT frameCounter = 0;
     
     // NEW: Temporal Accumulation Blur Resources
-    ID3D11Texture2D* accumulationArray = nullptr;           // ArraySize=8, R16G16B16A16_FLOAT
-    ID3D11ShaderResourceView* accumulationSRV = nullptr;    // SRV for the array
+    ID3D11Texture2D* accumulationArray[2] = {nullptr, nullptr};           // Double buffered
+    ID3D11ShaderResourceView* accumulationSRV[2] = {nullptr, nullptr};    // SRV for each array
+    int currentAccumBuffer = 0;                                           // 0 or 1, toggles per frame
     ID3D11ComputeShader* tabComputeShader = nullptr;        // TAB compute shader
     ID3D11Buffer* tabWeightBuffer = nullptr;                // Constant buffer for Gaussian weights
     bool isTabMode = false;                                 // TAB enabled flag
     int tabSubFrameCount = 8;                               // Number of sub-frames (typically 8)
     int currentSubFrame = 0;                                // Current sub-frame index being filled
+    ID3D11Query* preComputeQuery = nullptr;                 // GPU sync query for pre-compute
+    ID3D11Query* postComputeQuery = nullptr;                // GPU sync query for post-compute
     float tabWeights[8] = {0};                              // Gaussian weights
     float tabTotalWeight = 0;                               // Sum of weights for normalization
+    std::mutex tabMutex;                                    // Protects TAB state during Submit/Finalize
 };
 
 // Forward declaration
@@ -213,45 +217,68 @@ static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
         ctx->tabTotalWeight += weight;
     }
     
-    // Normalize weights (divide by sum)
+    // Normalize weights
     for (int i = 0; i < ctx->tabSubFrameCount; i++)
     {
         ctx->tabWeights[i] /= ctx->tabTotalWeight;
     }
     
-    // Create accumulation array texture (ArraySize=8, R16G16B16A16_FLOAT)
+    // Create accumulation array texture (ArraySize=8)
     D3D11_TEXTURE2D_DESC arrayDesc = {};
     arrayDesc.Width = ctx->width;
     arrayDesc.Height = ctx->height;
     arrayDesc.MipLevels = 1;
-    arrayDesc.ArraySize = ctx->tabSubFrameCount;  // 8 slices
+    arrayDesc.ArraySize = ctx->tabSubFrameCount;
     arrayDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     arrayDesc.SampleDesc.Count = 1;
     arrayDesc.Usage = D3D11_USAGE_DEFAULT;
-    arrayDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;  // Will be read by compute shader
+    arrayDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
     
-    hr = ctx->device->CreateTexture2D(&arrayDesc, nullptr, &ctx->accumulationArray);
-    if (FAILED(hr))
+    // Create BOTH arrays [0] and [1]
+    for (int buf = 0; buf < 2; buf++)
     {
-        SetError("Failed to create accumulation array texture");
-        return false;
+        hr = ctx->device->CreateTexture2D(&arrayDesc, nullptr, &ctx->accumulationArray[buf]);
+        if (FAILED(hr))
+        {
+            SetError("Failed to create accumulation array texture");
+            return false;
+        }
+        
+        // Clear to black
+        ID3D11UnorderedAccessView* clearUAV = nullptr;
+        D3D11_UNORDERED_ACCESS_VIEW_DESC clearUAVDesc = {};
+        clearUAVDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        clearUAVDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+        clearUAVDesc.Texture2DArray.MipSlice = 0;
+        clearUAVDesc.Texture2DArray.FirstArraySlice = 0;
+        clearUAVDesc.Texture2DArray.ArraySize = ctx->tabSubFrameCount;
+        
+        if (SUCCEEDED(ctx->device->CreateUnorderedAccessView(ctx->accumulationArray[buf], &clearUAVDesc, &clearUAV))) {
+            UINT clearValues[4] = {0, 0, 0, 0};
+            ctx->context->ClearUnorderedAccessViewUint(clearUAV, clearValues);
+            clearUAV->Release();
+        }
     }
+    ctx->context->Flush(); // One flush after both clears
     
-    // Create SRV for the array
+    // Create SRVs for both arrays
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
     srvDesc.Texture2DArray.MipLevels = 1;
     srvDesc.Texture2DArray.ArraySize = ctx->tabSubFrameCount;
     
-    hr = ctx->device->CreateShaderResourceView(ctx->accumulationArray, &srvDesc, &ctx->accumulationSRV);
-    if (FAILED(hr))
+    for (int buf = 0; buf < 2; buf++)
     {
-        SetError("Failed to create accumulation array SRV");
-        return false;
+        hr = ctx->device->CreateShaderResourceView(ctx->accumulationArray[buf], &srvDesc, &ctx->accumulationSRV[buf]);
+        if (FAILED(hr))
+        {
+            SetError("Failed to create accumulation array SRV");
+            return false;
+        }
     }
     
-    // Create compute shader from embedded bytecode
+    // Create compute shader
     hr = ctx->device->CreateComputeShader(
         g_TemporalAccumulationCS, 
         sizeof(g_TemporalAccumulationCS),
@@ -264,22 +291,21 @@ static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
         return false;
     }
     
-    // Create constant buffer for weights (16 bytes per float4, 2 float4s + 1 float + padding)
+    // Create constant buffer for weights
     D3D11_BUFFER_DESC cbDesc = {};
-    cbDesc.ByteWidth = 48;  // 2*float4 (32) + float TotalWeight (4) + padding (12) = 48 bytes
+    cbDesc.ByteWidth = 48;
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
     cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     
-    // Prepare initial data (weights packed into float4s)
     struct WeightData {
-        float weights[8];  // 2 float4s
+        float weights[8];
         float totalWeight;
-        float padding[3];  // Align to 16 bytes
+        float padding[3];
     } weightData;
     
     memcpy(weightData.weights, ctx->tabWeights, sizeof(float) * 8);
-    weightData.totalWeight = 1.0f;  // Already normalized, but shader expects this
+    weightData.totalWeight = 1.0f;
     weightData.padding[0] = weightData.padding[1] = weightData.padding[2] = 0.0f;
     
     D3D11_SUBRESOURCE_DATA initData = {};
@@ -292,21 +318,44 @@ static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
         return false;
     }
     
-    ctx->currentSubFrame = 0;
+ctx->currentSubFrame = 0;
+    ctx->currentAccumBuffer = 0; // Start with buffer 0
     
-    LogToFile("[CinematicRecorder] Temporal Accumulation Blur enabled");
+    // Create persistent GPU queries for hard synchronization (no memory thrashing)
+    D3D11_QUERY_DESC queryDesc = {};
+    queryDesc.Query = D3D11_QUERY_EVENT;  // Simple event query
+    
+    if (FAILED(ctx->device->CreateQuery(&queryDesc, &ctx->preComputeQuery))) {
+        SetError("Failed to create pre-compute sync query");
+        return false;
+    }
+    
+    if (FAILED(ctx->device->CreateQuery(&queryDesc, &ctx->postComputeQuery))) {
+        SetError("Failed to create post-compute sync query");
+        return false;
+    }
+    
+    LogToFile("[CinematicRecorder] Temporal Accumulation Blur enabled (double-buffered)");
     return true;
 }
 
 // NEW: Helper function to destroy TAB resources
 static void DestroyTabResources(EncoderContext* ctx)
 {
+    if (ctx->postComputeQuery) { ctx->postComputeQuery->Release(); ctx->postComputeQuery = nullptr; }
+    if (ctx->preComputeQuery) { ctx->preComputeQuery->Release(); ctx->preComputeQuery = nullptr; }
     if (ctx->tabWeightBuffer) { ctx->tabWeightBuffer->Release(); ctx->tabWeightBuffer = nullptr; }
     if (ctx->tabComputeShader) { ctx->tabComputeShader->Release(); ctx->tabComputeShader = nullptr; }
-    if (ctx->accumulationSRV) { ctx->accumulationSRV->Release(); ctx->accumulationSRV = nullptr; }
-    if (ctx->accumulationArray) { ctx->accumulationArray->Release(); ctx->accumulationArray = nullptr; }
+    
+    // Release both SRVs and arrays
+    for (int i = 0; i < 2; i++) {
+        if (ctx->accumulationSRV[i]) { ctx->accumulationSRV[i]->Release(); ctx->accumulationSRV[i] = nullptr; }
+        if (ctx->accumulationArray[i]) { ctx->accumulationArray[i]->Release(); ctx->accumulationArray[i] = nullptr; }
+    }
+    
     ctx->isTabMode = false;
     ctx->currentSubFrame = 0;
+    ctx->currentAccumBuffer = 0;
 }
 
 static bool InitializeFFmpegMuxer(EncoderContext* ctx, const char* outputPath)
@@ -773,7 +822,7 @@ CREncoderHandle CR_InitEncoder(
                  D3D11_BIND_SHADER_RESOURCE | 
                  D3D11_BIND_UNORDERED_ACCESS;  // Required for compute write
 
-    for (int i = 0; i < 2; i++)
+     for (int i = 0; i < 2; i++)
     {
         if (FAILED(ctx->device->CreateTexture2D(&desc, nullptr, &ctx->d3dTextures[i])))
         {
@@ -791,6 +840,13 @@ CREncoderHandle CR_InitEncoder(
             delete ctx;
             return nullptr;
         }
+
+        // Pre-create UAV for TAB compute shader output
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Texture2D.MipSlice = 0;
+        ctx->device->CreateUnorderedAccessView(ctx->d3dTextures[i], &uavDesc, &ctx->encoderUAV[i]);
     }
 
     // Initialize Blue Noise dithering if requested
@@ -940,35 +996,66 @@ int CR_SubmitSubFrame(CREncoderHandle encoder, ID3D11Texture2D* unityTexture, in
         return -1;
     }
     
-    if (subFrameIndex < 0 || subFrameIndex >= ctx->tabSubFrameCount)
+if (subFrameIndex < 0 || subFrameIndex >= ctx->tabSubFrameCount)
     {
         SetError("Sub-frame index out of range");
         return -1;
     }
 
-    LogToFile("[CR] Copying sub-frame %d to accumulation array", subFrameIndex);
+    // CRITICAL: Acquire mutex FIRST - protects all state access and GPU operations
+    std::lock_guard<std::mutex> lock(ctx->tabMutex);
 
-    // DEBUG: Check source texture format
+    // CRITICAL: Ensure previous frame's compute is done before we overwrite this buffer
+    // This prevents resource hazards where we write to accumulationArray while compute is reading
+    if (subFrameIndex == 0 && ctx->postComputeQuery)
+    {
+        ctx->context->End(ctx->preComputeQuery);  // Insert marker
+        DWORD startTime = GetTickCount();
+        while (S_FALSE == ctx->context->GetData(ctx->preComputeQuery, nullptr, 0, 0))
+        {
+            Sleep(1);  // Yield CPU to allow driver processing
+            // Add timeout detection (1 second)
+            if (GetTickCount() - startTime > 1000)
+            {
+                LogToFile("[CR] FATAL: preComputeQuery timeout in SubmitSubFrame - GPU sync broken");
+                break;
+            }
+        }
+    }
+
+    // Validate sub-frame order (prevents gaps in accumulation)
+    if (subFrameIndex != ctx->currentSubFrame)
+    {
+        LogToFile("[CR] ERROR: Out-of-order sub-frame submission. Expected %d, got %d", 
+                  ctx->currentSubFrame, subFrameIndex);
+        return -1;
+    }
+    
+    // Validate dimensions
     D3D11_TEXTURE2D_DESC srcDesc;
     unityTexture->GetDesc(&srcDesc);
-    LogToFile("[CR] SubmitSubFrame %d: Source format = %d (88=R8G8B8A8_UNORM, 91=B8G8R8A8_UNORM)", 
-        subFrameIndex, srcDesc.Format);
-    
-    // Copy from Unity texture to specific array slice
+    if (srcDesc.Width != (UINT)ctx->width || srcDesc.Height != (UINT)ctx->height)
+    {
+        LogToFile("[CR] SUBFRAME DIMENSION ERROR: Expected %dx%d but got %ux%u (subFrame %d)", 
+                  ctx->width, ctx->height, srcDesc.Width, srcDesc.Height, subFrameIndex);
+    }
+
+    // Copy to CURRENT double-buffer (0 or 1)
     ctx->context->CopySubresourceRegion(
-        ctx->accumulationArray,
+        ctx->accumulationArray[ctx->currentAccumBuffer],  // Use current buffer
         subFrameIndex,
         0, 0, 0,
         unityTexture,
         0,
         nullptr
     );
-    
-    LogToFile("[CR] CopySubresourceRegion executed for sub-frame %d", subFrameIndex);
-    
-    // Ensure copy completes immediately for debug verification
-    ctx->context->Flush();
-    
+    // Only flush on last sub-frame to reduce driver overhead
+    // Query sync in FinalizeTemporalFrame ensures proper ordering
+    if (subFrameIndex == ctx->tabSubFrameCount - 1)
+    {
+        ctx->context->Flush();
+    }
+    ctx->currentSubFrame++;
     return 0;
 }
 
@@ -988,32 +1075,65 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         SetError("TAB mode not enabled");
         return -1;
     }
+
+    // CRITICAL: Acquire mutex FIRST - protects all state access
+    std::lock_guard<std::mutex> lock(ctx->tabMutex);
+
+    // NOW safe to check sub-frame count (inside mutex)
+    if (ctx->currentSubFrame != ctx->tabSubFrameCount) {
+        LogToFile("[CR] WARNING: Finalizing frame %lld with only %d/%d sub-frames! Output will be dark.", 
+                  outputFrameIndex, ctx->currentSubFrame, ctx->tabSubFrameCount);
+        
+        // DEBUG: Log which specific slices are missing (for debugging 16x16 artifacts)
+        for (int i = ctx->currentSubFrame; i < ctx->tabSubFrameCount; i++) {
+            LogToFile("[CR] DEBUG: Slice %d/%d unfilled for frame %lld (will read stale data)", 
+                      i, ctx->tabSubFrameCount, outputFrameIndex);
+        }
+    }
+    
+    // CRITICAL: Save count THEN reset immediately so next frame starts fresh even if we crash
+    int submittedSubFrames = ctx->currentSubFrame;
+    ctx->currentSubFrame = 0;
+    
+    // Guard against re-entry or partial finalization
+    if (submittedSubFrames == 0) {
+        LogToFile("[CR] WARNING: Finalize called with 0 sub-frames, skipping frame %lld", outputFrameIndex);
+        return -1;
+    }
     
     int idx = ctx->bufferIndex;
     ctx->bufferIndex = 1 - idx;
+
+    // HARD SYNC: Ensure all 8 sub-frame copies are complete before computing
+    if (ctx->preComputeQuery) {
+        ctx->context->End(ctx->preComputeQuery);  // Insert marker
+        // Stall CPU until GPU reaches this point (all copies before End() are complete)
+        DWORD startTime = GetTickCount();
+        while (S_FALSE == ctx->context->GetData(ctx->preComputeQuery, nullptr, 0, 0)) {
+            Sleep(1);  // Yield CPU to allow driver processing
+            // Add timeout detection (5 seconds - should never take this long)
+            if (GetTickCount() - startTime > 5000) {
+                LogToFile("[CR] FATAL: preComputeQuery timeout in Finalize - GPU sync broken");
+                break;
+            }
+        }
+    }
     
-    // 1. Ensure all sub-frame copies have completed
-    ctx->context->Flush();
-    
-    // 2. Bind compute shader and resources
+    // Bind compute shader
     ctx->context->CSSetShader(ctx->tabComputeShader, nullptr, 0);
-    
-    // Bind constant buffer (b0)
     ctx->context->CSSetConstantBuffers(0, 1, &ctx->tabWeightBuffer);
     
-    // Bind SRV (t0) - the accumulation array
-    ctx->context->CSSetShaderResources(0, 1, &ctx->accumulationSRV);
+    // Bind CURRENT accumulation array (double-buffered)
+    ctx->context->CSSetShaderResources(0, 1, &ctx->accumulationSRV[ctx->currentAccumBuffer]);
     
-    // Bind UAV (u0) - the encoder output texture
+    // Bind UAV
     ID3D11UnorderedAccessView* uav = ctx->encoderUAV[idx];
     bool createdTemporaryUav = false;
-
-    ID3D11UnorderedAccessView* bnUav = nullptr;      // Blue Noise output UAV (separate from TAB)
-    bool createdBnUav = false;                       // Track if we allocated bnUav temporarily
+    ID3D11UnorderedAccessView* bnUav = nullptr;
+    bool createdBnUav = false;
     
     if (!uav)
     {
-        // Create temporary UAV (Blue Noise resources missing or disabled)
         D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
         uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
@@ -1030,160 +1150,39 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
     
     ctx->context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
     
-    // 3. Dispatch compute shader (16x16 threads per group)
+    // Dispatch
     UINT dispatchX = (ctx->width + 15) / 16;
     UINT dispatchY = (ctx->height + 15) / 16;
-
-#ifndef NDEBUG
-    // DEBUG: Verify resources are bound before dispatch
-    LogToFile("[CR] Finalize: About to dispatch compute shader");
-    
-    // DEBUG: Check if accumulation array slice 0 has valid data
-    ID3D11Texture2D* debugAccum = nullptr;
-    D3D11_TEXTURE2D_DESC accumSliceDesc = {};
-    ctx->accumulationArray->GetDesc(&accumSliceDesc);
-    // Create a standard 2D texture (not array) to copy slice 0 into
-    accumSliceDesc.ArraySize = 1;
-    accumSliceDesc.Usage = D3D11_USAGE_STAGING;
-    accumSliceDesc.BindFlags = 0;
-    accumSliceDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    accumSliceDesc.MiscFlags = 0;
-    
-    if (SUCCEEDED(ctx->device->CreateTexture2D(&accumSliceDesc, nullptr, &debugAccum))) {
-        // Copy slice 0 (first sub-frame) to our debug texture
-        ctx->context->CopySubresourceRegion(debugAccum, 0, 0, 0, 0, ctx->accumulationArray, 0, nullptr);
-        
-        D3D11_MAPPED_SUBRESOURCE mappedAccum;
-        if (SUCCEEDED(ctx->context->Map(debugAccum, 0, D3D11_MAP_READ, 0, &mappedAccum))) {
-            // R8G8B8A8_UNORM format in accumulation array
-            uint8_t* pixel = (uint8_t*)mappedAccum.pData;
-            bool hasData = (pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0);
-            LogToFile("[CR] Accumulation slice 0 check: %s (first pixel R=%u G=%u B=%u)", 
-                hasData ? "HAS DATA" : "BLACK/ZERO", pixel[0], pixel[1], pixel[2]);
-            ctx->context->Unmap(debugAccum, 0);
-        }
-        debugAccum->Release();
-    }
-    
-    LogToFile("[CR]   - Compute shader: %s", ctx->tabComputeShader ? "OK (not null)" : "NULL");
-    LogToFile("[CR]   - Accumulation SRV: %s", ctx->accumulationSRV ? "OK (not null)" : "NULL");
-    LogToFile("[CR]   - Weight buffer: %s", ctx->tabWeightBuffer ? "OK (not null)" : "NULL");
-    LogToFile("[CR]   - Output UAV: %s", uav ? "OK (not null)" : "NULL");
-    LogToFile("[CR]   - Dispatch size: %dx%d (texture size: %dx%d)", dispatchX, dispatchY, ctx->width, ctx->height);
-#endif
-
     ctx->context->Dispatch(dispatchX, dispatchY, 1);
     
-#ifndef NDEBUG
-    LogToFile("[CR] Finalize: Compute shader dispatch completed");
-
-    // DEBUG: Read back pixel statistics to verify output
-    ID3D11Texture2D* debugTexture = nullptr;
-    D3D11_TEXTURE2D_DESC debugDesc = {};
-    ctx->d3dTextures[idx]->GetDesc(&debugDesc);
-    debugDesc.Usage = D3D11_USAGE_STAGING;
-    debugDesc.BindFlags = 0;
-    debugDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    debugDesc.MiscFlags = 0;
-    
-    if (SUCCEEDED(ctx->device->CreateTexture2D(&debugDesc, nullptr, &debugTexture))) {
-        ctx->context->CopyResource(debugTexture, ctx->d3dTextures[idx]);
-        
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        if (SUCCEEDED(ctx->context->Map(debugTexture, 0, D3D11_MAP_READ, 0, &mapped))) {
-            
-            uint8_t* data = (uint8_t*)mapped.pData;
-            int width = ctx->width;
-            int height = ctx->height;
-            int pitch = mapped.RowPitch;
-            
-            // Sample grid: 5x5 points across the image
-            uint32_t r_sum = 0, g_sum = 0, b_sum = 0;
-            uint32_t r_min = 255, g_min = 255, b_min = 255;
-            uint32_t r_max = 0, g_max = 0, b_max = 0;
-            int samples = 0;
-            
-            for (int y = 0; y < height; y += height / 4) {
-                for (int x = 0; x < width; x += width / 4) {
-                    uint8_t* pixel = data + (y * pitch) + (x * 4);
-                    uint8_t r = pixel[0];
-                    uint8_t g = pixel[1];
-                    uint8_t b = pixel[2];
-                    
-                    r_sum += r; g_sum += g; b_sum += b;
-                    if (r < r_min) r_min = r;
-                    if (g < g_min) g_min = g;
-                    if (b < b_min) b_min = b;
-                    if (r > r_max) r_max = r;
-                    if (g > g_max) g_max = g;
-                    if (b > b_max) b_max = b;
-                    samples++;
-                }
+    // HARD SYNC: Force GPU completion before encoder reads
+    if (ctx->postComputeQuery) {
+        ctx->context->End(ctx->postComputeQuery);  // Insert marker after dispatch
+        // Stall CPU until compute shader completes
+        DWORD startTime = GetTickCount();
+        while (S_FALSE == ctx->context->GetData(ctx->postComputeQuery, nullptr, 0, 0)) {
+            Sleep(1);  // Yield CPU to allow driver processing
+            // Add timeout detection (5 seconds - should never take this long)
+            if (GetTickCount() - startTime > 5000) {
+                LogToFile("[CR] FATAL: postComputeQuery timeout in Finalize - GPU sync broken");
+                break;
             }
-            
-            LogToFile("[CR] Pixel stats after TAB (25 samples):");
-            LogToFile("[CR]   R: min=%u max=%u avg=%u", r_min, r_max, r_sum / samples);
-            LogToFile("[CR]   G: min=%u max=%u avg=%u", g_min, g_max, g_sum / samples);
-            LogToFile("[CR]   B: min=%u max=%u avg=%u", b_min, b_max, b_sum / samples);
-            
-            if (r_max == 0 && g_max == 0 && b_max == 0) {
-                LogToFile("[CR] WARNING: All pixels are BLACK - shader outputting zeros");
-            } else if (r_max < 10 && g_max < 10 && b_max < 10) {
-                LogToFile("[CR] WARNING: Very dark output - possible black with noise");
-            } else {
-                LogToFile("[CR] OK: Valid scene colors detected in output");
-            }
-            
-            ctx->context->Unmap(debugTexture, 0);
-        } else {
-            LogToFile("[CR] Failed to map debug texture for readback");
         }
-        debugTexture->Release();
-    } else {
-        LogToFile("[CR] Failed to create debug staging texture");
-    }
-#endif
-
-// GPU SYNC: Ensure TAB compute shader has finished writing before we proceed
-    ID3D11Query* syncQuery = nullptr;
-    D3D11_QUERY_DESC queryDesc = {};
-    queryDesc.Query = D3D11_QUERY_EVENT;
-    if (SUCCEEDED(ctx->device->CreateQuery(&queryDesc, &syncQuery))) {
-        ctx->context->End(syncQuery);
-        // Wait for GPU to finish all prior commands
-        while (ctx->context->GetData(syncQuery, nullptr, 0, 0) == S_FALSE) {
-            // Spin-wait for GPU completion (typically 0-1 iterations)
-        }
-        syncQuery->Release();
     }
 
-    // 4. Unbind UAV (CRITICAL for encoder access)
+    // Unbind UAV
     ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
     ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-    
-    // Unbind SRVs and shader (clean state)
     ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
     ctx->context->CSSetShaderResources(0, 1, nullSRV);
     ctx->context->CSSetShader(nullptr, nullptr, 0);
     
-    // 5. Ensure compute shader has finished writing to the texture
-    ctx->context->Flush();
-    
-    // PING-PONG BUFFER FIX:
-    // TAB writes to buffer[idx]. If Blue Noise follows, it must write to buffer[1-idx]
-    // to avoid D3D11 resource hazard (binding same texture as SRV and UAV simultaneously).
+    // Blue Noise path (unchanged)
     int outputIdx = idx;
     if (ctx->useBlueNoiseDither && ctx->ditherShader)
     {
-        outputIdx = 1 - idx;  // Ping-pong to other buffer
-    }
-
-    // 6. Now proceed with encoding the result
-    // The texture ctx->d3dTextures[idx] now contains the accumulated/averaged frame
-    
-    if (ctx->useBlueNoiseDither && ctx->ditherShader)
-    {
-        // Create SRV to read the TAB result
+        outputIdx = 1 - idx;
+        
         ID3D11ShaderResourceView* tabResultSRV = nullptr;
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1197,7 +1196,6 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
             return -1;
         }
         
-        // Apply Blue Noise dithering to the accumulated result
         D3D11_MAPPED_SUBRESOURCE mapped;
         if (SUCCEEDED(ctx->context->Map(ctx->constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
         {
@@ -1211,7 +1209,7 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
             params.width = ctx->width;
             params.height = ctx->height;
             params.frameIdx = ctx->frameCounter++;
-            params.flags = 0;  // TAB output is RGBA
+            params.flags = 0;
             
             memcpy(mapped.pData, &params, sizeof(params));
             ctx->context->Unmap(ctx->constantBuffer, 0);
@@ -1219,12 +1217,9 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         
         ctx->context->CSSetShader(ctx->ditherShader, nullptr, 0);
         ctx->context->CSSetConstantBuffers(0, 1, &ctx->constantBuffer);
-        
-        // Bind TAB result as first SRV, Blue Noise texture as second
         ID3D11ShaderResourceView* srvs[2] = { tabResultSRV, ctx->blueNoiseSRV };
         ctx->context->CSSetShaderResources(0, 2, srvs);
         
-        // Bind UAV for Blue Noise output (ping-pong to other buffer to avoid SRV/UAV conflict)
         bnUav = ctx->encoderUAV[outputIdx];
         if (!bnUav)
         {
@@ -1248,38 +1243,25 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         dispatchY = (ctx->height + 15) / 16;
         ctx->context->Dispatch(dispatchX, dispatchY, 1);
         
-        // Cleanup Blue Noise resources
         ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
         ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
         ctx->context->CSSetShaderResources(0, 2, nullSRVs);
         ctx->context->CSSetShader(nullptr, nullptr, 0);
-        
         ctx->context->Flush();
         
-        tabResultSRV->Release();  // Release the temporary SRV
+        tabResultSRV->Release();
     }
     
-    // Release temporary UAV if we created one
-    if (createdTemporaryUav && uav)
-    {
-        uav->Release();
-    }
+    if (createdTemporaryUav && uav) uav->Release();
+    if (createdBnUav && bnUav) bnUav->Release();
     
-    // Release Blue Noise UAV if we created it
-    if (createdBnUav && bnUav)
-    {
-        bnUav->Release();
-    }
-    
-    // 7. Submit to AMF encoder - handle INPUT_FULL by draining until accepted
+    // Submit to AMF
     AMF_RESULT res;
     do {
         res = ctx->encoder->SubmitInput(ctx->amfSurfaces[outputIdx]);
         if (res == AMF_INPUT_FULL) {
-            // Queue full - must drain an output frame before retrying
             amf::AMFDataPtr data;
             if (ctx->encoder->QueryOutput(&data) == AMF_OK && data) {
-                // Process frame immediately to free the slot
                 amf::AMFBufferPtr buffer(data);
                 AVPacket pkt{};
                 av_init_packet(&pkt);
@@ -1323,7 +1305,7 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         return -1;
     }
 
-    // 8. Drain encoded packets (blocking until complete)
+    // Drain encoded packets
     amf::AMFDataPtr data;
     while (ctx->encoder->QueryOutput(&data) == AMF_OK && data)
     {
@@ -1377,8 +1359,8 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         ctx->frameCount++;
     }
     
-    // Reset sub-frame counter for next output frame
-    ctx->currentSubFrame = 0;
+    // CRITICAL: Toggle accumulation buffer for next frame (prevents resource hazards)
+    ctx->currentAccumBuffer = 1 - ctx->currentAccumBuffer;
 
     return 0;
 }
@@ -1707,9 +1689,9 @@ int CR_ShutdownEncoder(CREncoderHandle encoder)
     }
     for (int i = 0; i < 2; i++)
     {
+        if (ctx->encoderUAV[i]) { ctx->encoderUAV[i]->Release(); ctx->encoderUAV[i] = nullptr; }
         if (ctx->amfSurfaces[i]) ctx->amfSurfaces[i] = nullptr;
-        if (ctx->d3dTextures[i]) ctx->d3dTextures[i]->Release();
-        ctx->d3dTextures[i] = nullptr;
+        if (ctx->d3dTextures[i]) { ctx->d3dTextures[i]->Release(); ctx->d3dTextures[i] = nullptr; }
     }
 
     if (ctx->amfContext)
