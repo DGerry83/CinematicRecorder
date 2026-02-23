@@ -49,6 +49,10 @@ namespace CinematicRecorder.Capture
         private bool _isTabEnabled = false;
         private int _tabSubFrameCount = 8;
         private int _currentSubFrameIndex = 0;
+
+        // NEW: Jitter state for TAB mode only (Halton sequence sub-pixel sampling)
+        private Vector2[] _haltonOffsets = new Vector2[8];          // Raw offsets for debug logging and future shader use
+        private bool _projectionJitterEnabled;                      // True only during TAB sub-frame loop
         #endregion
 
         #region Constructor
@@ -314,12 +318,38 @@ namespace CinematicRecorder.Capture
             if (Planetarium.fetch != null)
                 Planetarium.fetch.fixedDeltaTime = stepDelta;
 
+            _projectionJitterEnabled = true;
+
             // Steps 1-8: Shutter Open - Render and accumulate sub-frames
             for (_currentSubFrameIndex = 0; _currentSubFrameIndex < _tabSubFrameCount; _currentSubFrameIndex++)
             {
                 _audioController?.CaptureSubFrame(stepDelta);
 
+                // CRITICAL: Read CameraTools' current intended matrix (FOV may have changed)
+                Matrix4x4 cameraToolsMatrix = camera.projectionMatrix;
+
+                // Apply Halton jitter to a COPY of CameraTools matrix (calculated on-the-fly)
+                // ±0.707 pixel offset for sub-pixel AA (1/√2 for diagonal coverage)
+                Vector2 h = HaltonSequence.Sequence23[_currentSubFrameIndex];
+                float offsetX = (h.x - 0.5f) * 2.828f / width;
+                float offsetY = (h.y - 0.5f) * 2.828f / height;
+
+                Matrix4x4 jitteredMatrix = cameraToolsMatrix;
+                jitteredMatrix[0, 2] += offsetX;  // m02 - horizontal shift
+                jitteredMatrix[1, 2] += offsetY;  // m12 - vertical shift
+
+                // Apply jittered matrix for rendering
+                camera.projectionMatrix = jitteredMatrix;
+
+                Debug.Log($"[OfflineCapture] Jitter applied: subFrame={_currentSubFrameIndex}, offset=({h.x:F4}, {h.y:F4}), baseFOV={cameraToolsMatrix[1,1]:F4}");
+
                 yield return CaptureTabSubFrame(_currentSubFrameIndex);
+
+                // CRITICAL: Restore CameraTools' clean matrix immediately after render
+                // This ensures:
+                // 1. CameraTools sees its intended FOV during physics/InvokeOnPhysicsStepped
+                // 2. Next iteration reads fresh CameraTools state (no jitter accumulation)
+                camera.projectionMatrix = cameraToolsMatrix;
 
                 DeterministicCaptureSession.AccumulatedSimulatedSeconds += stepDelta;
                 DeterministicCaptureSession.InvokeOnPhysicsStepped(stepDelta);
@@ -327,6 +357,8 @@ namespace CinematicRecorder.Capture
                 if (DeterministicCaptureSession.StopRequested)
                     yield break;
             }
+
+            _projectionJitterEnabled = false;
 
             // Steps 9-16: Shutter Closed - Physics continues but no render
             int skippedFrames = _tabSubFrameCount;
@@ -406,6 +438,9 @@ namespace CinematicRecorder.Capture
             }
             return false;
         }
+
+        // NOTE: CalculateJitteredMatrices() removed - jitter is now calculated on-the-fly
+        // in RunTabCaptureCycle() to ensure CameraTools FOV changes are respected
         #endregion
 
         #region Frame Capture
@@ -768,7 +803,12 @@ namespace CinematicRecorder.Capture
             FinalizeEncoder();
 
             if (camera != null)
+            {
+                // Note: We don't restore projection matrix here because
+                // CameraTools manages its own matrix. Forcing a restore would
+                // overwrite CameraTools' intended FOV state.
                 camera.targetTexture = null;
+            }
 
             if (DeterministicCaptureSession.IsRunning)
             {
