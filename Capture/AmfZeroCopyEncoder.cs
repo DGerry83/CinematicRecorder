@@ -120,6 +120,10 @@ namespace CinematicRecorder.Capture
 
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern int CR_FinalizeTemporalFrame(IntPtr encoder, long outputFrameIndex);
+
+        // NEW: Sharpening filter control
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_SetTabSharpening(IntPtr encoder, int enabled, float strength);
         #endregion
 
         #region Structs
@@ -384,6 +388,46 @@ namespace CinematicRecorder.Capture
             catch (SEHException ex)
             {
                 Debug.LogError($"[AmfZeroCopyEncoder] FinalizeTemporalFrame crashed (SEH): {ex.Message}");
+                return false;
+            }
+        }
+
+        // NEW: Set sharpening filter parameters
+        /// <summary>
+        /// Configures sharpening filter (unsharp mask) for TAB output.
+        /// Must be called after EnableTemporalAccumulation but before first frame.
+        /// </summary>
+        /// <param name="enabled">true to enable sharpening</param>
+        /// <param name="strength">Sharpening strength (0.0 to 0.5)</param>
+        /// <returns>true on success</returns>
+        public bool SetTabSharpening(bool enabled, float strength)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+            {
+                Debug.LogError("[AmfZeroCopyEncoder] Cannot configure sharpening - encoder not initialized");
+                return false;
+            }
+
+            try
+            {
+                // Clamp strength to valid range
+                strength = Mathf.Clamp(strength, 0.0f, 0.5f);
+                
+                int result = CR_SetTabSharpening(_encoderHandle, enabled ? 1 : 0, strength);
+
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[AmfZeroCopyEncoder] Failed to configure sharpening: {err}");
+                    return false;
+                }
+
+                Debug.Log($"[AmfZeroCopyEncoder] Sharpening {(enabled ? "enabled" : "disabled")} (strength={strength:F2})");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[AmfZeroCopyEncoder] SetTabSharpening exception: {ex.Message}");
                 return false;
             }
         }

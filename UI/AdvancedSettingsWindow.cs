@@ -164,6 +164,13 @@ namespace CinematicRecorder.UI
             DrawTemporalAccumulationSection();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawGradientProtectionToggle();
+            
+            // Sharpening only available when TAB is enabled
+            if (SessionState.EnableTemporalAccumulation)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+                DrawSharpeningToggle();
+            }
         }
 
         private void DrawSafeModeToggle()
@@ -406,6 +413,54 @@ namespace CinematicRecorder.UI
             else if (SessionState.AmfUseBlueNoiseDither)
             {
                 GUILayout.Label(Settings.GradientTooltip, tooltipStyle);
+            }
+
+            GUI.enabled = wasEnabled;
+        }
+
+        private void DrawSharpeningToggle()
+        {
+            bool wasEnabled = GUI.enabled;
+            if (DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.TabEnableSharpening)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newValue = GUILayout.Toggle(
+                SessionState.TabEnableSharpening,
+                AdvancedSettings.SharpeningToggle,
+                toggleStyle
+            );
+
+            if (newValue != SessionState.TabEnableSharpening && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.TabEnableSharpening = newValue;
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+            helpStyle.wordWrap = true;
+            GUILayout.Label(AdvancedSettings.SharpeningTooltip, helpStyle);
+
+            // Strength slider (only if sharpening enabled)
+            if (SessionState.TabEnableSharpening)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                
+                float strengthPercent = SessionState.TabSharpeningStrength * 100f;
+                GUILayout.Label(string.Format(AdvancedSettings.SharpeningStrengthLabel, strengthPercent), HighLogic.Skin.label);
+                
+                float newStrength = GUILayout.HorizontalSlider(SessionState.TabSharpeningStrength, 0.0f, 1.0f);
+                if (!Mathf.Approximately(newStrength, SessionState.TabSharpeningStrength))
+                {
+                    SessionState.TabSharpeningStrength = newStrength;
+                }
             }
 
             GUI.enabled = wasEnabled;

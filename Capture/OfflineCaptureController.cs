@@ -203,6 +203,20 @@ namespace CinematicRecorder.Capture
                     else
                     {
                         Debug.Log($"[OfflineCapture] Temporal Accumulation Blur enabled ({_tabSubFrameCount} sub-frames)");
+                        
+                        // Configure sharpening if enabled
+                        if (SessionState.TabEnableSharpening)
+                        {
+                            bool sharpenSuccess = zeroCopyEncoder.SetTabSharpening(true, SessionState.TabSharpeningStrength);
+                            if (!sharpenSuccess)
+                            {
+                                Debug.LogWarning("[OfflineCapture] Failed to configure sharpening");
+                            }
+                            else
+                            {
+                                Debug.Log($"[OfflineCapture] Sharpening enabled (strength={SessionState.TabSharpeningStrength:F2})");
+                            }
+                        }
                     }
                 }
             }
@@ -349,7 +363,8 @@ namespace CinematicRecorder.Capture
                 // This ensures:
                 // 1. CameraTools sees its intended FOV during physics/InvokeOnPhysicsStepped
                 // 2. Next iteration reads fresh CameraTools state (no jitter accumulation)
-                camera.projectionMatrix = cameraToolsMatrix;
+                // NOTE: Use ResetProjectionMatrix() to resume Unity's FOV-driven matrix computation
+                camera.ResetProjectionMatrix();
 
                 DeterministicCaptureSession.AccumulatedSimulatedSeconds += stepDelta;
                 DeterministicCaptureSession.InvokeOnPhysicsStepped(stepDelta);

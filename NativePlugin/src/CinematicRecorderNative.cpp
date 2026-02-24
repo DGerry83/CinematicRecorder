@@ -1,6 +1,7 @@
 #include "CinematicRecorderNative.h"
 #include "EmbeddedResources.h"
-#include "TemporalAccumulation.h"  // NEW: Include the generated header for compute shader bytecode
+#include "TemporalAccumulation.h"  // TAB accumulation compute shader
+#include "CASSharpen.h"            // CAS sharpening compute shader
 
 #include <string>
 #include <vector>
@@ -177,6 +178,7 @@ struct EncoderContext
     ID3D11ShaderResourceView* accumulationSRV[2] = {nullptr, nullptr};    // SRV for each array
     int currentAccumBuffer = 0;                                           // 0 or 1, toggles per frame
     ID3D11ComputeShader* tabComputeShader = nullptr;        // TAB compute shader
+    ID3D11ComputeShader* casShader = nullptr;               // CAS sharpening compute shader
     ID3D11Buffer* tabWeightBuffer = nullptr;                // Constant buffer for Gaussian weights
     bool isTabMode = false;                                 // TAB enabled flag
     int tabSubFrameCount = 8;                               // Number of sub-frames (typically 8)
@@ -186,6 +188,11 @@ struct EncoderContext
     float tabWeights[8] = {0};                              // Gaussian weights
     float tabTotalWeight = 0;                               // Sum of weights for normalization
     std::mutex tabMutex;                                    // Protects TAB state during Submit/Finalize
+    
+    // NEW: Sharpening filter settings
+    bool tabSharpeningEnabled = false;
+    float tabSharpeningStrength = 0.25f;
+    ID3D11Buffer* tabSharpeningBuffer = nullptr;            // Constant buffer for sharpening params
     
     // NEW: Non-TAB path synchronization resources
     std::mutex encodeMutex;                                 // Protects Non-TAB encode operations
@@ -282,7 +289,7 @@ static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
         }
     }
     
-    // Create compute shader
+    // Create TAB compute shader
     hr = ctx->device->CreateComputeShader(
         g_TemporalAccumulationCS, 
         sizeof(g_TemporalAccumulationCS),
@@ -292,6 +299,19 @@ static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
     if (FAILED(hr))
     {
         SetError("Failed to create TAB compute shader");
+        return false;
+    }
+    
+    // Create CAS sharpening compute shader
+    hr = ctx->device->CreateComputeShader(
+        g_CASSharpenCS,
+        sizeof(g_CASSharpenCS),
+        nullptr,
+        &ctx->casShader
+    );
+    if (FAILED(hr))
+    {
+        SetError("Failed to create CAS compute shader");
         return false;
     }
     
@@ -348,6 +368,8 @@ static void DestroyTabResources(EncoderContext* ctx)
 {
     if (ctx->postComputeQuery) { ctx->postComputeQuery->Release(); ctx->postComputeQuery = nullptr; }
     if (ctx->preComputeQuery) { ctx->preComputeQuery->Release(); ctx->preComputeQuery = nullptr; }
+    if (ctx->casShader) { ctx->casShader->Release(); ctx->casShader = nullptr; }
+    if (ctx->tabSharpeningBuffer) { ctx->tabSharpeningBuffer->Release(); ctx->tabSharpeningBuffer = nullptr; }
     if (ctx->tabWeightBuffer) { ctx->tabWeightBuffer->Release(); ctx->tabWeightBuffer = nullptr; }
     if (ctx->tabComputeShader) { ctx->tabComputeShader->Release(); ctx->tabComputeShader = nullptr; }
     
@@ -360,6 +382,7 @@ static void DestroyTabResources(EncoderContext* ctx)
     ctx->isTabMode = false;
     ctx->currentSubFrame = 0;
     ctx->currentAccumBuffer = 0;
+    ctx->tabSharpeningEnabled = false;
 }
 
 static bool InitializeFFmpegMuxer(EncoderContext* ctx, const char* outputPath)
@@ -985,6 +1008,34 @@ int CR_SetTemporalAccumulation(CREncoderHandle encoder, const TabSettings* setti
     return 0;
 }
 
+// NEW: Configure sharpening filter for TAB output
+extern "C" __declspec(dllexport)
+int CR_SetTabSharpening(CREncoderHandle encoder, int enabled, float strength)
+{
+    EncoderContext* ctx = (EncoderContext*)encoder;
+    if (!ctx || !ctx->initialized)
+    {
+        SetError("Invalid encoder context");
+        return -1;
+    }
+    
+    // CRITICAL: Acquire mutex to protect TAB state
+    std::lock_guard<std::mutex> lock(ctx->tabMutex);
+    
+    ctx->tabSharpeningEnabled = (enabled != 0);
+    ctx->tabSharpeningStrength = strength;
+    
+    // Clamp strength to valid range
+    if (ctx->tabSharpeningStrength < 0.0f) ctx->tabSharpeningStrength = 0.0f;
+    if (ctx->tabSharpeningStrength > 1.0f) ctx->tabSharpeningStrength = 1.0f;
+    
+    LogToFile("[CinematicRecorder] Sharpening %s (strength=%.2f)", 
+              ctx->tabSharpeningEnabled ? "enabled" : "disabled", 
+              ctx->tabSharpeningStrength);
+    
+    return 0;
+}
+
 // NEW: Submit a single sub-frame to the accumulation array
 extern "C" __declspec(dllexport)
 int CR_SubmitSubFrame(CREncoderHandle encoder, ID3D11Texture2D* unityTexture, int subFrameIndex)
@@ -1133,7 +1184,42 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
     
     // Bind compute shader
     ctx->context->CSSetShader(ctx->tabComputeShader, nullptr, 0);
-    ctx->context->CSSetConstantBuffers(0, 1, &ctx->tabWeightBuffer);
+    
+    // Update sharpening constant buffer (create lazily if needed)
+    if (!ctx->tabSharpeningBuffer)
+    {
+        D3D11_BUFFER_DESC cbDesc = {};
+        cbDesc.ByteWidth = 16; // 4 floats: enabled, strength, padding x2
+        cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        
+        ctx->device->CreateBuffer(&cbDesc, nullptr, &ctx->tabSharpeningBuffer);
+    }
+    
+    if (ctx->tabSharpeningBuffer)
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(ctx->context->Map(ctx->tabSharpeningBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+        {
+            struct SharpenParams {
+                int enabled;
+                float strength;
+                float padding[2];
+            } params;
+            
+            params.enabled = ctx->tabSharpeningEnabled ? 1 : 0;
+            params.strength = ctx->tabSharpeningStrength;
+            params.padding[0] = params.padding[1] = 0.0f;
+            
+            memcpy(mapped.pData, &params, sizeof(params));
+            ctx->context->Unmap(ctx->tabSharpeningBuffer, 0);
+        }
+    }
+    
+    // Bind constant buffers: b0 = weights, b1 = sharpening
+    ID3D11Buffer* constantBuffers[2] = { ctx->tabWeightBuffer, ctx->tabSharpeningBuffer };
+    ctx->context->CSSetConstantBuffers(0, 2, constantBuffers);
     
     // Bind CURRENT accumulation array (double-buffered)
     ctx->context->CSSetShaderResources(0, 1, &ctx->accumulationSRV[ctx->currentAccumBuffer]);
@@ -1162,50 +1248,143 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
     
     ctx->context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
     
-    // Dispatch
+    // Dispatch TAB accumulation
     UINT dispatchX = (ctx->width + 15) / 16;
     UINT dispatchY = (ctx->height + 15) / 16;
     ctx->context->Dispatch(dispatchX, dispatchY, 1);
     
-    // HARD SYNC: Force GPU completion before encoder reads
+    // HARD SYNC: TAB completion before CAS
     if (ctx->postComputeQuery) {
-        ctx->context->End(ctx->postComputeQuery);  // Insert marker after dispatch
-        // Stall CPU until compute shader completes
+        ctx->context->End(ctx->postComputeQuery);
         DWORD startTime = GetTickCount();
         while (S_FALSE == ctx->context->GetData(ctx->postComputeQuery, nullptr, 0, 0)) {
-            Sleep(1);  // Yield CPU to allow driver processing
-            // Add timeout detection (5 seconds - should never take this long)
+            Sleep(1);
             if (GetTickCount() - startTime > 5000) {
-                LogToFile("[CR] FATAL: postComputeQuery timeout in Finalize - GPU sync broken");
+                LogToFile("[CR] FATAL: postComputeQuery timeout after TAB");
                 break;
             }
         }
     }
 
-    // Unbind UAV
+    // Unbind TAB resources completely
     ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-    ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
     ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+    ID3D11Buffer* nullCB[1] = { nullptr };
+    ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
     ctx->context->CSSetShaderResources(0, 1, nullSRV);
+    ctx->context->CSSetConstantBuffers(0, 1, nullCB);
     ctx->context->CSSetShader(nullptr, nullptr, 0);
     
-    // Blue Noise path (unchanged)
-    int outputIdx = idx;
+    // EXTRA SYNC: Flush context to ensure all GPU work completes before next pass
+    ctx->context->Flush();
+    
+    // Create SRV for TAB result (used by CAS)
+    ID3D11ShaderResourceView* tabResultSRV = nullptr;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    
+    HRESULT hr = ctx->device->CreateShaderResourceView(ctx->d3dTextures[idx], &srvDesc, &tabResultSRV);
+    if (FAILED(hr)) {
+        SetError("Failed to create SRV for TAB result");
+        if (createdTemporaryUav && uav) uav->Release();
+        return -1;
+    }
+    
+    // Stage 2: CAS Sharpening (if enabled)
+    int casOutputIdx = idx;
+    if (ctx->tabSharpeningEnabled && ctx->casShader)
+    {
+        casOutputIdx = 1 - idx;
+        
+        // Update CAS constant buffer
+        if (ctx->tabSharpeningBuffer)
+        {
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            if (SUCCEEDED(ctx->context->Map(ctx->tabSharpeningBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+            {
+                struct CASParams {
+                    float sharpness;
+                    float padding[3];
+                } params;
+                
+                params.sharpness = ctx->tabSharpeningStrength;
+                params.padding[0] = params.padding[1] = params.padding[2] = 0.0f;
+                
+                memcpy(mapped.pData, &params, sizeof(params));
+                ctx->context->Unmap(ctx->tabSharpeningBuffer, 0);
+            }
+        }
+        
+        // Bind CAS shader
+        ctx->context->CSSetShader(ctx->casShader, nullptr, 0);
+        ctx->context->CSSetConstantBuffers(0, 1, &ctx->tabSharpeningBuffer);
+        ctx->context->CSSetShaderResources(0, 1, &tabResultSRV);
+        
+        // Bind output UAV (other texture)
+        ID3D11UnorderedAccessView* casUav = ctx->encoderUAV[casOutputIdx];
+        bool createdCasUav = false;
+        if (!casUav)
+        {
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+            uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            uavDesc.Texture2D.MipSlice = 0;
+            
+            hr = ctx->device->CreateUnorderedAccessView(ctx->d3dTextures[casOutputIdx], &uavDesc, &casUav);
+            if (FAILED(hr)) {
+                SetError("Failed to create UAV for CAS output");
+                tabResultSRV->Release();
+                if (createdTemporaryUav && uav) uav->Release();
+                return -1;
+            }
+            createdCasUav = true;
+        }
+        
+        ctx->context->CSSetUnorderedAccessViews(0, 1, &casUav, nullptr);
+        
+        // Dispatch CAS
+        ctx->context->Dispatch(dispatchX, dispatchY, 1);
+        
+        // HARD SYNC: CAS completion
+        if (ctx->postComputeQuery) {
+            ctx->context->End(ctx->postComputeQuery);
+            DWORD startTime = GetTickCount();
+            while (S_FALSE == ctx->context->GetData(ctx->postComputeQuery, nullptr, 0, 0)) {
+                Sleep(1);
+                if (GetTickCount() - startTime > 5000) {
+                    LogToFile("[CR] FATAL: postComputeQuery timeout after CAS");
+                    break;
+                }
+            }
+        }
+        
+        // Unbind CAS
+        ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+        ctx->context->CSSetShaderResources(0, 1, nullSRV);
+        ctx->context->CSSetShader(nullptr, nullptr, 0);
+        
+        if (createdCasUav && casUav) casUav->Release();
+    }
+    
+    // Blue Noise path reads from CAS output (or TAB output if CAS disabled)
+    int outputIdx = casOutputIdx;
     if (ctx->useBlueNoiseDither && ctx->ditherShader)
     {
-        outputIdx = 1 - idx;
+        int bnOutputIdx = 1 - casOutputIdx;
         
-        ID3D11ShaderResourceView* tabResultSRV = nullptr;
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MipLevels = 1;
-        
-        HRESULT hr = ctx->device->CreateShaderResourceView(ctx->d3dTextures[idx], &srvDesc, &tabResultSRV);
-        if (FAILED(hr)) {
-            SetError("Failed to create SRV for Blue Noise input");
-            if (createdTemporaryUav && uav) uav->Release();
-            return -1;
+        // Create SRV from CAS output texture
+        ID3D11ShaderResourceView* casResultSRV = nullptr;
+        if (ctx->tabSharpeningEnabled)
+        {
+            hr = ctx->device->CreateShaderResourceView(ctx->d3dTextures[casOutputIdx], &srvDesc, &casResultSRV);
+            if (FAILED(hr)) {
+                SetError("Failed to create SRV for Blue Noise input");
+                tabResultSRV->Release();
+                if (createdTemporaryUav && uav) uav->Release();
+                return -1;
+            }
         }
         
         D3D11_MAPPED_SUBRESOURCE mapped;
@@ -1229,10 +1408,14 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         
         ctx->context->CSSetShader(ctx->ditherShader, nullptr, 0);
         ctx->context->CSSetConstantBuffers(0, 1, &ctx->constantBuffer);
-        ID3D11ShaderResourceView* srvs[2] = { tabResultSRV, ctx->blueNoiseSRV };
+        
+        // Use CAS result SRV if sharpening enabled, otherwise use TAB result
+        ID3D11ShaderResourceView* inputSrv = (ctx->tabSharpeningEnabled && casResultSRV) ? casResultSRV : tabResultSRV;
+        ID3D11ShaderResourceView* srvs[2] = { inputSrv, ctx->blueNoiseSRV };
         ctx->context->CSSetShaderResources(0, 2, srvs);
         
-        bnUav = ctx->encoderUAV[outputIdx];
+        bnUav = ctx->encoderUAV[bnOutputIdx];
+        bool createdBnUavLocal = false;
         if (!bnUav)
         {
             D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
@@ -1240,19 +1423,18 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
             uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
             uavDesc.Texture2D.MipSlice = 0;
             
-            HRESULT hr = ctx->device->CreateUnorderedAccessView(ctx->d3dTextures[outputIdx], &uavDesc, &bnUav);
+            HRESULT hr = ctx->device->CreateUnorderedAccessView(ctx->d3dTextures[bnOutputIdx], &uavDesc, &bnUav);
             if (FAILED(hr)) {
                 SetError("Failed to create UAV for Blue Noise output");
+                if (casResultSRV) casResultSRV->Release();
                 tabResultSRV->Release();
                 if (createdTemporaryUav && uav) uav->Release();
                 return -1;
             }
-            createdBnUav = true;
+            createdBnUavLocal = true;
         }
         ctx->context->CSSetUnorderedAccessViews(0, 1, &bnUav, nullptr);
         
-        dispatchX = (ctx->width + 15) / 16;
-        dispatchY = (ctx->height + 15) / 16;
         ctx->context->Dispatch(dispatchX, dispatchY, 1);
         
         ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
@@ -1261,11 +1443,37 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
         ctx->context->CSSetShader(nullptr, nullptr, 0);
         ctx->context->Flush();
         
+        if (casResultSRV) casResultSRV->Release();
         tabResultSRV->Release();
+        
+        outputIdx = bnOutputIdx;
+        if (createdBnUavLocal) {
+            bnUav->Release();
+            bnUav = nullptr;
+        }
+        
+        // Unbind all Blue Noise resources
+        ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+        ID3D11ShaderResourceView* nullSRVs2[2] = { nullptr, nullptr };
+        ctx->context->CSSetShaderResources(0, 2, nullSRVs2);
+        ctx->context->CSSetConstantBuffers(0, 1, nullCB);
+        ctx->context->CSSetShader(nullptr, nullptr, 0);
+        ctx->context->Flush();
+    }
+    else
+    {
+        // No Blue Noise - just release the TAB result SRV
+        tabResultSRV->Release();
+        
+        // Unbind CAS resources if they were used
+        ctx->context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+        ctx->context->CSSetShaderResources(0, 1, nullSRV);
+        ctx->context->CSSetConstantBuffers(0, 1, nullCB);
+        ctx->context->CSSetShader(nullptr, nullptr, 0);
+        ctx->context->Flush();
     }
     
     if (createdTemporaryUav && uav) uav->Release();
-    if (createdBnUav && bnUav) bnUav->Release();
     
     // Submit to AMF
     AMF_RESULT res;

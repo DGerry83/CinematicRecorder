@@ -118,6 +118,18 @@ namespace CinematicRecorder.Core
         /// Lower = sharper center weight, Higher = more even distribution.
         /// </summary>
         public static float TabSigma { get; set; } = 1.5f;
+
+        /// <summary>
+        /// Enable sharpening filter (unsharp mask) on TAB output.
+        /// Helps counteract the softness introduced by temporal accumulation.
+        /// </summary>
+        public static bool TabEnableSharpening { get; set; } = false;
+
+        /// <summary>
+        /// Sharpening strength (0.0 to 0.5). Default 0.25.
+        /// Higher values = stronger sharpening effect.
+        /// </summary>
+        public static float TabSharpeningStrength { get; set; } = 0.25f;
         #endregion
 
         #region Utility Methods

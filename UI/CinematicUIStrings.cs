@@ -170,6 +170,11 @@
             public const string GradientProtectionToggle = " Gradient Protection";
             public const string GradientProtectionTooltip = "Reduces color banding in dark areas. Only available with AMD encoder.";
             public const string AMFOnlyWarning = "Advanced options require AMD encoder.";
+            
+            // Sharpening (only when TAB enabled)
+            public const string SharpeningToggle = " Sharpening";
+            public const string SharpeningTooltip = "Applies contrast-adaptive sharpening to counteract TAB softness.";
+            public const string SharpeningStrengthLabel = "Sharpness: {0:F0}%";
         }
 
         public static class AdvancedCameraOptions
