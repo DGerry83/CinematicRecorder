@@ -374,3 +374,6 @@ FodyWeavers.xsd
 /NativePlugin/build
 /dll_copy_config.txt
 /NativePlugin/nvenc/nvEncodeAPI.h
+/GTAO_IMPLEMENTATION_CHECKLIST.md
+/copy_shaders.bat
+/NativePlugin/include/stb_image_write.h
