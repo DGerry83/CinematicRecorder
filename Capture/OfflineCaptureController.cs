@@ -167,7 +167,6 @@ namespace CinematicRecorder.Capture
             {
                 SetupTemporalAccumulation();
             }
-
             if (_audioController != null)
                 _audioController.Initialize();
 
@@ -410,6 +409,7 @@ namespace CinematicRecorder.Capture
             Debug.Log($"[OfflineCapture] Starting sub-frame capture for index {subFrameIndex}");
 
             int renderIdx = frameIndex % 2; // Still double-buffer for safety
+            int bufferIdx = subFrameIndex % 2; // TAB sub-frame buffer index
 
             captureBuffer.Clear();
             captureBuffer.Blit(BuiltinRenderTextureType.CurrentActive, renderTextures[renderIdx]);
@@ -749,7 +749,7 @@ namespace CinematicRecorder.Capture
                 captureBuffer.Release();
                 captureBuffer = null;
             }
-
+            
             // NVENC cleanup
             if (usingNvencPath && nvencZeroCopyEncoder != null)
             {

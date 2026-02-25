@@ -22,7 +22,7 @@ namespace CinematicRecorder.UI
         private GUIStyle tabButtonStyle;
         private GUIStyle tabButtonActiveStyle;
 
-        private enum AdvancedTab { Encoding, Rendering }
+        private enum AdvancedTab { Encoding, Rendering, Shaders }
         private AdvancedTab currentTab = AdvancedTab.Encoding;
         #endregion
 
@@ -122,9 +122,13 @@ namespace CinematicRecorder.UI
             {
                 DrawEncodingTab();
             }
-            else
+            else if (currentTab == AdvancedTab.Rendering)
             {
                 DrawRenderingTab();
+            }
+            else // Shaders tab
+            {
+                DrawShadersTab();
             }
             
             GUILayout.EndVertical();
@@ -135,16 +139,24 @@ namespace CinematicRecorder.UI
         {
             GUILayout.BeginHorizontal();
             
+            float tabWidth = CinematicUIResources.Layout.AdvancedSettings.TAB_BUTTON_WIDTH * 0.65f; // Smaller for 3 tabs
+            
             GUIStyle encodingStyle = (currentTab == AdvancedTab.Encoding) ? tabButtonActiveStyle : tabButtonStyle;
-            if (GUILayout.Button(AdvancedSettings.EncodingTab, encodingStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(CinematicUIResources.Layout.AdvancedSettings.TAB_BUTTON_WIDTH)))
+            if (GUILayout.Button(AdvancedSettings.EncodingTab, encodingStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(tabWidth)))
             {
                 currentTab = AdvancedTab.Encoding;
             }
             
             GUIStyle renderingStyle = (currentTab == AdvancedTab.Rendering) ? tabButtonActiveStyle : tabButtonStyle;
-            if (GUILayout.Button(AdvancedSettings.RenderingTab, renderingStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(CinematicUIResources.Layout.AdvancedSettings.TAB_BUTTON_WIDTH)))
+            if (GUILayout.Button(AdvancedSettings.RenderingTab, renderingStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(tabWidth)))
             {
                 currentTab = AdvancedTab.Rendering;
+            }
+            
+            GUIStyle shadersStyle = (currentTab == AdvancedTab.Shaders) ? tabButtonActiveStyle : tabButtonStyle;
+            if (GUILayout.Button(AdvancedSettings.ShadersTab, shadersStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(tabWidth)))
+            {
+                currentTab = AdvancedTab.Shaders;
             }
             
             GUILayout.EndHorizontal();
@@ -171,6 +183,81 @@ namespace CinematicRecorder.UI
                 GUILayout.Space(CinematicUIResources.Spacing.LARGE);
                 DrawSharpeningToggle();
             }
+        }
+
+        private void DrawShadersTab()
+        {
+            DrawGTAOSection();
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+            DrawDebugDumpSection();
+        }
+
+        private void DrawGTAOSection()
+        {
+            // GTAO is currently disabled - shader compilation issues with Unity version
+            GUI.enabled = false;
+            
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            toggleStyle.normal.textColor = CinematicUIResources.Colors.INFO_ORANGE;
+            toggleStyle.onNormal.textColor = CinematicUIResources.Colors.INFO_ORANGE;
+            
+            GUILayout.Toggle(false, AdvancedSettings.GTAOToggle, toggleStyle);
+            
+            GUI.enabled = true;
+            
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle warningStyle = CinematicUIResources.Styles.Info();
+            warningStyle.wordWrap = true;
+            GUILayout.Label("GTAO is in development. Use Debug Dump to verify buffer access.", warningStyle);
+        }
+
+        private void DrawDebugDumpSection()
+        {
+            GUILayout.Label("Debug Tools", HighLogic.Skin.label);
+            
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            
+            bool isDeferred = IsDeferredRenderingActive();
+            bool wasEnabled = GUI.enabled;
+            
+            if (!isDeferred || DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+            
+            if (GUILayout.Button("Debug Dump Depth/Normals", HighLogic.Skin.button))
+            {
+                DebugTextureDumper.PerformDump();
+            }
+            
+            GUI.enabled = wasEnabled;
+            
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+            helpStyle.wordWrap = true;
+            
+            if (!isDeferred)
+            {
+                GUILayout.Label("Debug dump requires deferred rendering.", helpStyle);
+            }
+            else
+            {
+                GUILayout.Label("Exports depth and normal buffers as EXR/PNG files for verification.", helpStyle);
+            }
+        }
+
+        /// <summary>
+        /// Checks if the main camera is using deferred rendering.
+        /// GTAO requires deferred rendering to access G-buffer data.
+        /// </summary>
+        private bool IsDeferredRenderingActive()
+        {
+            Camera mainCamera = Camera.main;
+            if (mainCamera == null)
+                mainCamera = UnityEngine.Object.FindObjectOfType<Camera>();
+            
+            if (mainCamera == null)
+                return false;
+            
+            return mainCamera.actualRenderingPath == RenderingPath.DeferredShading;
         }
 
         private void DrawSafeModeToggle()
@@ -465,6 +552,7 @@ namespace CinematicRecorder.UI
 
             GUI.enabled = wasEnabled;
         }
+
         #endregion
 
         #region Public API

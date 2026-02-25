@@ -90,6 +90,13 @@ int CR_SubmitSubFrame(CREncoderHandle encoder, ID3D11Texture2D* unityTexture, in
 __declspec(dllexport)
 int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex);
 
+// GTAO Debug Test - Minimal verification functions
+__declspec(dllexport)
+void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height);
+
+__declspec(dllexport)
+int CR_GTAODebugExecute(const char* outputDirectory);
+
 #ifdef __cplusplus
 }
 #endif

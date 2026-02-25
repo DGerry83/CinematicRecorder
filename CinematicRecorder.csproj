@@ -59,6 +59,7 @@
     <Compile Include="Capture\OfflineFrameRenderer.cs" />
     <Compile Include="Core\CameraPanelConfig.cs" />
     <Compile Include="Core\CinematicRecorderAddon.cs" />
+    <Compile Include="Core\DebugTextureDumper.cs" />
     <Compile Include="Core\DeterministicCaptureSession.cs" />
     <Compile Include="Core\HaltonSequence.cs" />
     <Compile Include="Core\HarmonyBootstrap.cs" />

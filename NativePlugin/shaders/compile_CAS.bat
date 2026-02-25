@@ -49,7 +49,6 @@ echo Common locations:
 echo   - C:\Program Files (x86)\Windows Kits\10\bin\[version]\x64\fxc.exe
 echo   - C:\Program Files (x86)\Windows Kits\8.1\bin\x64\fxc.exe
 echo.
-pause
 exit /b 1
 
 :found
@@ -63,7 +62,6 @@ REM Compile the shader
 if %errorlevel% neq 0 (
     echo.
     echo ERROR: Shader compilation failed!
-    pause
     exit /b %errorlevel%
 )
 
@@ -72,4 +70,3 @@ echo ============================================
 echo SUCCESS: Shader compiled to:
 echo   ..\include\CASSharpen.h
 echo ============================================
-pause

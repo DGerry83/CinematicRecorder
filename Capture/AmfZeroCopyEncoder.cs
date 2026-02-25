@@ -151,6 +151,7 @@ namespace CinematicRecorder.Capture
             public int SubFrameCount; // Number of sub-frames (typically 8)
             public float Sigma;       // Gaussian blur sigma (typically 1.5f)
         }
+
         #endregion
 
         #region Public API
@@ -432,6 +433,7 @@ namespace CinematicRecorder.Capture
             }
         }
 
+        /// <summary>
         public void Shutdown()
         {
             if (!_isInitialized || _encoderHandle == IntPtr.Zero)

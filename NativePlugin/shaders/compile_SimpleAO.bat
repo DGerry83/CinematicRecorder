@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ============================================
-echo Compiling TemporalAccumulation.hlsl
+echo Compiling SimpleAO.hlsl
 echo ============================================
 
 REM Try to find fxc.exe in common Windows SDK locations
@@ -57,7 +57,7 @@ echo   %FXC%
 echo.
 
 REM Compile the shader
-"%FXC%" /T cs_5_0 /E CSMain /Fh "..\include\TemporalAccumulation.h" /Vn "g_TemporalAccumulationCS" "TemporalAccumulation.hlsl"
+"%FXC%" /T cs_5_0 /E CSMain /Fh "..\include\SimpleAO.h" /Vn "g_SimpleAOCS" "SimpleAO.hlsl"
 
 if %errorlevel% neq 0 (
     echo.
@@ -68,5 +68,5 @@ if %errorlevel% neq 0 (
 echo.
 echo ============================================
 echo SUCCESS: Shader compiled to:
-echo   ..\include\TemporalAccumulation.h
+echo   ..\include\SimpleAO.h
 echo ============================================
