@@ -65,7 +65,8 @@ namespace CinematicRecorder.Core
         private static extern IntPtr LoadLibrary(string lpFileName);
 
         [DllImport("CinematicRecorderNative", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void CR_GTAODebugSetInput(IntPtr depthTex, IntPtr normalTex, int width, int height);
+        private static extern void CR_GTAODebugSetInput(IntPtr depthTex, IntPtr normalTex, int width, int height,
+                                                          [In] float[] invProj, [In] float[] worldToView, float nearPlane, float farPlane);
         
         [DllImport("CinematicRecorderNative", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern int CR_GTAODebugExecute([MarshalAs(UnmanagedType.LPStr)] string outputDirectory);
@@ -121,8 +122,8 @@ namespace CinematicRecorder.Core
             
             _timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             
-            // Create render textures
-            _depthRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+            // Create render textures - depth as RFloat (preserve full float precision like Deferred)
+            _depthRT = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
             _depthRT.Create();
             
             _normalRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
@@ -174,8 +175,8 @@ namespace CinematicRecorder.Core
             string depthCSPath = Path.Combine(_outputDir, $"depth_{_timestamp}_cs.png");
             string normalCSPath = Path.Combine(_outputDir, $"normal_{_timestamp}_cs.png");
             
-            SaveRenderTextureAsPNG(_depthRT, depthCSPath);
-            SaveRenderTextureAsPNG(_normalRT, normalCSPath);
+            SaveRenderTextureAsPNG(_depthRT, depthCSPath, isDepth: true);
+            SaveRenderTextureAsPNG(_normalRT, normalCSPath, isDepth: false);
             
             Debug.Log($"[DebugTextureDumper] C# PNGs saved: {depthCSPath}, {normalCSPath}");
             
@@ -187,7 +188,37 @@ namespace CinematicRecorder.Core
                 
                 Debug.Log($"[DebugTextureDumper] Passing to native: depth={depthPtr}, normal={normalPtr}");
                 
-                CR_GTAODebugSetInput(depthPtr, normalPtr, _depthRT.width, _depthRT.height);
+                // Get camera projection matrix and convert to array for marshaling
+                // Use GL.GetGPUProjectionMatrix to get GPU-compatible matrix (handles coordinate conversion)
+                Matrix4x4 projMatrix = GL.GetGPUProjectionMatrix(_camera.projectionMatrix, false);
+                Matrix4x4 invProjMatrix = projMatrix.inverse;
+                float[] invProjArray = new float[16];
+                for (int i = 0; i < 16; i++)
+                {
+                    invProjArray[i] = invProjMatrix[i];
+                }
+                
+                // Get world-to-camera matrix (3x3 rotation only)
+                // Extract ROWS to match HLSL float3x3(row0, row1, row2) layout
+                Matrix4x4 worldToCamera = _camera.worldToCameraMatrix;
+                float[] worldToViewArray = new float[9];
+                // Row 0
+                worldToViewArray[0] = worldToCamera[0, 0];
+                worldToViewArray[1] = worldToCamera[0, 1];
+                worldToViewArray[2] = worldToCamera[0, 2];
+                // Row 1
+                worldToViewArray[3] = worldToCamera[1, 0];
+                worldToViewArray[4] = worldToCamera[1, 1];
+                worldToViewArray[5] = worldToCamera[1, 2];
+                // Row 2
+                worldToViewArray[6] = worldToCamera[2, 0];
+                worldToViewArray[7] = worldToCamera[2, 1];
+                worldToViewArray[8] = worldToCamera[2, 2];
+                
+                Debug.Log($"[DebugTextureDumper] Camera: near={_camera.nearClipPlane}, far={_camera.farClipPlane}");
+                
+                CR_GTAODebugSetInput(depthPtr, normalPtr, _depthRT.width, _depthRT.height,
+                                     invProjArray, worldToViewArray, _camera.nearClipPlane, _camera.farClipPlane);
                 int result = CR_GTAODebugExecute(_outputDir);
                 
                 if (result == 0)
@@ -210,15 +241,35 @@ namespace CinematicRecorder.Core
             Destroy(gameObject);
         }
         
-        void SaveRenderTextureAsPNG(RenderTexture rt, string filename)
+        void SaveRenderTextureAsPNG(RenderTexture rt, string filename, bool isDepth = false)
         {
-            RenderTexture.active = rt;
-            Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
-            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-            tex.Apply();
-            File.WriteAllBytes(filename, tex.EncodeToPNG());
-            Destroy(tex);
-            RenderTexture.active = null;
+            // For depth (RFloat), convert to ARGB32 for PNG export while preserving original
+            if (isDepth && rt.format == RenderTextureFormat.RFloat)
+            {
+                RenderTexture tempRT = RenderTexture.GetTemporary(rt.width, rt.height, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(rt, tempRT);
+                
+                RenderTexture.active = tempRT;
+                Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+                tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                tex.Apply();
+                File.WriteAllBytes(filename, tex.EncodeToPNG());
+                Destroy(tex);
+                RenderTexture.active = null;
+                
+                RenderTexture.ReleaseTemporary(tempRT);
+            }
+            else
+            {
+                // Normal path for ARGB32
+                RenderTexture.active = rt;
+                Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+                tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                tex.Apply();
+                File.WriteAllBytes(filename, tex.EncodeToPNG());
+                Destroy(tex);
+                RenderTexture.active = null;
+            }
         }
     }
 }

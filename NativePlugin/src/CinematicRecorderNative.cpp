@@ -1981,21 +1981,43 @@ static struct {
     ID3D11Texture2D* normalTexture = nullptr;
     int width = 0;
     int height = 0;
+    float invProj[16] = {};       // Inverse projection matrix from Unity
+    float worldToView[9] = {};     // World-to-view matrix (3x3 rotation)
+    float nearPlane = 0.1f;        // Camera near plane
+    float farPlane = 1000.0f;      // Camera far plane
+    int frameIndex = 0;            // For temporal noise
 } g_GTAODebugTest;
 
-// GTAO params constant buffer (matches GTAO.hlsl)
+// GTAO params constant buffer (matches GTAO.hlsl - XeGTAO style)
+// Total: 80 bytes (5 float4s)
 struct GTAOParams {
-    float invProj[16];       // Inverse projection matrix
-    float resolution[2];     // Width, Height
-    float invResolution[2];  // 1/Width, 1/Height
-    float radius;            // World-space sampling radius
-    float intensity;         // AO intensity multiplier
-    int sliceCount;          // Number of slices (4-8)
-    int stepsPerSlice;       // Steps per direction (8-16)
+    // float4 #1 (offset 0)
+    float ndcToViewMul[2];      // tanHalfFOV * float2(2, -2)
+    float ndcToViewAdd[2];      // tanHalfFOV * float2(-1, 1)
+    // float4 #2 (offset 16)
+    float depthUnpackConsts[2]; // x = (far*near)/(far-near), y = -near/(far-near)
+    float resolution[2];        // Width, Height
+    // float4 #3 (offset 32)
+    float invResolution[2];     // 1/Width, 1/Height
+    float effectRadius;         // World-space sampling radius
+    float falloffRange;         // Default 0.615
+    // float4 #4 (offset 48) - 16 bytes exactly
+    float intensity;            // AO intensity multiplier
+    float sampleDistributionPower; // Default 2.0
+    int sliceCount;             // Number of slices (4-8)
+    int stepsPerSlice;          // Steps per direction (8-16)
+    // float4 #5, #6, #7 - World-to-View matrix as three float4s (clean 16-byte alignment)
+    int noiseIndex;             // offset 64 (4 bytes)
+    float __pad[3];             // offset 68 (12 bytes) - align to 16 bytes
+    float worldToViewRow0[4];   // offset 80: [row0.x, row0.y, row0.z, 0]
+    float worldToViewRow1[4];   // offset 96: [row1.x, row1.y, row1.z, 0]
+    float worldToViewRow2[4];   // offset 112: [row2.x, row2.y, row2.z, 0]
+    // Total: 128 bytes exactly (8 float4s)
 };
 
-// Helper to save R32_FLOAT depth texture as grayscale PNG
-static bool SaveR32FloatAsPNG(ID3D11Texture2D* texture, const char* filename, float normalizeScale = 100.0f)
+// Helper to save ARGB32 texture red channel as grayscale PNG
+// Helper to save ARGB32 texture red channel as grayscale PNG
+static bool SaveDepthTextureAsPNG(ID3D11Texture2D* texture, const char* filename, float normalizeScale = 100.0f)
 {
     if (!texture) return false;
     
@@ -2010,6 +2032,9 @@ static bool SaveR32FloatAsPNG(ID3D11Texture2D* texture, const char* filename, fl
     D3D11_TEXTURE2D_DESC srcDesc;
     texture->GetDesc(&srcDesc);
     
+    LogToFile("[GTAO] Depth texture format: %d (R32_FLOAT=%d), Size: %dx%d", 
+              srcDesc.Format, DXGI_FORMAT_R32_FLOAT, srcDesc.Width, srcDesc.Height);
+    
     D3D11_TEXTURE2D_DESC stagingDesc = srcDesc;
     stagingDesc.Usage = D3D11_USAGE_STAGING;
     stagingDesc.BindFlags = 0;
@@ -2019,6 +2044,11 @@ static bool SaveR32FloatAsPNG(ID3D11Texture2D* texture, const char* filename, fl
     ID3D11Texture2D* stagingTex = nullptr;
     HRESULT hr = device->CreateTexture2D(&stagingDesc, nullptr, &stagingTex);
     if (FAILED(hr)) { context->Release(); device->Release(); return false; }
+    
+    // Verify staging texture format
+    D3D11_TEXTURE2D_DESC stagingCheck;
+    stagingTex->GetDesc(&stagingCheck);
+    LogToFile("[GTAO] Staging texture format: %d", stagingCheck.Format);
     
     context->CopyResource(stagingTex, texture);
     context->Flush();
@@ -2031,15 +2061,41 @@ static bool SaveR32FloatAsPNG(ID3D11Texture2D* texture, const char* filename, fl
     int height = srcDesc.Height;
     std::vector<uint8_t> pixels(width * height);
     
-    for (int y = 0; y < height; y++)
+    LogToFile("[GTAO] RowPitch: %d (expected: %d)", mapped.RowPitch, width * 4);
+    
+    // Handle DXGI_FORMAT_R32_FLOAT (41) or DXGI_FORMAT_R32_TYPELESS (39)
+    // R32_TYPELESS is the underlying format for depth buffers, stores raw 32-bit floats
+    if (srcDesc.Format == DXGI_FORMAT_R32_FLOAT || srcDesc.Format == 39) // 39 = R32_TYPELESS
     {
-        float* srcRow = (float*)((uint8_t*)mapped.pData + y * mapped.RowPitch);
-        for (int x = 0; x < width; x++)
+        for (int y = 0; y < height; y++)
         {
-            float val = srcRow[x] * normalizeScale;
-            if (val < 0.0f) val = 0.0f;
-            if (val > 1.0f) val = 1.0f;
-            pixels[y * width + x] = (uint8_t)(val * 255.0f);
+            float* srcRow = (float*)((uint8_t*)mapped.pData + y * mapped.RowPitch);
+            for (int x = 0; x < width; x++)
+            {
+                float depth = srcRow[x];
+                float val = depth * normalizeScale;
+                if (val < 0.0f) val = 0.0f;
+                if (val > 1.0f) val = 1.0f;
+                pixels[y * width + x] = (uint8_t)(val * 255.0f);
+            }
+        }
+    }
+    else
+    {
+        // Fallback for other formats
+        LogToFile("[GTAO] Warning: Unexpected depth format %d", srcDesc.Format);
+        
+        for (int y = 0; y < height; y++)
+        {
+            uint8_t* srcRow = (uint8_t*)mapped.pData + y * mapped.RowPitch;
+            for (int x = 0; x < width; x++)
+            {
+                uint8_t r = srcRow[x * 4 + 0];
+                float val = (r / 255.0f) * normalizeScale;
+                if (val < 0.0f) val = 0.0f;
+                if (val > 1.0f) val = 1.0f;
+                pixels[y * width + x] = (uint8_t)(val * 255.0f);
+            }
         }
     }
     
@@ -2093,12 +2149,13 @@ static bool SaveNormalTextureAsPNG(ID3D11Texture2D* texture, const char* filenam
         uint8_t* srcRow = (uint8_t*)mapped.pData + y * mapped.RowPitch;
         for (int x = 0; x < width; x++)
         {
-            // ARGB32: B, G, R, A
-            uint8_t b = srcRow[x * 4 + 0];
+            // ARGB32/DXGI_FORMAT_R8G8B8A8_UNORM in memory: R, G, B, A (little-endian)
+            // Verified: Unity outputs RGB order, not BGR
+            uint8_t r = srcRow[x * 4 + 0];
             uint8_t g = srcRow[x * 4 + 1];
-            uint8_t r = srcRow[x * 4 + 2];
+            uint8_t b = srcRow[x * 4 + 2];
             
-            // Copy as-is for visualization
+            // Output as RGB
             int idx = (y * width + x) * 3;
             pixels[idx + 0] = r;
             pixels[idx + 1] = g;
@@ -2116,15 +2173,42 @@ static bool SaveNormalTextureAsPNG(ID3D11Texture2D* texture, const char* filenam
 }
 
 extern "C" __declspec(dllexport)
-void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height)
+void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height,
+                          const float* invProj, const float* worldToView, float nearPlane, float farPlane)
 {
-    LogToFile("[GTAO] CR_GTAODebugSetInput called: %dx%d, depthTex=%p, normalTex=%p", 
-              width, height, depthTex, normalTex);
+    LogToFile("[GTAO] CR_GTAODebugSetInput called: %dx%d, depthTex=%p, normalTex=%p, near=%f, far=%f", 
+              width, height, depthTex, normalTex, nearPlane, farPlane);
     
     g_GTAODebugTest.depthTexture = depthTex;
     g_GTAODebugTest.normalTexture = normalTex;
     g_GTAODebugTest.width = width;
     g_GTAODebugTest.height = height;
+    g_GTAODebugTest.nearPlane = nearPlane;
+    g_GTAODebugTest.farPlane = farPlane;
+    
+    if (invProj) {
+        memcpy(g_GTAODebugTest.invProj, invProj, sizeof(float) * 16);
+        LogToFile("[GTAO] Inverse projection matrix received");
+    } else {
+        // Identity fallback
+        memset(g_GTAODebugTest.invProj, 0, sizeof(g_GTAODebugTest.invProj));
+        g_GTAODebugTest.invProj[0] = 1.0f;
+        g_GTAODebugTest.invProj[5] = 1.0f;
+        g_GTAODebugTest.invProj[10] = 1.0f;
+        g_GTAODebugTest.invProj[15] = 1.0f;
+        LogToFile("[GTAO] Using identity projection matrix");
+    }
+    
+    if (worldToView) {
+        memcpy(g_GTAODebugTest.worldToView, worldToView, sizeof(float) * 9);
+        LogToFile("[GTAO] World-to-view matrix received");
+    } else {
+        memset(g_GTAODebugTest.worldToView, 0, sizeof(g_GTAODebugTest.worldToView));
+        g_GTAODebugTest.worldToView[0] = 1.0f;
+        g_GTAODebugTest.worldToView[4] = 1.0f;
+        g_GTAODebugTest.worldToView[8] = 1.0f;
+        LogToFile("[GTAO] Using identity world-to-view matrix");
+    }
     
     LogToFile("[GTAO] Input stored successfully");
 }
@@ -2213,9 +2297,9 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     int width = g_GTAODebugTest.width;
     int height = g_GTAODebugTest.height;
     
-    // Save depth as grayscale PNG (R32_FLOAT format)
+    // Save depth as grayscale PNG (ARGB32 format - depth in red channel)
     snprintf(path, MAX_PATH, "%s\\depth_input.png", outputDirectory ? outputDirectory : ".");
-    if (SaveR32FloatAsPNG(g_GTAODebugTest.depthTexture, path, 100.0f))
+    if (SaveDepthTextureAsPNG(g_GTAODebugTest.depthTexture, path, 1.0f))
     {
         LogToFile("[GTAO] Depth saved: %s", path);
     }
@@ -2271,6 +2355,44 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         return -1;
     }
     
+    // Create debug view-normals texture (ARGB32 for RGB output)
+    D3D11_TEXTURE2D_DESC debugNormDesc = {};
+    debugNormDesc.Width = width;
+    debugNormDesc.Height = height;
+    debugNormDesc.MipLevels = 1;
+    debugNormDesc.ArraySize = 1;
+    debugNormDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    debugNormDesc.SampleDesc.Count = 1;
+    debugNormDesc.Usage = D3D11_USAGE_DEFAULT;
+    debugNormDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+    
+    ID3D11Texture2D* debugNormalsTexture = nullptr;
+    hr = device->CreateTexture2D(&debugNormDesc, nullptr, &debugNormalsTexture);
+    if (FAILED(hr)) {
+        LogToFile("[GTAO] Failed to create debug normals texture");
+        aoUAV->Release();
+        aoTexture->Release();
+        context->Release();
+        device->Release();
+        return -1;
+    }
+    
+    // Create UAV for debug normals output
+    ID3D11UnorderedAccessView* debugNormalsUAV = nullptr;
+    D3D11_UNORDERED_ACCESS_VIEW_DESC debugUavDesc = {};
+    debugUavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    debugUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+    hr = device->CreateUnorderedAccessView(debugNormalsTexture, &debugUavDesc, &debugNormalsUAV);
+    if (FAILED(hr)) {
+        LogToFile("[GTAO] Failed to create debug normals UAV");
+        debugNormalsTexture->Release();
+        aoUAV->Release();
+        aoTexture->Release();
+        context->Release();
+        device->Release();
+        return -1;
+    }
+    
     // Create SRVs for input textures
     ID3D11ShaderResourceView* depthSRV = nullptr;
     ID3D11ShaderResourceView* normalSRV = nullptr;
@@ -2278,11 +2400,17 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     
-    // Depth is R32_FLOAT (from Unity's RFloat RenderTexture)
-    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    // Get actual depth texture format (Unity uses R32_TYPELESS = 39 for flexibility)
+    D3D11_TEXTURE2D_DESC depthDesc;
+    g_GTAODebugTest.depthTexture->GetDesc(&depthDesc);
+    // For typeless formats (like R32_TYPELESS), SRV must use typed format
+    if (depthDesc.Format == 39) // DXGI_FORMAT_R32_TYPELESS
+        srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    else
+        srvDesc.Format = depthDesc.Format;
     device->CreateShaderResourceView(g_GTAODebugTest.depthTexture, &srvDesc, &depthSRV);
     
-    // Normals are ARGB32/R8G8B8A8_UNORM from Unity
+    // Normals are ARGB32 from Unity
     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     device->CreateShaderResourceView(g_GTAODebugTest.normalTexture, &srvDesc, &normalSRV);
     
@@ -2325,29 +2453,56 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(context->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         GTAOParams* params = (GTAOParams*)mapped.pData;
-        // Simple perspective projection matrix (approximate)
-        float fov = 60.0f * 3.14159f / 180.0f;
-        float aspect = (float)width / (float)height;
-        float nearZ = 0.1f;
-        float farZ = 1000.0f;
-        float f = 1.0f / tan(fov * 0.5f);
         
-        memset(params->invProj, 0, sizeof(params->invProj));
-        params->invProj[0] = aspect / f;  // Scale X
-        params->invProj[5] = 1.0f / f;    // Scale Y  
-        params->invProj[10] = 0.0f;       // Near/far handling simplified
-        params->invProj[11] = 1.0f;       // Z to W
-        params->invProj[14] = -nearZ;     // Translation Z
-        params->invProj[15] = 0.0f;
+        // Compute XeGTAO constants from inverse projection matrix
+        // invProj is the inverse projection, so invProj[0,0] = tanHalfFOVX, invProj[1,1] = tanHalfFOVY
+        float tanHalfFOVX = g_GTAODebugTest.invProj[0]; // _m00 in column-major
+        float tanHalfFOVY = g_GTAODebugTest.invProj[5]; // _m11 in column-major
+        
+        params->ndcToViewMul[0] = tanHalfFOVX * 2.0f;
+        params->ndcToViewMul[1] = tanHalfFOVY * -2.0f;
+        params->ndcToViewAdd[0] = tanHalfFOVX * -1.0f;
+        params->ndcToViewAdd[1] = tanHalfFOVY * 1.0f;
+        
+        // XeGTAO depth unpack for reversed Z: 
+        // unpackConsts[0] = (far * near) / (far - near)
+        // unpackConsts[1] = -near / (far - near)
+        float n = g_GTAODebugTest.nearPlane;
+        float f = g_GTAODebugTest.farPlane;
+        params->depthUnpackConsts[0] = (f * n) / (f - n);   // LinearizeMul (positive)
+        params->depthUnpackConsts[1] = -n / (f - n);        // LinearizeAdd (negative)
         
         params->resolution[0] = (float)width;
         params->resolution[1] = (float)height;
         params->invResolution[0] = 1.0f / width;
         params->invResolution[1] = 1.0f / height;
-        params->radius = 2.0f;        // World-space radius
-        params->intensity = 1.0f;     // AO intensity
-        params->sliceCount = 4;       // 4 slices
-        params->stepsPerSlice = 8;    // 8 steps per direction
+        params->effectRadius = 2.0f;              // World-space radius
+        params->falloffRange = 0.615f;            // XeGTAO default
+        params->intensity = 1.0f;                 // AO intensity
+        params->sliceCount = 4;                   // 4 slices
+        params->stepsPerSlice = 8;                // 8 steps per direction
+        params->sampleDistributionPower = 2.0f;   // Quadratic distribution
+        
+        // World-to-view matrix (3x3 rotation) - as three float4s for clean alignment
+        params->noiseIndex = g_GTAODebugTest.frameIndex++;
+        // Row0 = [row0.x, row0.y, row0.z, 0]
+        params->worldToViewRow0[0] = g_GTAODebugTest.worldToView[0];
+        params->worldToViewRow0[1] = g_GTAODebugTest.worldToView[1];
+        params->worldToViewRow0[2] = g_GTAODebugTest.worldToView[2];
+        params->worldToViewRow0[3] = 0.0f;
+        // Row1 = [row1.x, row1.y, row1.z, 0]
+        params->worldToViewRow1[0] = g_GTAODebugTest.worldToView[3];
+        params->worldToViewRow1[1] = g_GTAODebugTest.worldToView[4];
+        params->worldToViewRow1[2] = g_GTAODebugTest.worldToView[5];
+        params->worldToViewRow1[3] = 0.0f;
+        // Row2 = [row2.x, row2.y, row2.z, 0] - passed directly from C#
+        params->worldToViewRow2[0] = g_GTAODebugTest.worldToView[6];
+        params->worldToViewRow2[1] = g_GTAODebugTest.worldToView[7];
+        params->worldToViewRow2[2] = g_GTAODebugTest.worldToView[8];
+        params->worldToViewRow2[3] = 0.0f;
+        
+        LogToFile("[GTAO] tanHalfFOVX=%f, tanHalfFOVY=%f", tanHalfFOVX, tanHalfFOVY);
+        LogToFile("[GTAO] Expected (60deg FOV): ~0.577");
         context->Unmap(constantBuffer, 0);
     }
     
@@ -2356,19 +2511,32 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     context->CSSetConstantBuffers(0, 1, &constantBuffer);
     ID3D11ShaderResourceView* srvs[2] = { depthSRV, normalSRV };
     context->CSSetShaderResources(0, 2, srvs);
-    context->CSSetUnorderedAccessViews(0, 1, &aoUAV, nullptr);
+    ID3D11UnorderedAccessView* uavs[2] = { aoUAV, debugNormalsUAV };
+    context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     
-    UINT dispatchX = (width + 15) / 16;
-    UINT dispatchY = (height + 15) / 16;
+    // 8x8 thread groups, so divide by 8 (not 16)
+    UINT dispatchX = (width + 7) / 8;
+    UINT dispatchY = (height + 7) / 8;
     context->Dispatch(dispatchX, dispatchY, 1);
     context->Flush();
     
-    LogToFile("[GTAO] Compute shader dispatched: %dx%d", dispatchX, dispatchY);
+    LogToFile("[GTAO] Compute shader dispatched: %dx%d (8x8 threads)", dispatchX, dispatchY);
+    
+    // Save debug view-space normals
+    snprintf(path, MAX_PATH, "%s\\normal_viewspace.png", outputDirectory ? outputDirectory : ".");
+    if (SaveNormalTextureAsPNG(debugNormalsTexture, path))
+    {
+        LogToFile("[GTAO] View-space normals saved: %s", path);
+    }
+    else
+    {
+        LogToFile("[GTAO] Failed to save view-space normals");
+    }
     
     // Unbind
-    ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+    ID3D11UnorderedAccessView* nullUAV[2] = { nullptr, nullptr };
     ID3D11ShaderResourceView* nullSRV[2] = { nullptr, nullptr };
-    context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+    context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
     context->CSSetShaderResources(0, 2, nullSRV);
     context->CSSetShader(nullptr, nullptr, 0);
     
@@ -2388,9 +2556,11 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     constantBuffer->Release();
     aoShader->Release();
     aoUAV->Release();
+    debugNormalsUAV->Release();
     if (depthSRV) depthSRV->Release();
     if (normalSRV) normalSRV->Release();
     aoTexture->Release();
+    debugNormalsTexture->Release();
     context->Release();
     device->Release();
     

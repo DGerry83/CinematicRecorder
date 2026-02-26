@@ -1,173 +1,231 @@
-// GTAO (Ground-Truth Ambient Occlusion) Compute Shader
-// Full implementation with horizon-based sampling
-// For debug dump: single-pass screen-space GTAO without tiling
-// Input: ARGB32 depth (depth in red channel) and ARGB32 normals
+// GTAO Compute Shader - XeGTAO-based implementation
+// Optimized for Unity Deferred rendering
 
-Texture2D<float4> g_DepthTexture : register(t0);  // ARGB32, depth in R channel
-Texture2D<float4> g_NormalTexture : register(t1); // ARGB32 normals
+Texture2D<float> g_DepthTexture : register(t0);
+Texture2D<float4> g_NormalTexture : register(t1);
 RWTexture2D<float> g_AOTexture : register(u0);
+RWTexture2D<float4> g_DebugViewNormals : register(u1);  // Debug: view-space normals
 
 cbuffer GTAOParams : register(b0)
 {
-    float4x4 InvProj;        // Inverse projection matrix
-    float2 ScreenSize;       // Width, Height
-    float2 InvScreenSize;    // 1/Width, 1/Height
-    float Radius;            // World-space sampling radius
-    float Intensity;         // AO intensity multiplier
-    int SliceCount;          // Number of slices (4-8)
-    int StepsPerSlice;       // Steps per direction (8-16)
+    // float4 #1 (offset 0)
+    float2 NDCToViewMul;        // tanHalfFOV * float2(2, -2)
+    float2 NDCToViewAdd;        // tanHalfFOV * float2(-1, 1)
+    // float4 #2 (offset 16)
+    float2 DepthUnpackConsts;   // x = (far*near)/(far-near), y = -near/(far-near)
+    float2 ScreenSize;
+    // float4 #3 (offset 32)
+    float2 InvScreenSize;
+    float EffectRadius;
+    float FalloffRange;
+    // float4 #4 (offset 48)
+    float Intensity;
+    float SampleDistributionPower;
+    int SliceCount;
+    int StepsPerSlice;
+    // float4 #5, #6, #7 (offset 64, 80, 96)
+    int NoiseIndex;
+    float3 __pad0;              // Pad to align float4
+    float4 WorldToViewRow0;     // .xyz = row 0 of world-to-view matrix
+    float4 WorldToViewRow1;     // .xyz = row 1 of world-to-view matrix
+    float4 WorldToViewRow2;     // .xyz = row 2 of world-to-view matrix
 };
 
-// Reconstruct view-space position from UV and depth
-float3 UVToView(float2 uv, float depth, float4x4 invProj)
+// Simple R1 sequence for noise
+float R1Noise(float idx)
 {
-    float2 ndc = uv * 2.0 - 1.0;
-    float4 view = mul(invProj, float4(ndc.x, -ndc.y, depth, 1.0));
-    return view.xyz / view.w;
+    return frac(idx * 0.6180339887498948482);
 }
 
-[numthreads(16, 16, 1)]
+// XeGTAO depth linearization for reversed Z
+// unpackConsts.x = (far*near)/(far-near), unpackConsts.y = -near/(far-near)
+// Result: mul / (add - rawDepth) gives correct negative view-space Z
+float LinearizeDepth(float rawDepth, float2 unpackConsts)
+{
+    return unpackConsts.x / (unpackConsts.y - rawDepth);
+}
+
+// Fast viewspace reconstruction
+float3 ComputeViewspacePosition(float2 uv, float viewZ, float2 ndcMul, float2 ndcAdd)
+{
+    float3 pos;
+    pos.xy = (ndcMul * uv + ndcAdd) * viewZ;
+    pos.z = viewZ;
+    return pos;
+}
+
+// Unpack normal from Deferred's custom format (WORLD SPACE)
+float3 UnpackNormal(float4 normalData)
+{
+    float3 normal;
+    normal.xy = normalData.xy * 2.0 - 1.0;
+    normal.z = sqrt(1.0 - saturate(dot(normal.xy, normal.xy)));
+    normal.z = normalData.w > 0.5 ? normal.z : -normal.z;
+    return normalize(normal);
+}
+
+[numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
     uint2 coord = id.xy;
     uint width = (uint)ScreenSize.x;
     uint height = (uint)ScreenSize.y;
     
-    // Bounds check
     if (coord.x >= width || coord.y >= height)
         return;
     
     float2 uv = (float2(coord) + 0.5) * InvScreenSize;
+    float rawDepth = g_DepthTexture[coord];
+    float4 normalData = g_NormalTexture[coord];
+    float3 worldNormal = UnpackNormal(normalData);
     
-    // Sample depth and normal (ARGB32 format)
-    float depth = g_DepthTexture[coord].r / 255.0;  // Convert from 8-bit to float
-    float3 normal = g_NormalTexture[coord].rgb / 255.0;  // Convert from 8-bit to float
-    normal = normal * 2.0 - 1.0;  // Map from [0,1] to [-1,1]
-    
-    // Skip invalid pixels
-    if (depth < 0.001 || depth > 0.999 || length(normal) < 0.001)
+    // Skip sky/invalid pixels - rely on Deferred's normal alpha for sky detection
+    // (depth range check removed as it fails with reversed-Z and large far planes)
+    if (length(worldNormal) < 0.001 || normalData.a < 0.1)
     {
         g_AOTexture[coord] = 1.0;
         return;
     }
     
-    // Reconstruct view-space position
-    float3 pos = UVToView(uv, depth, InvProj);
+    // 1. Linearize depth
+    float viewZ = LinearizeDepth(rawDepth, DepthUnpackConsts);
+    
+    // 2. Reconstruct view position
+    float3 pos = ComputeViewspacePosition(uv, viewZ, NDCToViewMul, NDCToViewAdd);
     float3 viewVec = normalize(-pos);
     
-    // World-space radius adapted to view depth
-    float radiusVS = Radius / abs(pos.z);
-    float radiusSS = radiusVS * InvProj._m11; // Approximate screen-space radius
-    
-    // Precompute GTAO terms
-    float ndotv = dot(normal, viewVec);
-    
-    // Cross product of view and normal (for slice weighting)
-    float2 vcrossn = float2(
-        viewVec.y * normal.z - viewVec.z * normal.y,
-        viewVec.z * normal.x - viewVec.x * normal.z
+    // 3. Transform normal to VIEW SPACE using proper matrix
+    float3x3 worldToView = float3x3(
+        WorldToViewRow0.xyz,
+        WorldToViewRow1.xyz,
+        WorldToViewRow2.xyz
     );
+    float3 viewNormal = mul(worldToView, worldNormal);
     
-    float aoAccum = 0.0;
-    float sliceWeightAccum = 0.0;
+    // Debug output: view-space normals (mapped to 0-1 for visualization)
+    g_DebugViewNormals[coord] = float4(viewNormal * 0.5 + 0.5, 1.0);
     
-    // Slice rotation setup
-    float sliceAngleStep = 3.14159 / float(SliceCount);
-    float2x2 sliceRot;
-    sincos(sliceAngleStep, sliceRot._21, sliceRot._11);
-    sliceRot._12 = -sliceRot._21;
-    sliceRot._22 = sliceRot._11;
+    // 4. Push into surface (away from camera) for contact shadows
+    viewZ *= 1.0008;
+    pos = ComputeViewspacePosition(uv, viewZ, NDCToViewMul, NDCToViewAdd);
     
-    float2 sliceDir = float2(1, 0);
+    // 5. Calculate screen-space radius (-pixelSizeAtViewZ.x since viewZ is negative)
+    float2 pixelSizeAtViewZ = viewZ * NDCToViewMul * InvScreenSize;
+    float screenSpaceRadius = EffectRadius / max(-pixelSizeAtViewZ.x, 0.0001);
+    
+    // 6. Precompute falloff constants (XeGTAO correct formula)
+    float falloffFrom = EffectRadius * (1.0 - FalloffRange);
+    float falloffMul = -1.0 / (EffectRadius * FalloffRange);
+    float falloffAdd = falloffFrom / (EffectRadius * FalloffRange) + 1.0;
+    
+    // 7. Minimum sample distance (avoid self-sampling center pixel)
+    const float pixelTooCloseThreshold = 1.3;
+    float minS = pixelTooCloseThreshold / screenSpaceRadius;
+    
+    // 8. Noise for temporal stability
+    float noiseSlice = R1Noise((float)NoiseIndex + (float)coord.x * 0.5 + (float)coord.y * 0.3);
+    
+    float visibility = 0;
     
     for (int s = 0; s < SliceCount; s++)
     {
-        sliceDir = mul(sliceDir, sliceRot);
+        // Hemisphere only (PI radians, not 2*PI)
+        float sliceK = ((float)s + noiseSlice) / (float)SliceCount;
+        float phi = sliceK * 3.14159265359; // 180 degrees
+        // XeGTAO: negate sin for Unity's coordinate system
+        float2 omega = float2(cos(phi), -sin(phi));
         
-        // Project normal onto slice plane for weighting
-        float sdotv = dot(sliceDir, viewVec.xy);
-        float sdotn = dot(sliceDir, normal.xy);
-        float ndotns = dot(sliceDir, vcrossn) * rsqrt(saturate(1.0 - sdotv * sdotv));
-        float sliceWeight = sqrt(saturate(1.0 - ndotns * ndotns));
+        // Project omega onto view plane for correct slice plane
+        float3 directionVec = float3(omega, 0.0);
+        float3 orthoDirectionVec = directionVec - dot(directionVec, viewVec) * viewVec;
+        float3 slicePlaneNormal = normalize(cross(orthoDirectionVec, viewVec));
         
-        if (sliceWeight < 0.001)
+        // Project normal to slice plane
+        float3 projectedNormal = viewNormal - slicePlaneNormal * dot(viewNormal, slicePlaneNormal);
+        float projectedNormalLength = length(projectedNormal);
+        
+        if (projectedNormalLength < 0.001)
             continue;
+            
+        // XeGTAO normal angle calculation (reuse orthoDirectionVec from slice plane calc)
+        float3 projectedNormalDir = projectedNormal / projectedNormalLength;
+        float signNorm = sign(dot(orthoDirectionVec, projectedNormal));
+        float cosNorm = saturate(dot(projectedNormalDir, viewVec));
+        float n = signNorm * acos(cosNorm);
+        float cosN = cos(n);
+        float sinN = sin(n);
         
-        // Normal angle relative to slice
-        float cosN = saturate(ndotv / sliceWeight);
-        float normalAngle = acos(cosN);
-        normalAngle = (sdotn < sdotv * ndotv) ? -normalAngle : normalAngle;
+        // Initialize horizons based on normal angle
+        float lowHorizonCos0 = cos(n + 1.570796); // n + PI/2
+        float lowHorizonCos1 = cos(n - 1.570796); // n - PI/2
+        // XeGTAO: horizonCos[0] = +omega direction, horizonCos[1] = -omega direction
+        float2 horizonCos = float2(lowHorizonCos0, lowHorizonCos1);
+        float2 lowHorizonCos = float2(lowHorizonCos0, lowHorizonCos1);
         
-        // Track horizons for both directions
-        float2 maxHorizonCos = float2(sin(normalAngle), -sin(normalAngle));
-        
-        // Sample in both directions along slice
-        for (int side = 0; side < 2; side++)
+        // Sample both directions
+        for (int dir = 0; dir < 2; dir++)
         {
-            float horizonCos = maxHorizonCos.x;
+            float2 direction = (dir == 0) ? omega : -omega;
+            float lowHorizonCosDir = lowHorizonCos[dir];
             
             for (int step = 0; step < StepsPerSlice; step++)
             {
-                // Quadratic distribution (dense near center)
-                float t = (float(step) + 0.5) / float(StepsPerSlice);
-                t *= t;
+                // Distribution with minS offset to avoid self-sampling
+                float stepBase = (float(step) + 0.5) / (float)StepsPerSlice;
+                float stepNoise = R1Noise((float)NoiseIndex + (float)s * 7 + (float)step * 13);
+                float t = pow(stepBase + stepNoise * 0.1, SampleDistributionPower);
+                t += minS; // Add offset to ensure first sample is at least 1.3 pixels away
                 
-                // Sample position in screen space
-                float2 sampleUV = uv + sliceDir * t * radiusSS * (side ? -1.0 : 1.0);
+                float2 sampleUV = uv + direction * t * screenSpaceRadius * InvScreenSize;
                 
-                // Bounds check
                 if (any(sampleUV < 0.0) || any(sampleUV > 1.0))
                     break;
-                
+                    
                 int2 sampleCoord = int2(sampleUV * ScreenSize);
                 sampleCoord = clamp(sampleCoord, int2(0, 0), int2(width - 1, height - 1));
                 
-                float sampleDepth = g_DepthTexture[sampleCoord].r / 255.0;
-                
-                // Skip invalid samples
-                if (sampleDepth < 0.001 || sampleDepth > 0.999)
+                float sampleRawDepth = g_DepthTexture[sampleCoord];
+                if (sampleRawDepth < 0.001 || sampleRawDepth > 0.999)
                     continue;
+                    
+                float sampleViewZ = LinearizeDepth(sampleRawDepth, DepthUnpackConsts);
+                float3 samplePos = ComputeViewspacePosition(sampleUV, sampleViewZ, NDCToViewMul, NDCToViewAdd);
                 
-                // Reconstruct sample position in view space
-                float3 samplePos = UVToView(sampleUV, sampleDepth, InvProj);
+                // XeGTAO thin occluder compensation: pristine geometry for horizon, modified for falloff
                 float3 delta = samplePos - pos;
                 
-                float distSq = dot(delta, delta);
-                float3 deltaDir = delta * rsqrt(distSq);
+                // 1. Calculate geometric direction from UNMODIFIED delta for accurate horizon angle
+                float3 deltaDir = normalize(delta);
+                float elevationCos = dot(deltaDir, viewVec);
                 
-                // Horizon angle cosine
-                float cosH = dot(deltaDir, viewVec);
+                // 2. Apply thin occluder compensation ONLY to falloff distance
+                const float thinOccluderCompensation = 0.5;
+                float falloffBase = length(float3(delta.x, delta.y, delta.z * (1.0 + thinOccluderCompensation)));
                 
-                // Distance falloff (thickness heuristic)
-                float falloff = saturate(1.0 - distSq / (Radius * Radius));
-                cosH = lerp(horizonCos, cosH, falloff);
+                // 3. XeGTAO falloff - use falloffBase for weight, lerp with lowHorizonCos
+                float weight = saturate(falloffBase * falloffMul + falloffAdd);
+                elevationCos = lerp(lowHorizonCosDir, elevationCos, weight);
                 
-                horizonCos = max(horizonCos, cosH);
+                horizonCos[dir] = max(horizonCos[dir], elevationCos);
             }
-            
-            maxHorizonCos.x = horizonCos;
-            maxHorizonCos = maxHorizonCos.yx; // Swap for other side
         }
         
-        // Analytical integration over the visible hemisphere slice
-        float2 hAngles = float2(-acos(maxHorizonCos.x), acos(maxHorizonCos.y));
-        float2 sinH, cosH;
-        sincos(hAngles, sinH, cosH);
+        // XeGTAO horizon integration - CRITICAL: h0 negative, h1 positive
+        // horizonCos[0] is from +omega direction, horizonCos[1] from -omega
+        // h0 represents angle below horizontal (negative), h1 above (positive)
+        float h0 = -acos(clamp(horizonCos[1], -1.0, 1.0)); // Negative! From -omega dir
+        float h1 =  acos(clamp(horizonCos[0], -1.0, 1.0)); // Positive! From +omega dir
         
-        // GTAO integral: simplified form
-        float2 integral = sinH - hAngles * cosH;
-        float sliceAO = 0.5 * dot(integral, float2(1, 1));
+        float iarc0 = (cosN + 2.0 * h0 * sinN - cos(2.0 * h0 - n)) / 4.0;
+        float iarc1 = (cosN + 2.0 * h1 * sinN - cos(2.0 * h1 - n)) / 4.0;
         
-        aoAccum += sliceAO * sliceWeight;
-        sliceWeightAccum += sliceWeight;
+        float localVisibility = projectedNormalLength * (iarc0 + iarc1);
+        visibility += localVisibility;  // XeGTAO: no saturate per slice
     }
     
-    // Final AO value
-    float visibility = sliceWeightAccum > 0.001 ? (aoAccum / sliceWeightAccum) : 1.0;
-    visibility = saturate(visibility);
-    
-    // Apply intensity
+    visibility /= (float)SliceCount;
+    // Apply XeGTAO's final value power
+    visibility = pow(visibility, 2.0);  // Default FinalValuePower = 2.0
     float ao = lerp(1.0, visibility, Intensity);
-    
-    g_AOTexture[coord] = ao;
+    g_AOTexture[coord] = saturate(ao);
 }

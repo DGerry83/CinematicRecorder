@@ -92,7 +92,8 @@ int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex
 
 // GTAO Debug Test - Minimal verification functions
 __declspec(dllexport)
-void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height);
+void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height,
+                          const float* invProj, const float* worldToView, float nearPlane, float farPlane);
 
 __declspec(dllexport)
 int CR_GTAODebugExecute(const char* outputDirectory);
