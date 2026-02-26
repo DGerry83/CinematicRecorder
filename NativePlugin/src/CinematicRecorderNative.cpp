@@ -2006,9 +2006,12 @@ struct GTAOParams {
     float sampleDistributionPower; // Default 2.0
     int sliceCount;             // Number of slices (4-8)
     int stepsPerSlice;          // Steps per direction (8-16)
-    // float4 #5, #6, #7 - World-to-View matrix as three float4s (clean 16-byte alignment)
+    // float4 #5 (offset 64)
     int noiseIndex;             // offset 64 (4 bytes)
-    float __pad[3];             // offset 68 (12 bytes) - align to 16 bytes
+    float depthMipSamplingOffset; // offset 68 (4 bytes) - Hi-Z mip offset (typically 1.0-2.0)
+    float __pad1;               // offset 72 (4 bytes)
+    float __pad2;               // offset 76 (4 bytes)
+    // float4 #6, #7, #8 - World-to-View matrix as three float4s
     float worldToViewRow0[4];   // offset 80: [row0.x, row0.y, row0.z, 0]
     float worldToViewRow1[4];   // offset 96: [row1.x, row1.y, row1.z, 0]
     float worldToViewRow2[4];   // offset 112: [row2.x, row2.y, row2.z, 0]
@@ -2398,7 +2401,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     ID3D11ShaderResourceView* normalSRV = nullptr;
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Texture2D.MipLevels = -1;  // Expose all mip levels for Hi-Z sampling
     
     // Get actual depth texture format (Unity uses R32_TYPELESS = 39 for flexibility)
     D3D11_TEXTURE2D_DESC depthDesc;
@@ -2413,6 +2416,27 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     // Normals are ARGB32 from Unity
     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     device->CreateShaderResourceView(g_GTAODebugTest.normalTexture, &srvDesc, &normalSRV);
+    
+    // Create point sampler for Hi-Z sampling (register s0)
+    D3D11_SAMPLER_DESC sampDesc = {};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;  // Point sampling for Hi-Z
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampDesc.MinLOD = 0;
+    sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+    
+    ID3D11SamplerState* pointSampler = nullptr;
+    hr = device->CreateSamplerState(&sampDesc, &pointSampler);
+    if (FAILED(hr)) {
+        LogToFile("[GTAO] Failed to create point sampler");
+        if (depthSRV) depthSRV->Release();
+        if (normalSRV) normalSRV->Release();
+        context->Release();
+        device->Release();
+        return -1;
+    }
     
     // Create compute shader
     ID3D11ComputeShader* aoShader = nullptr;
@@ -2482,6 +2506,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         params->sliceCount = 4;                   // 4 slices
         params->stepsPerSlice = 8;                // 8 steps per direction
         params->sampleDistributionPower = 2.0f;   // Quadratic distribution
+        params->depthMipSamplingOffset = 1.0f;    // Hi-Z mip offset (lower = sharper, higher = smoother)
         
         // World-to-view matrix (3x3 rotation) - as three float4s for clean alignment
         params->noiseIndex = g_GTAODebugTest.frameIndex++;
@@ -2511,6 +2536,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     context->CSSetConstantBuffers(0, 1, &constantBuffer);
     ID3D11ShaderResourceView* srvs[2] = { depthSRV, normalSRV };
     context->CSSetShaderResources(0, 2, srvs);
+    context->CSSetSamplers(0, 1, &pointSampler);  // Bind point sampler for Hi-Z
     ID3D11UnorderedAccessView* uavs[2] = { aoUAV, debugNormalsUAV };
     context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     
@@ -2536,8 +2562,10 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     // Unbind
     ID3D11UnorderedAccessView* nullUAV[2] = { nullptr, nullptr };
     ID3D11ShaderResourceView* nullSRV[2] = { nullptr, nullptr };
+    ID3D11SamplerState* nullSampler[1] = { nullptr };
     context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
     context->CSSetShaderResources(0, 2, nullSRV);
+    context->CSSetSamplers(0, 1, nullSampler);
     context->CSSetShader(nullptr, nullptr, 0);
     
     // Save AO output
@@ -2559,6 +2587,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     debugNormalsUAV->Release();
     if (depthSRV) depthSRV->Release();
     if (normalSRV) normalSRV->Release();
+    if (pointSampler) pointSampler->Release();
     aoTexture->Release();
     debugNormalsTexture->Release();
     context->Release();

@@ -6,6 +6,8 @@ Texture2D<float4> g_NormalTexture : register(t1);
 RWTexture2D<float> g_AOTexture : register(u0);
 RWTexture2D<float4> g_DebugViewNormals : register(u1);  // Debug: view-space normals
 
+SamplerState pointSampler : register(s0);  // Point sampler for Hi-Z depth sampling
+
 cbuffer GTAOParams : register(b0)
 {
     // float4 #1 (offset 0)
@@ -23,9 +25,12 @@ cbuffer GTAOParams : register(b0)
     float SampleDistributionPower;
     int SliceCount;
     int StepsPerSlice;
-    // float4 #5, #6, #7 (offset 64, 80, 96)
+    // float4 #5 (offset 64)
     int NoiseIndex;
-    float3 __pad0;              // Pad to align float4
+    float DepthMIPSamplingOffset; // Offset for Hi-Z mip level calculation (typically 1.0-2.0)
+    float __pad1;               // Padding
+    float __pad2;               // Padding
+    // float4 #6, #7, #8 (offset 80, 96, 112)
     float4 WorldToViewRow0;     // .xyz = row 0 of world-to-view matrix
     float4 WorldToViewRow1;     // .xyz = row 1 of world-to-view matrix
     float4 WorldToViewRow2;     // .xyz = row 2 of world-to-view matrix
@@ -184,7 +189,11 @@ void CSMain(uint3 id : SV_DispatchThreadID)
                 int2 sampleCoord = int2(sampleUV * ScreenSize);
                 sampleCoord = clamp(sampleCoord, int2(0, 0), int2(width - 1, height - 1));
                 
-                float sampleRawDepth = g_DepthTexture[sampleCoord];
+                // Hi-Z sampling: calculate mip level based on sample distance (in pixels)
+                float sampleOffsetLength = t * screenSpaceRadius; // Distance in pixels
+                float mipLevel = clamp(log2(sampleOffsetLength) - DepthMIPSamplingOffset, 0.0, 8.0);
+                
+                float sampleRawDepth = g_DepthTexture.SampleLevel(pointSampler, sampleUV, mipLevel);
                 if (sampleRawDepth < 0.001 || sampleRawDepth > 0.999)
                     continue;
                     

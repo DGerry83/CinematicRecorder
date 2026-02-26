@@ -74,12 +74,18 @@ namespace CinematicRecorder.Core
         private Camera _camera;
         private CommandBuffer _depthCommandBuffer;
         private CommandBuffer _normalCommandBuffer;
+        private CommandBuffer _hiZCommandBuffer;
         private RenderTexture _depthRT;
         private RenderTexture _normalRT;
+        private RenderTexture _hiZRT;  // Mipmapped depth for Hi-Z sampling
         private string _outputDir;
         private string _timestamp;
         private int _frameCount = 0;
         private bool _initialized = false;
+        private int _hiZMipCount = 0;
+        
+        // Hi-Z compute shader from Deferred
+        private ComputeShader _generateHiZCompute;
         
         /// <summary>
         /// Static entry point.
@@ -122,14 +128,33 @@ namespace CinematicRecorder.Core
             
             _timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             
-            // Create render textures - depth as RFloat (preserve full float precision like Deferred)
+            // Get Deferred's Hi-Z compute shader
+            _generateHiZCompute = ShaderLoader.ComputeShaders["GenerateHiZ"];
+            if (_generateHiZCompute == null)
+            {
+                Debug.LogError("[DebugTextureDumper] Failed to get GenerateHiZ compute shader from Deferred");
+                Destroy(gameObject);
+                return;
+            }
+            
+            // Calculate Hi-Z mip count (down to ~8x8 pixels like Deferred)
+            _hiZMipCount = CalculateMipLevel(width, height, 8);
+            Debug.Log($"[DebugTextureDumper] Hi-Z mip count: {_hiZMipCount}");
+            
+            // Create render textures - depth as RFloat with mipmaps for Hi-Z
             _depthRT = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
             _depthRT.Create();
+            
+            // Hi-Z texture: half resolution with full mip chain (following Deferred's pattern)
+            _hiZRT = new RenderTexture(width / 2, height / 2, 0, RenderTextureFormat.RFloat);
+            _hiZRT.useMipMap = true;
+            _hiZRT.autoGenerateMips = false;  // We generate manually via compute
+            _hiZRT.Create();
             
             _normalRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
             _normalRT.Create();
             
-            // Create command buffers using simple Blit
+            // Create command buffers
             _depthCommandBuffer = new CommandBuffer();
             _depthCommandBuffer.name = "DebugDumpDepth";
             _depthCommandBuffer.Blit(BuiltinRenderTextureType.ResolvedDepth, _depthRT);
@@ -138,8 +163,12 @@ namespace CinematicRecorder.Core
             _normalCommandBuffer.name = "DebugDumpNormals";
             _normalCommandBuffer.Blit(BuiltinRenderTextureType.GBuffer2, _normalRT);
             
-            // Add to camera
+            // Hi-Z generation command buffer (following Deferred's GenerateHiZWithCompute pattern)
+            _hiZCommandBuffer = CreateHiZCommandBuffer(width, height);
+            
+            // Add to camera (Hi-Z after depth so depth is available)
             _camera.AddCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _depthCommandBuffer);
+            _camera.AddCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _hiZCommandBuffer);
             _camera.AddCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _normalCommandBuffer);
             
             _initialized = true;
@@ -164,9 +193,11 @@ namespace CinematicRecorder.Core
             if (_camera != null)
             {
                 _camera.RemoveCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _depthCommandBuffer);
+                _camera.RemoveCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _hiZCommandBuffer);
                 _camera.RemoveCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _normalCommandBuffer);
             }
             _depthCommandBuffer.Release();
+            _hiZCommandBuffer.Release();
             _normalCommandBuffer.Release();
             
             yield return null;
@@ -183,10 +214,11 @@ namespace CinematicRecorder.Core
             // Call native plugin
             try
             {
-                IntPtr depthPtr = _depthRT.GetNativeTexturePtr();
+                // Use Hi-Z texture (with mipmaps) instead of flat depth
+                IntPtr depthPtr = _hiZRT.GetNativeTexturePtr();
                 IntPtr normalPtr = _normalRT.GetNativeTexturePtr();
                 
-                Debug.Log($"[DebugTextureDumper] Passing to native: depth={depthPtr}, normal={normalPtr}");
+                Debug.Log($"[DebugTextureDumper] Passing to native: depth(HiZ)={depthPtr}, normal={normalPtr}, mips={_hiZMipCount}");
                 
                 // Get camera projection matrix and convert to array for marshaling
                 // Use GL.GetGPUProjectionMatrix to get GPU-compatible matrix (handles coordinate conversion)
@@ -237,8 +269,65 @@ namespace CinematicRecorder.Core
             
             // Cleanup
             if (_depthRT != null) _depthRT.Release();
+            if (_hiZRT != null) _hiZRT.Release();
             if (_normalRT != null) _normalRT.Release();
             Destroy(gameObject);
+        }
+        
+        // Calculate number of mip levels to reach target size (following Deferred's pattern)
+        int CalculateMipLevel(int textureWidth, int textureHeight, int targetSize)
+        {
+            int mipLevel = 0;
+            while (textureWidth > targetSize || textureHeight > targetSize)
+            {
+                textureWidth = Mathf.Max(1, textureWidth / 2);
+                textureHeight = Mathf.Max(1, textureHeight / 2);
+                mipLevel++;
+            }
+            return mipLevel;
+        }
+        
+        // Create Hi-Z generation command buffer following Deferred's GenerateHiZWithCompute pattern
+        CommandBuffer CreateHiZCommandBuffer(int cameraWidth, int cameraHeight)
+        {
+            CommandBuffer cb = new CommandBuffer();
+            cb.name = "DebugDumpHiZ";
+            
+            Vector2 currentMipLevelDimensions = new Vector2(cameraWidth, cameraHeight);
+            
+            // Set compute shader parameters (reversed Z for Unity)
+            cb.SetComputeIntParam(_generateHiZCompute, "usingReverseZ", SystemInfo.usesReversedZBuffer ? 1 : 0);
+            cb.SetComputeIntParam(_generateHiZCompute, "firstIteration", 1);
+            cb.SetComputeTextureParam(_generateHiZCompute, 0, "DepthTexture", BuiltinRenderTextureType.ResolvedDepth);
+            
+            for (int currentMipLevel = 0; currentMipLevel < _hiZMipCount; currentMipLevel++)
+            {
+                Vector2 previousMipLevelDimensions = currentMipLevelDimensions;
+                currentMipLevelDimensions = new Vector2(
+                    Mathf.Max(1, (int)(currentMipLevelDimensions.x / 2f)), 
+                    Mathf.Max(1, (int)(currentMipLevelDimensions.y / 2f)));
+                
+                // Bind read/write textures
+                cb.SetComputeTextureParam(_generateHiZCompute, 0, "WriteRT", _hiZRT, currentMipLevel);
+                cb.SetComputeTextureParam(_generateHiZCompute, 0, "ReadRT", _hiZRT, Mathf.Max(currentMipLevel - 1, 0));
+                
+                cb.SetComputeVectorParam(_generateHiZCompute, "hiZPreviousMipLevelDimensions", previousMipLevelDimensions);
+                cb.SetComputeVectorParam(_generateHiZCompute, "hiZCurrentMipLevelDimensions", currentMipLevelDimensions);
+                
+                // Dispatch compute shader (8x8 threads like Deferred)
+                cb.DispatchCompute(_generateHiZCompute, 0, 
+                    Mathf.CeilToInt(currentMipLevelDimensions.x / 8f),
+                    Mathf.CeilToInt(currentMipLevelDimensions.y / 8f), 
+                    1);
+                
+                // Clear firstIteration flag after first dispatch
+                if (currentMipLevel == 0)
+                {
+                    cb.SetComputeIntParam(_generateHiZCompute, "firstIteration", 0);
+                }
+            }
+            
+            return cb;
         }
         
         void SaveRenderTextureAsPNG(RenderTexture rt, string filename, bool isDepth = false)
