@@ -126,7 +126,7 @@ namespace CinematicRecorder.Core
             _depthRT = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
             _depthRT.Create();
             
-            _normalRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32);
+            _normalRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB2101010);
             _normalRT.Create();
             
             // Create command buffers

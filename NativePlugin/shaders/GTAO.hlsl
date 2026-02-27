@@ -64,13 +64,10 @@ float3 ComputeViewspacePosition(float2 uv, float viewZ, float2 ndcMul, float2 nd
 }
 
 // Unpack normal from Deferred's custom format (WORLD SPACE)
+// Deferred mod stores full XYZ world normal in RGB
 float3 UnpackNormal(float4 normalData)
 {
-    float3 normal;
-    normal.xy = normalData.xy * 2.0 - 1.0;
-    normal.z = sqrt(1.0 - saturate(dot(normal.xy, normal.xy)));
-    normal.z = normalData.w > 0.5 ? normal.z : -normal.z;
-    return normalize(normal);
+    return normalData.rgb * 2.0 - 1.0;
 }
 
 [numthreads(8, 8, 1)]
@@ -111,8 +108,17 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     );
     float3 viewNormal = mul(worldToView, worldNormal);
     
-    // Debug output: view-space normals (mapped to 0-1 for visualization)
+    // DEBUG: Write view normals to debug texture
     g_DebugViewNormals[coord] = float4(viewNormal * 0.5 + 0.5, 1.0);
+    
+    // Diagnostic 1: View-space normals Y component
+    //g_AOTexture[coord] = viewNormal.y * 0.5 + 0.5; // Output Y component as greyscale
+    //return;
+    
+    // Diagnostic 2: View vector (direction to camera) Y component
+    // Uncomment to test view vector instead of normal
+    // g_AOTexture[coord] = viewVec.y * 0.5 + 0.5;
+    // return;
     
     // === TEMPORARY DEBUG VISUALIZATIONS (uncomment one to verify) ===
     // 1. Verify viewZ linearization (should be smooth gradient, darker near camera)

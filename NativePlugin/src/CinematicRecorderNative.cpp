@@ -275,7 +275,7 @@ static bool CreateTabResources(EncoderContext* ctx, const TabSettings* settings)
     
     // Create SRVs for both arrays
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
     srvDesc.Texture2DArray.MipLevels = 1;
     srvDesc.Texture2DArray.ArraySize = ctx->tabSubFrameCount;
@@ -2150,16 +2150,16 @@ static bool SaveNormalTextureAsPNG(ID3D11Texture2D* texture, const char* filenam
     
     for (int y = 0; y < height; y++)
     {
-        uint8_t* srcRow = (uint8_t*)mapped.pData + y * mapped.RowPitch;
+        uint32_t* srcRow = (uint32_t*)((uint8_t*)mapped.pData + y * mapped.RowPitch);
         for (int x = 0; x < width; x++)
         {
-            // ARGB32/DXGI_FORMAT_R8G8B8A8_UNORM in memory: R, G, B, A (little-endian)
-            // Verified: Unity outputs RGB order, not BGR
-            uint8_t r = srcRow[x * 4 + 0];
-            uint8_t g = srcRow[x * 4 + 1];
-            uint8_t b = srcRow[x * 4 + 2];
+            uint32_t packed = srcRow[x];
             
-            // Output as RGB
+            // Unpack 10-10-10-2 (R10G10B10A2_UNORM)
+            uint8_t r = ((packed >> 0) & 0x3FF) >> 2;   // 10 bits -> 8 bits
+            uint8_t g = ((packed >> 10) & 0x3FF) >> 2;  // 10 bits -> 8 bits  
+            uint8_t b = ((packed >> 20) & 0x3FF) >> 2;  // 10 bits -> 8 bits
+            
             int idx = (y * width + x) * 3;
             pixels[idx + 0] = r;
             pixels[idx + 1] = g;
@@ -2365,7 +2365,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     debugNormDesc.Height = height;
     debugNormDesc.MipLevels = 1;
     debugNormDesc.ArraySize = 1;
-    debugNormDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    debugNormDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     debugNormDesc.SampleDesc.Count = 1;
     debugNormDesc.Usage = D3D11_USAGE_DEFAULT;
     debugNormDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
@@ -2384,7 +2384,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     // Create UAV for debug normals output
     ID3D11UnorderedAccessView* debugNormalsUAV = nullptr;
     D3D11_UNORDERED_ACCESS_VIEW_DESC debugUavDesc = {};
-    debugUavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    debugUavDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     debugUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
     hr = device->CreateUnorderedAccessView(debugNormalsTexture, &debugUavDesc, &debugNormalsUAV);
     if (FAILED(hr)) {
@@ -2566,8 +2566,8 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
     device->CreateShaderResourceView(hiZTexture, &srvDesc, &depthSRV);
     
-    // Normals are ARGB32 from Unity
-    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    // Normals are ARGB2101010 from Unity
+    srvDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     device->CreateShaderResourceView(g_GTAODebugTest.normalTexture, &srvDesc, &normalSRV);
     
     // Create point sampler for Hi-Z sampling (register s0)
@@ -2697,6 +2697,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         LogToFile("[GTAO] depthUnpackConsts=[%f, %f] (for %fkm far plane)",
                   params->depthUnpackConsts[0], params->depthUnpackConsts[1],
                   g_GTAODebugTest.farPlane / 1000.0f);
+        
         LogToFile("[GTAO] ========================");
         // === END LOGGING ===
         
