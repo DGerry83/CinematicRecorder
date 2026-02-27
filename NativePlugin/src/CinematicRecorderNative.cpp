@@ -2,6 +2,7 @@
 #include "EmbeddedResources.h"
 #include "TemporalAccumulation.h"  // TAB accumulation compute shader
 #include "CASSharpen.h"            // CAS sharpening compute shader
+#include "HiZ.h"                   // Hi-Z generation compute shader
 
 #include <string>
 #include <vector>
@@ -2396,22 +2397,174 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         return -1;
     }
     
-    // Create SRVs for input textures
+    // Create Hi-Z texture with mip chain
+    int hiZMipCount = (int)(log2(max(width, height))) + 1;
+    hiZMipCount = min(hiZMipCount, 12);  // Cap at 12 mips (4096->1)
+    
+    D3D11_TEXTURE2D_DESC hiZDesc = {};
+    hiZDesc.Width = width;
+    hiZDesc.Height = height;
+    hiZDesc.MipLevels = hiZMipCount;
+    hiZDesc.ArraySize = 1;
+    hiZDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    hiZDesc.SampleDesc.Count = 1;
+    hiZDesc.Usage = D3D11_USAGE_DEFAULT;
+    hiZDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+    
+    ID3D11Texture2D* hiZTexture = nullptr;
+    hr = device->CreateTexture2D(&hiZDesc, nullptr, &hiZTexture);
+    if (FAILED(hr)) {
+        LogToFile("[GTAO] Failed to create Hi-Z texture");
+        debugNormalsUAV->Release();
+        debugNormalsTexture->Release();
+        aoUAV->Release();
+        aoTexture->Release();
+        context->Release();
+        device->Release();
+        return -1;
+    }
+    
+    // Create Hi-Z compute shader
+    ID3D11ComputeShader* hiZShader = nullptr;
+    hr = device->CreateComputeShader(g_HiZCS, sizeof(g_HiZCS), nullptr, &hiZShader);
+    if (FAILED(hr)) {
+        LogToFile("[GTAO] Failed to create Hi-Z compute shader");
+        hiZTexture->Release();
+        debugNormalsUAV->Release();
+        debugNormalsTexture->Release();
+        aoUAV->Release();
+        aoTexture->Release();
+        context->Release();
+        device->Release();
+        return -1;
+    }
+    
+    // Create Hi-Z constant buffer
+    struct HiZParams {
+        int sourceDim[2];
+        int isFirstIteration;
+        int __pad;
+    };
+    
+    D3D11_BUFFER_DESC hiZCBDesc = {};
+    hiZCBDesc.ByteWidth = sizeof(HiZParams);
+    hiZCBDesc.Usage = D3D11_USAGE_DYNAMIC;
+    hiZCBDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    hiZCBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    
+    ID3D11Buffer* hiZConstantBuffer = nullptr;
+    hr = device->CreateBuffer(&hiZCBDesc, nullptr, &hiZConstantBuffer);
+    if (FAILED(hr)) {
+        LogToFile("[GTAO] Failed to create Hi-Z constant buffer");
+        hiZShader->Release();
+        hiZTexture->Release();
+        debugNormalsUAV->Release();
+        debugNormalsTexture->Release();
+        aoUAV->Release();
+        aoTexture->Release();
+        context->Release();
+        device->Release();
+        return -1;
+    }
+    
+    // Get raw depth texture format for first Hi-Z iteration
+    D3D11_TEXTURE2D_DESC rawDepthDesc;
+    g_GTAODebugTest.depthTexture->GetDesc(&rawDepthDesc);
+    
+    // Copy raw depth to mip 0 of Hi-Z texture
+    context->CopySubresourceRegion(
+        hiZTexture, 0, 0, 0, 0,  // Dest: hiZTexture, mip 0, offset (0,0,0)
+        g_GTAODebugTest.depthTexture, 0, nullptr // Source: raw depth, mip 0, full rect
+    );
+    
+    // Generate remaining Hi-Z mips (1 to hiZMipCount-1)
+    int currentWidth = width;
+    int currentHeight = height;
+    
+    for (int mipLevel = 0; mipLevel < hiZMipCount - 1; mipLevel++) {
+        // Create UAV for output mip
+        D3D11_UNORDERED_ACCESS_VIEW_DESC hiZUavDesc = {};
+        hiZUavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        hiZUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        hiZUavDesc.Texture2D.MipSlice = mipLevel + 1;  // Write to next mip
+        
+        ID3D11UnorderedAccessView* hiZOutputUAV = nullptr;
+        hr = device->CreateUnorderedAccessView(hiZTexture, &hiZUavDesc, &hiZOutputUAV);
+        if (FAILED(hr)) {
+            LogToFile("[GTAO] Failed to create Hi-Z UAV for mip %d", mipLevel + 1);
+            continue;
+        }
+        
+        // Fill constant buffer
+        D3D11_MAPPED_SUBRESOURCE hiZMapped;
+        if (SUCCEEDED(context->Map(hiZConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &hiZMapped))) {
+            HiZParams* params = (HiZParams*)hiZMapped.pData;
+            params->sourceDim[0] = currentWidth;
+            params->sourceDim[1] = currentHeight;
+            params->isFirstIteration = (mipLevel == 0) ? 1 : 0;
+            params->__pad = 0;
+            context->Unmap(hiZConstantBuffer, 0);
+        }
+        
+        // Bind source (SRV) - use raw depth for first iteration, HiZ for subsequent
+        ID3D11ShaderResourceView* hiZSourceSRV = nullptr;
+        if (mipLevel == 0) {
+            // First iteration: read from raw depth texture
+            D3D11_SHADER_RESOURCE_VIEW_DESC srcSrvDesc = {};
+            srcSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srcSrvDesc.Texture2D.MipLevels = 1;
+            srcSrvDesc.Format = (rawDepthDesc.Format == 39) ? DXGI_FORMAT_R32_FLOAT : rawDepthDesc.Format;
+            device->CreateShaderResourceView(g_GTAODebugTest.depthTexture, &srcSrvDesc, &hiZSourceSRV);
+        } else {
+            // Subsequent iterations: read from previous HiZ mip
+            D3D11_SHADER_RESOURCE_VIEW_DESC srcSrvDesc = {};
+            srcSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srcSrvDesc.Texture2D.MostDetailedMip = mipLevel;
+            srcSrvDesc.Texture2D.MipLevels = 1;
+            srcSrvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            device->CreateShaderResourceView(hiZTexture, &srcSrvDesc, &hiZSourceSRV);
+        }
+        
+        // Dispatch
+        context->CSSetShader(hiZShader, nullptr, 0);
+        context->CSSetConstantBuffers(0, 1, &hiZConstantBuffer);
+        ID3D11ShaderResourceView* srvs[1] = { hiZSourceSRV };
+        context->CSSetShaderResources(0, 1, srvs);
+        ID3D11UnorderedAccessView* uavs[1] = { hiZOutputUAV };
+        context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+        
+        UINT dispatchX = (currentWidth / 2 + 7) / 8;
+        UINT dispatchY = (currentHeight / 2 + 7) / 8;
+        context->Dispatch(dispatchX, dispatchY, 1);
+        
+        // Cleanup per-mip resources
+        hiZOutputUAV->Release();
+        hiZSourceSRV->Release();
+        
+        // Update dimensions for next iteration
+        currentWidth = max(1, currentWidth / 2);
+        currentHeight = max(1, currentHeight / 2);
+    }
+    
+    // Unbind Hi-Z shader
+    ID3D11UnorderedAccessView* nullHiZUAV[1] = { nullptr };
+    ID3D11ShaderResourceView* nullHiZSRV[1] = { nullptr };
+    context->CSSetUnorderedAccessViews(0, 1, nullHiZUAV, nullptr);
+    context->CSSetShaderResources(0, 1, nullHiZSRV);
+    context->CSSetShader(nullptr, nullptr, 0);
+    
+    LogToFile("[GTAO] Hi-Z generated: %d mips", hiZMipCount);
+    
+    // Create SRVs for input textures (GTAO will sample from Hi-Z)
     ID3D11ShaderResourceView* depthSRV = nullptr;
     ID3D11ShaderResourceView* normalSRV = nullptr;
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = -1;  // Expose all mip levels for Hi-Z sampling
     
-    // Get actual depth texture format (Unity uses R32_TYPELESS = 39 for flexibility)
-    D3D11_TEXTURE2D_DESC depthDesc;
-    g_GTAODebugTest.depthTexture->GetDesc(&depthDesc);
-    // For typeless formats (like R32_TYPELESS), SRV must use typed format
-    if (depthDesc.Format == 39) // DXGI_FORMAT_R32_TYPELESS
-        srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
-    else
-        srvDesc.Format = depthDesc.Format;
-    device->CreateShaderResourceView(g_GTAODebugTest.depthTexture, &srvDesc, &depthSRV);
+    // Use Hi-Z texture for GTAO sampling (has mip chain)
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    device->CreateShaderResourceView(hiZTexture, &srvDesc, &depthSRV);
     
     // Normals are ARGB32 from Unity
     srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -2483,18 +2636,17 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         float tanHalfFOVX = g_GTAODebugTest.invProj[0]; // _m00 in column-major
         float tanHalfFOVY = g_GTAODebugTest.invProj[5]; // _m11 in column-major
         
-        params->ndcToViewMul[0] = tanHalfFOVX * 2.0f;
-        params->ndcToViewMul[1] = tanHalfFOVY * -2.0f;
+        // View reconstruction constants - standard Unity conventions
+        params->ndcToViewMul[0] = tanHalfFOVX * 2.0f;    // Positive X
         params->ndcToViewAdd[0] = tanHalfFOVX * -1.0f;
+        params->ndcToViewMul[1] = tanHalfFOVY * -2.0f;   // Negative Y (Unity Y-down)
         params->ndcToViewAdd[1] = tanHalfFOVY * 1.0f;
         
-        // XeGTAO depth unpack for reversed Z: 
-        // unpackConsts[0] = (far * near) / (far - near)
-        // unpackConsts[1] = -near / (far - near)
+        // Stable reversed-Z linearization: pass raw near/far, let shader do the math
         float n = g_GTAODebugTest.nearPlane;
         float f = g_GTAODebugTest.farPlane;
-        params->depthUnpackConsts[0] = (f * n) / (f - n);   // LinearizeMul (positive)
-        params->depthUnpackConsts[1] = -n / (f - n);        // LinearizeAdd (negative)
+        params->depthUnpackConsts[0] = n;  // Near plane (e.g., 0.21)
+        params->depthUnpackConsts[1] = f;  // Far plane (e.g., 750000.0)
         
         params->resolution[0] = (float)width;
         params->resolution[1] = (float)height;
@@ -2502,11 +2654,11 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         params->invResolution[1] = 1.0f / height;
         params->effectRadius = 2.0f;              // World-space radius
         params->falloffRange = 0.615f;            // XeGTAO default
-        params->intensity = 1.0f;                 // AO intensity
-        params->sliceCount = 4;                   // 4 slices
-        params->stepsPerSlice = 8;                // 8 steps per direction
+        params->intensity = 0.8f;                 // AO intensity (REFERENCE default)
+        params->sliceCount = 2;                   // 2 slices (REFERENCE Medium preset)
+        params->stepsPerSlice = 4;                // 4 steps per direction (REFERENCE Medium preset)
         params->sampleDistributionPower = 2.0f;   // Quadratic distribution
-        params->depthMipSamplingOffset = 1.0f;    // Hi-Z mip offset (lower = sharper, higher = smoother)
+        params->depthMipSamplingOffset = 100.0f;   // TEMP: Force mip 0 sampling to test Hi-Z issues
         
         // World-to-view matrix (3x3 rotation) - as three float4s for clean alignment
         params->noiseIndex = g_GTAODebugTest.frameIndex++;
@@ -2528,6 +2680,26 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         
         LogToFile("[GTAO] tanHalfFOVX=%f, tanHalfFOVY=%f", tanHalfFOVX, tanHalfFOVY);
         LogToFile("[GTAO] Expected (60deg FOV): ~0.577");
+        
+        // === PROJECTION DEBUG LOGGING ===
+        LogToFile("[GTAO] === PROJECTION DEBUG ===");
+        LogToFile("[GTAO] Camera: near=%f, far=%f", 
+                  g_GTAODebugTest.nearPlane, g_GTAODebugTest.farPlane);
+        LogToFile("[GTAO] invProj matrix (first 6 elements): [%f, %f, %f, %f, %f, %f]",
+                  g_GTAODebugTest.invProj[0], g_GTAODebugTest.invProj[1], 
+                  g_GTAODebugTest.invProj[2], g_GTAODebugTest.invProj[3],
+                  g_GTAODebugTest.invProj[4], g_GTAODebugTest.invProj[5]);
+        LogToFile("[GTAO] Extracted tanHalfFOVX=%f, tanHalfFOVY=%f", 
+                  tanHalfFOVX, tanHalfFOVY);
+        LogToFile("[GTAO] ndcToViewMul=[%f, %f], ndcToViewAdd=[%f, %f]",
+                  params->ndcToViewMul[0], params->ndcToViewMul[1],
+                  params->ndcToViewAdd[0], params->ndcToViewAdd[1]);
+        LogToFile("[GTAO] depthUnpackConsts=[%f, %f] (for %fkm far plane)",
+                  params->depthUnpackConsts[0], params->depthUnpackConsts[1],
+                  g_GTAODebugTest.farPlane / 1000.0f);
+        LogToFile("[GTAO] ========================");
+        // === END LOGGING ===
+        
         context->Unmap(constantBuffer, 0);
     }
     
@@ -2588,6 +2760,9 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     if (depthSRV) depthSRV->Release();
     if (normalSRV) normalSRV->Release();
     if (pointSampler) pointSampler->Release();
+    hiZShader->Release();
+    hiZConstantBuffer->Release();
+    hiZTexture->Release();
     aoTexture->Release();
     debugNormalsTexture->Release();
     context->Release();

@@ -1,3 +1,36 @@
+// Hi-Z Generation Compute Shader
+// Generates hierarchical Z-buffer from full-resolution depth
+
+Texture2D<float> SourceDepth : register(t0);
+RWTexture2D<float> OutputHiZ : register(u0);
+
+cbuffer HiZParams : register(b0)
+{
+    int2 SourceDimensions;      // Dimensions of source mip
+    int IsFirstIteration;       // 1 if reading from raw depth, 0 if reading from HiZ
+    int __Pad;                  // Padding to 16 bytes (4 floats total = 16 bytes)
+};
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    // Don't write outside output bounds
+    if (id.x >= (uint)SourceDimensions.x / 2 || id.y >= (uint)SourceDimensions.y / 2)
+        return;
+    
+    // Sample 2x2 block from source
+    int2 baseCoord = int2(id.xy) * 2;
+    
+    float d0 = SourceDepth.Load(int3(baseCoord, 0));
+    float d1 = SourceDepth.Load(int3(baseCoord + int2(1, 0), 0));
+    float d2 = SourceDepth.Load(int3(baseCoord + int2(0, 1), 0));
+    float d3 = SourceDepth.Load(int3(baseCoord + int2(1, 1), 0));
+    
+    // For reversed Z (Unity), max gives the closest depth
+    float closestDepth = max(max(d0, d1), max(d2, d3));
+    
+    OutputHiZ[id.xy] = closestDepth;
+}
 // GTAO Compute Shader - XeGTAO-based implementation
 // Optimized for Unity Deferred rendering
 
@@ -42,16 +75,12 @@ float R1Noise(float idx)
     return frac(idx * 0.6180339887498948482);
 }
 
-// Stable reversed-Z linearization
-// unpackConsts.x = near plane, unpackConsts.y = far plane
-// Returns negative view-space Z (e.g., -0.21 to -750000)
-float LinearizeDepth(float rawDepth, float2 nearFar)
+// XeGTAO depth linearization for reversed Z
+// unpackConsts.x = (far*near)/(far-near), unpackConsts.y = -near/(far-near)
+// Result: mul / (add - rawDepth) gives correct negative view-space Z
+float LinearizeDepth(float rawDepth, float2 unpackConsts)
 {
-    float n = nearFar.x;  // Near plane (positive)
-    float f = nearFar.y;  // Far plane (positive)
-    
-    // For reversed Z: rawDepth 1.0 = near, 0.0 = far
-    return -(n * f) / (rawDepth * (f - n) + n);
+    return unpackConsts.x / (unpackConsts.y - rawDepth);
 }
 
 // Fast viewspace reconstruction
@@ -114,31 +143,20 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // Debug output: view-space normals (mapped to 0-1 for visualization)
     g_DebugViewNormals[coord] = float4(viewNormal * 0.5 + 0.5, 1.0);
     
-    // === TEMPORARY DEBUG VISUALIZATIONS (uncomment one to verify) ===
-    // 1. Verify viewZ linearization (should be smooth gradient, darker near camera)
-    // g_AOTexture[coord] = frac(-viewZ / 100.0); return;
-    
-    // 2. Verify view-space XY reconstruction (should show radial gradient from center)
-    // float2 viewXY = pos.xy / viewZ; // Divide by Z to get tan(theta)
-    // g_DebugViewNormals[coord] = float4(viewXY * 0.5 + 0.5, 0.5, 1.0); return;
-    
-    // 3. Verify view vector (should point toward camera, mostly blue/purple)
-    // g_DebugViewNormals[coord] = float4(viewVec * 0.5 + 0.5, 1.0); return;
-    // === END TEMPORARY DEBUG ===
-    
-    // 4. Push toward camera (less negative Z) to avoid self-occlusion
-    // Use 0.99999 for FP32 (0.01% offset = ~75 units at 750km far plane)
-    viewZ *= 0.99999;
+    // 4. Push into surface (away from camera) for contact shadows
+    viewZ *= 1.0008;
     pos = ComputeViewspacePosition(uv, viewZ, NDCToViewMul, NDCToViewAdd);
     
-    // 5. Calculate screen-space radius (use abs to handle sign conventions)
+    // 5. Calculate screen-space radius (-pixelSizeAtViewZ.x since viewZ is negative)
     float2 pixelSizeAtViewZ = viewZ * NDCToViewMul * InvScreenSize;
-    float screenSpaceRadius = EffectRadius / max(abs(pixelSizeAtViewZ.x), 0.0001);
-    screenSpaceRadius = min(screenSpaceRadius, 50.0); // Max 50 pixels to prevent excessive sampling on distant grass
+    float screenSpaceRadius = EffectRadius / max(-pixelSizeAtViewZ.x, 0.0001);
     
-    // (Debug tests removed)
+    // 6. Precompute falloff constants (XeGTAO correct formula)
+    float falloffFrom = EffectRadius * (1.0 - FalloffRange);
+    float falloffMul = -1.0 / (EffectRadius * FalloffRange);
+    float falloffAdd = falloffFrom / (EffectRadius * FalloffRange) + 1.0;
     
-    // 6. Minimum sample distance (avoid self-sampling center pixel)
+    // 7. Minimum sample distance (avoid self-sampling center pixel)
     const float pixelTooCloseThreshold = 1.3;
     float minS = pixelTooCloseThreshold / screenSpaceRadius;
     
@@ -153,10 +171,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float sliceK = ((float)s + noiseSlice) / (float)SliceCount;
         float phi = sliceK * 3.14159265359; // 180 degrees
         // XeGTAO: negate sin for Unity's coordinate system
-        float2 omega = float2(cos(phi), -sin(phi));  // For sampling direction
+        float2 omega = float2(cos(phi), -sin(phi));
         
-        // Slice plane orientation - directionVec matches omega for consistency
-        float3 directionVec = float3(omega.x, omega.y, 0.0);
+        // Project omega onto view plane for correct slice plane
+        float3 directionVec = float3(omega, 0.0);
         float3 orthoDirectionVec = directionVec - dot(directionVec, viewVec) * viewVec;
         float3 slicePlaneNormal = normalize(cross(orthoDirectionVec, viewVec));
         
@@ -164,6 +182,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float3 projectedNormal = viewNormal - slicePlaneNormal * dot(viewNormal, slicePlaneNormal);
         float projectedNormalLength = length(projectedNormal);
         
+        if (projectedNormalLength < 0.001)
+            continue;
+            
         // XeGTAO normal angle calculation (reuse orthoDirectionVec from slice plane calc)
         float3 projectedNormalDir = projectedNormal / projectedNormalLength;
         float signNorm = sign(dot(orthoDirectionVec, projectedNormal));
@@ -210,18 +231,22 @@ void CSMain(uint3 id : SV_DispatchThreadID)
                     continue;
                     
                 float sampleViewZ = LinearizeDepth(sampleRawDepth, DepthUnpackConsts);
-                
                 float3 samplePos = ComputeViewspacePosition(sampleUV, sampleViewZ, NDCToViewMul, NDCToViewAdd);
                 
-                // REFERENCE-style falloff (inverse square, no thin occluder compensation)
+                // XeGTAO thin occluder compensation: pristine geometry for horizon, modified for falloff
                 float3 delta = samplePos - pos;
-                float distSq = dot(delta, delta);
+                
+                // 1. Calculate geometric direction from UNMODIFIED delta for accurate horizon angle
                 float3 deltaDir = normalize(delta);
                 float elevationCos = dot(deltaDir, viewVec);
                 
-                // Inverse square falloff (REFERENCE style)
-                float falloff = 1.0 / (1.0 + distSq / (EffectRadius * EffectRadius));
-                elevationCos = lerp(lowHorizonCosDir, elevationCos, falloff);
+                // 2. Apply thin occluder compensation ONLY to falloff distance
+                const float thinOccluderCompensation = 0.5;
+                float falloffBase = length(float3(delta.x, delta.y, delta.z * (1.0 + thinOccluderCompensation)));
+                
+                // 3. XeGTAO falloff - use falloffBase for weight, lerp with lowHorizonCos
+                float weight = saturate(falloffBase * falloffMul + falloffAdd);
+                elevationCos = lerp(lowHorizonCosDir, elevationCos, weight);
                 
                 horizonCos[dir] = max(horizonCos[dir], elevationCos);
             }
@@ -241,11 +266,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     }
     
     visibility /= (float)SliceCount;
-    
-    // REFERENCE-style intensity application
-    float ao = lerp(1.0, visibility, saturate(Intensity));
-    if (Intensity > 1.0)
-        ao = lerp(ao, ao * ao, saturate(Intensity - 1.0));
-    
+    // Apply XeGTAO's final value power
+    visibility = pow(visibility, 2.0);  // Default FinalValuePower = 2.0
+    float ao = lerp(1.0, visibility, Intensity);
     g_AOTexture[coord] = saturate(ao);
 }
+
