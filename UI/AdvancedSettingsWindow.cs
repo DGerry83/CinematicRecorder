@@ -188,44 +188,39 @@ namespace CinematicRecorder.UI
         private void DrawShadersTab()
         {
             DrawGTAOSection();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawDebugDumpSection();
         }
 
         private void DrawGTAOSection()
         {
-            // GTAO is currently disabled - shader compilation issues with Unity version
-            GUI.enabled = false;
-            
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            toggleStyle.normal.textColor = CinematicUIResources.Colors.INFO_ORANGE;
-            toggleStyle.onNormal.textColor = CinematicUIResources.Colors.INFO_ORANGE;
-            
-            GUILayout.Toggle(false, AdvancedSettings.GTAOToggle, toggleStyle);
-            
-            GUI.enabled = true;
-            
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle warningStyle = CinematicUIResources.Styles.Info();
-            warningStyle.wordWrap = true;
-            GUILayout.Label("GTAO is in development. Use Debug Dump to verify buffer access.", warningStyle);
-        }
-
-        private void DrawDebugDumpSection()
-        {
-            GUILayout.Label("Debug Tools", HighLogic.Skin.label);
-            
+            GUILayout.Label(AdvancedSettings.GTAOSectionHeader, HighLogic.Skin.label);
             GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
             
             bool isDeferred = IsDeferredRenderingActive();
             bool wasEnabled = GUI.enabled;
             
-            if (!isDeferred || DeterministicCaptureSession.IsRunning)
+            if (!isDeferred)
                 GUI.enabled = false;
             
-            if (GUILayout.Button("Debug Dump Depth/Normals", HighLogic.Skin.button))
+            // Main GTAO Enable Toggle
+            GUIStyle toggleStyle = SessionState.EnableGTAO ? toggleStyleActive : HighLogic.Skin.toggle;
+            bool newEnableGTAO = GUILayout.Toggle(SessionState.EnableGTAO, AdvancedSettings.GTAOToggle, toggleStyle);
+            if (newEnableGTAO != SessionState.EnableGTAO)
             {
-                DebugTextureDumper.PerformDump();
+                SessionState.EnableGTAO = newEnableGTAO;
+                GTAOManager.OnToggleChanged();
+            }
+            
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            
+            // Raw AO Output Toggle (only enabled when GTAO is on)
+            if (!SessionState.EnableGTAO)
+                GUI.enabled = false;
+            
+            GUIStyle rawAOToggleStyle = SessionState.GTAORawAOOutput ? toggleStyleActive : HighLogic.Skin.toggle;
+            bool newRawAO = GUILayout.Toggle(SessionState.GTAORawAOOutput, AdvancedSettings.GTAORawAOToggle, rawAOToggleStyle);
+            if (newRawAO != SessionState.GTAORawAOOutput)
+            {
+                SessionState.GTAORawAOOutput = newRawAO;
             }
             
             GUI.enabled = wasEnabled;
@@ -236,11 +231,13 @@ namespace CinematicRecorder.UI
             
             if (!isDeferred)
             {
-                GUILayout.Label("Debug dump requires deferred rendering.", helpStyle);
+                GUILayout.Label("GTAO requires deferred rendering.", helpStyle);
             }
-            else
+            else if (SessionState.EnableGTAO)
             {
-                GUILayout.Label("Exports depth and normal buffers as EXR/PNG files for verification.", helpStyle);
+                GUILayout.Label(SessionState.GTAORawAOOutput ? 
+                    AdvancedSettings.GTAORawAOTooltip : 
+                    AdvancedSettings.GTAOToggleTooltip, helpStyle);
             }
         }
 

@@ -179,8 +179,12 @@
             // Shaders tab
             public const string ShadersTab = "Shaders";
             
-            // GTAO (Ground-Truth Ambient Occlusion) - In Development
-            public const string GTAOToggle = " Ground-Truth Ambient Occlusion (In Dev)";
+            // GTAO (Ground-Truth Ambient Occlusion)
+            public const string GTAOSectionHeader = "Ambient Occlusion";
+            public const string GTAOToggle = " Enable Ground-Truth AO";
+            public const string GTAOToggleTooltip = "Real-time GTAO computation. Disable for normal gameplay, enable for cinematic recording.";
+            public const string GTAORawAOToggle = " Show Raw AO Output";
+            public const string GTAORawAOTooltip = "Debug view: display grayscale AO without scene composite.";
         }
 
         public static class AdvancedCameraOptions

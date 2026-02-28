@@ -100,6 +100,19 @@ namespace CinematicRecorder.Core
         public static bool CameraPathPlaybackTiming { get; set; } = false;
         #endregion
 
+        #region GTAO (Ambient Occlusion)
+        /// <summary>
+        /// Enable Ground-Truth Ambient Occlusion.
+        /// Renders real-time AO and composites it to the screen.
+        /// </summary>
+        public static bool EnableGTAO { get; set; } = false;
+        
+        /// <summary>
+        /// Show raw AO output (grayscale debug view) instead of composited scene.
+        /// </summary>
+        public static bool GTAORawAOOutput { get; set; } = false;
+        #endregion
+
         #region Temporal Accumulation
         /// <summary>
         /// Enable Temporal Accumulation Blur (motion blur via sub-frame accumulation).

@@ -96,6 +96,9 @@ namespace CinematicRecorder.Core
             GameObject configObj = new GameObject("CameraPanelConfig");
             DontDestroyOnLoad(configObj);
             configObj.AddComponent<CameraPanelConfig>();
+            
+            // Initialize GTAO if enabled
+            GTAOManager.Initialize();
         }
         /// <summary>
         /// Removes toolbar button and destroys UI windows.

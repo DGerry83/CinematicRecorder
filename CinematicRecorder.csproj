@@ -61,6 +61,8 @@
     <Compile Include="Core\CinematicRecorderAddon.cs" />
     <Compile Include="Core\DebugTextureDumper.cs" />
     <Compile Include="Core\DeterministicCaptureSession.cs" />
+    <Compile Include="Core\GTAOCompositor.cs" />
+    <Compile Include="Core\GTAOManager.cs" />
     <Compile Include="Core\HaltonSequence.cs" />
     <Compile Include="Core\HarmonyBootstrap.cs" />
     <Compile Include="Core\SafetyMonitor.cs" />

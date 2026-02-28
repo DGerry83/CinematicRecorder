@@ -3,6 +3,13 @@
 #include <Windows.h>
 #include <d3d11.h>
 
+// Unity native plugin interface types
+#define UNITY_INTERFACE_API __stdcall
+#define UNITY_INTERFACE_EXPORT __declspec(dllexport)
+
+typedef void (UNITY_INTERFACE_API * UnityRenderingEvent)(int eventId);
+typedef void (UNITY_INTERFACE_API * UnityRenderingEventAndData)(int eventId, void* data);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -90,14 +97,29 @@ int CR_SubmitSubFrame(CREncoderHandle encoder, ID3D11Texture2D* unityTexture, in
 __declspec(dllexport)
 int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex);
 
-// GTAO Debug Test - Minimal verification functions
+// GTAO Runtime Rendering
 __declspec(dllexport)
 void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height,
                           const float* invProj, const float* worldToView, float nearPlane, float farPlane,
                           int frameIndex);
 
 __declspec(dllexport)
-int CR_GTAODebugExecute(const char* outputDirectory);
+int CR_GTAOComputeAO();  // Compute AO only, no file output
+
+__declspec(dllexport)
+void CR_GTAORenderComposite(ID3D11Texture2D* sourceSceneTexture,
+                            ID3D11Texture2D* destinationTexture,
+                            int outputMode);
+
+__declspec(dllexport)
+void CR_GTAOShutdown();  // Cleanup cached resources
+
+// GTAO render callback for Unity CommandBuffer
+UNITY_INTERFACE_EXPORT UnityRenderingEvent UNITY_INTERFACE_API CR_GetGTAORenderEventFunc();
+
+// Set output mode (0=Composite, 1=Raw AO) - call before render event
+__declspec(dllexport)
+void CR_GTAOSetOutputMode(int mode);
 
 #ifdef __cplusplus
 }
