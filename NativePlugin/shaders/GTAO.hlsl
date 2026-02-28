@@ -3,6 +3,7 @@
 
 Texture2D<float> g_DepthTexture : register(t0);
 Texture2D<float4> g_NormalTexture : register(t1);
+Texture2D<float> BlueNoiseTexture : register(t2);  // 256x256 R8 blue noise
 RWTexture2D<float> g_AOTexture : register(u0);
 
 SamplerState pointSampler : register(s0);  // Point sampler for Hi-Z depth sampling
@@ -25,7 +26,7 @@ cbuffer GTAOParams : register(b0)
     int SliceCount;
     int StepsPerSlice;
     // float4 #5 (offset 64)
-    int NoiseIndex;
+    int FrameIndex;             // 0-7 temporal frame index
     float DepthMIPSamplingOffset; // Offset for Hi-Z mip level calculation (typically 1.0-2.0)
     float __pad1;               // Padding
     float __pad2;               // Padding
@@ -35,10 +36,24 @@ cbuffer GTAOParams : register(b0)
     float4 WorldToViewRow2;     // .xyz = row 2 of world-to-view matrix
 };
 
-// Simple R1 sequence for noise
-float R1Noise(float idx)
+// Blue noise for GTAO sampling
+float2 GetGTANoise(uint2 pixelCoord, uint frameIndex)
 {
-    return frac(idx * 0.6180339887498948482);
+    // Temporal shift: 31 is coprime with 256 for 8-frame cycle coverage
+    uint temporalShift = (frameIndex * 31u) & 0xFFu;
+    
+    // Wrap to 256x256 texture coordinates
+    uint2 baseCoord = (pixelCoord + temporalShift) & 0xFFu;
+    
+    // Spatial decorrelation offsets for slice vs step noise
+    uint2 coordSlice = baseCoord;                          // For slice rotation
+    uint2 coordStep = (baseCoord + uint2(37u, 17u)) & 0xFFu; // For step jitter
+    
+    // Load() returns 0.0-1.0 automatically for R8_UNORM
+    float noiseSlice = BlueNoiseTexture.Load(int3(coordSlice, 0));
+    float noiseStep = BlueNoiseTexture.Load(int3(coordStep, 0));
+    
+    return float2(noiseSlice, noiseStep);
 }
 
 // Stable reversed-Z linearization
@@ -121,8 +136,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float pixelTooCloseThreshold = 1.3;
     float minS = pixelTooCloseThreshold / screenSpaceRadius;
     
-    // 8. Noise for temporal stability
-    float noiseSlice = R1Noise((float)NoiseIndex + (float)coord.x * 0.5 + (float)coord.y * 0.3);
+    // 8. Blue noise for temporal stability
+    float2 localNoise = GetGTANoise(coord, (uint)FrameIndex);
+    float noiseSlice = localNoise.x;    // For slice rotation
+    float noiseStep = localNoise.y;     // For step distribution
     
     float visibility = 0;
     
@@ -167,9 +184,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             for (int step = 0; step < StepsPerSlice; step++)
             {
                 // Distribution with minS offset to avoid self-sampling
-                float stepBase = (float(step) + 0.5) / (float)StepsPerSlice;
-                float stepNoise = R1Noise((float)NoiseIndex + (float)s * 7 + (float)step * 13);
-                float t = pow(stepBase + stepNoise * 0.1, SampleDistributionPower);
+                // Golden ratio progression with blue noise base
+                float stepBaseNoise = frac(noiseStep + (float)step * 0.6180339887498948482);
+                float stepBase = (float(step) + stepBaseNoise) / (float)StepsPerSlice;
+                float t = pow(stepBase, SampleDistributionPower);
                 t += minS; // Add offset to ensure first sample is at least 1.3 pixels away
                 
                 float2 sampleUV = uv + direction * t * screenSpaceRadius * InvScreenSize;

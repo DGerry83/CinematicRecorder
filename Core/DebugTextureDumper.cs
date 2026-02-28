@@ -63,7 +63,8 @@ namespace CinematicRecorder.Core
 
         [DllImport("CinematicRecorderNative", CallingConvention = CallingConvention.Cdecl)]
         private static extern void CR_GTAODebugSetInput(IntPtr depthTex, IntPtr normalTex, int width, int height,
-                                                          [In] float[] invProj, [In] float[] worldToView, float nearPlane, float farPlane);
+                                                          [In] float[] invProj, [In] float[] worldToView, float nearPlane, float farPlane,
+                                                          int frameIndex);
         
         [DllImport("CinematicRecorderNative", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
         private static extern int CR_GTAODebugExecute([MarshalAs(UnmanagedType.LPStr)] string outputDirectory);
@@ -77,6 +78,7 @@ namespace CinematicRecorder.Core
         private string _timestamp;
         private int _frameCount = 0;
         private bool _initialized = false;
+        private static int _gtaoFrameIndex = 0;  // 0-7 temporal frame counter
         
         /// <summary>
         /// Static entry point.
@@ -199,8 +201,12 @@ namespace CinematicRecorder.Core
                 worldToViewArray[8] = worldToCamera[2, 2];
                 
                 CR_GTAODebugSetInput(depthPtr, normalPtr, _depthRT.width, _depthRT.height,
-                                     invProjArray, worldToViewArray, _camera.nearClipPlane, _camera.farClipPlane);
+                                     invProjArray, worldToViewArray, _camera.nearClipPlane, _camera.farClipPlane,
+                                     _gtaoFrameIndex);
                 int result = CR_GTAODebugExecute(_outputDir);
+                
+                // Advance frame index 0-7 for next call
+                _gtaoFrameIndex = (_gtaoFrameIndex + 1) & 7;
                 
                 if (result != 0)
                 {

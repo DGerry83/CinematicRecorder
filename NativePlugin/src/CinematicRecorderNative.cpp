@@ -1986,7 +1986,9 @@ static struct {
     float worldToView[9] = {};     // World-to-view matrix (3x3 rotation)
     float nearPlane = 0.1f;        // Camera near plane
     float farPlane = 1000.0f;      // Camera far plane
-    int frameIndex = 0;            // For temporal noise
+    int frameIndex = 0;            // For temporal noise (0-7 cycle)
+    ID3D11Texture2D* blueNoiseTexture = nullptr;  // Cached blue noise texture
+    ID3D11ShaderResourceView* blueNoiseSRV = nullptr;  // Cached SRV
 } g_GTAODebugTest;
 
 // GTAO params constant buffer (matches GTAO.hlsl - XeGTAO style)
@@ -2008,10 +2010,10 @@ struct GTAOParams {
     int sliceCount;             // Number of slices (4-8)
     int stepsPerSlice;          // Steps per direction (8-16)
     // float4 #5 (offset 64)
-    int noiseIndex;             // offset 64 (4 bytes)
-    float depthMipSamplingOffset; // offset 68 (4 bytes) - Hi-Z mip offset (typically 1.0-2.0)
-    float __pad1;               // offset 72 (4 bytes)
-    float __pad2;               // offset 76 (4 bytes)
+    int FrameIndex;             // 0-7 temporal frame index
+    float depthMipSamplingOffset; // Hi-Z mip offset (typically 1.0-2.0)
+    float __pad1;
+    float __pad2;
     // float4 #6, #7, #8 - World-to-View matrix as three float4s
     float worldToViewRow0[4];   // offset 80: [row0.x, row0.y, row0.z, 0]
     float worldToViewRow1[4];   // offset 96: [row1.x, row1.y, row1.z, 0]
@@ -2019,9 +2021,36 @@ struct GTAOParams {
     // Total: 128 bytes exactly (8 float4s)
 };
 
+// Initialize blue noise texture (one-time, immutable)
+static void InitializeBlueNoiseResources(ID3D11Device* device)
+{
+    if (g_GTAODebugTest.blueNoiseTexture) return;  // Already initialized
+    
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = 256;
+    desc.Height = 256;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = g_BlueNoise256x256R8;
+    initData.SysMemPitch = 256;  // Bytes per row
+    
+    HRESULT hr = device->CreateTexture2D(&desc, &initData, &g_GTAODebugTest.blueNoiseTexture);
+    if (SUCCEEDED(hr) && g_GTAODebugTest.blueNoiseTexture) {
+        device->CreateShaderResourceView(g_GTAODebugTest.blueNoiseTexture, nullptr, 
+                                         &g_GTAODebugTest.blueNoiseSRV);
+    }
+}
+
 extern "C" __declspec(dllexport)
 void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height,
-                          const float* invProj, const float* worldToView, float nearPlane, float farPlane)
+                          const float* invProj, const float* worldToView, float nearPlane, float farPlane,
+                          int frameIndex)
 {
     g_GTAODebugTest.depthTexture = depthTex;
     g_GTAODebugTest.normalTexture = normalTex;
@@ -2029,6 +2058,7 @@ void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex,
     g_GTAODebugTest.height = height;
     g_GTAODebugTest.nearPlane = nearPlane;
     g_GTAODebugTest.farPlane = farPlane;
+    g_GTAODebugTest.frameIndex = frameIndex;
     
     if (invProj) {
         memcpy(g_GTAODebugTest.invProj, invProj, sizeof(float) * 16);
@@ -2048,6 +2078,16 @@ void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex,
         g_GTAODebugTest.worldToView[0] = 1.0f;
         g_GTAODebugTest.worldToView[4] = 1.0f;
         g_GTAODebugTest.worldToView[8] = 1.0f;
+    }
+    
+    // Initialize blue noise resources (one-time)
+    if (depthTex && !g_GTAODebugTest.blueNoiseTexture) {
+        ID3D11Device* device = nullptr;
+        depthTex->GetDevice(&device);
+        if (device) {
+            InitializeBlueNoiseResources(device);
+            device->Release();
+        }
     }
 }
 
@@ -2429,7 +2469,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         params->depthMipSamplingOffset = 100.0f;   // TEMP: Force mip 0 sampling to test Hi-Z issues
         
         // World-to-view matrix (3x3 rotation) - as three float4s for clean alignment
-        params->noiseIndex = g_GTAODebugTest.frameIndex++;
+        params->FrameIndex = g_GTAODebugTest.frameIndex;
         // Row0 = [row0.x, row0.y, row0.z, 0]
         params->worldToViewRow0[0] = g_GTAODebugTest.worldToView[0];
         params->worldToViewRow0[1] = g_GTAODebugTest.worldToView[1];
@@ -2452,8 +2492,8 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     // Bind and dispatch
     context->CSSetShader(aoShader, nullptr, 0);
     context->CSSetConstantBuffers(0, 1, &constantBuffer);
-    ID3D11ShaderResourceView* srvs[2] = { depthSRV, normalSRV };
-    context->CSSetShaderResources(0, 2, srvs);
+    ID3D11ShaderResourceView* srvs[3] = { depthSRV, normalSRV, g_GTAODebugTest.blueNoiseSRV };
+    context->CSSetShaderResources(0, 3, srvs);
     context->CSSetSamplers(0, 1, &pointSampler);  // Bind point sampler for Hi-Z
     ID3D11UnorderedAccessView* uavs[1] = { aoUAV };
     context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
@@ -2466,10 +2506,10 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     
     // Unbind
     ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-    ID3D11ShaderResourceView* nullSRV[2] = { nullptr, nullptr };
+    ID3D11ShaderResourceView* nullSRV[3] = { nullptr, nullptr, nullptr };
     ID3D11SamplerState* nullSampler[1] = { nullptr };
     context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-    context->CSSetShaderResources(0, 2, nullSRV);
+    context->CSSetShaderResources(0, 3, nullSRV);
     context->CSSetSamplers(0, 1, nullSampler);
     context->CSSetShader(nullptr, nullptr, 0);
     
