@@ -1976,6 +1976,7 @@ int CR_ShutdownEncoder(CREncoderHandle encoder)
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 #include "GTAO.h"  // Compiled compute shader bytecode
+#include "GTAO_Filter.h"  // Compiled filter shader bytecode
 
 static struct {
     ID3D11Texture2D* depthTexture = nullptr;
@@ -1989,6 +1990,15 @@ static struct {
     int frameIndex = 0;            // For temporal noise (0-7 cycle)
     ID3D11Texture2D* blueNoiseTexture = nullptr;  // Cached blue noise texture
     ID3D11ShaderResourceView* blueNoiseSRV = nullptr;  // Cached SRV
+    
+    // Filter Resources (created once, cached)
+    ID3D11Texture2D* filteredAOTexture = nullptr;
+    ID3D11UnorderedAccessView* filteredUAV = nullptr;
+    ID3D11ComputeShader* filterShader = nullptr;
+    ID3D11Buffer* filterCB = nullptr;
+    
+    int cachedWidth = 0;
+    int cachedHeight = 0;
 } g_GTAODebugTest;
 
 // GTAO params constant buffer (matches GTAO.hlsl - XeGTAO style)
@@ -2020,6 +2030,60 @@ struct GTAOParams {
     float worldToViewRow2[4];   // offset 112: [row2.x, row2.y, row2.z, 0]
     // Total: 128 bytes exactly (8 float4s)
 };
+
+// Filter params constant buffer (matches GTAO_Filter.hlsl)
+struct FilterParams {
+    float invScreenSize[2];
+    float normalPower;
+    float depthSigma;
+};
+
+// Initialize filter resources (one-time, cached)
+static void InitializeFilterResources(ID3D11Device* device, int width, int height)
+{
+    if (g_GTAODebugTest.filteredAOTexture && 
+        g_GTAODebugTest.cachedWidth == width && 
+        g_GTAODebugTest.cachedHeight == height)
+        return; // Already valid
+    
+    // Cleanup old if resizing
+    if (g_GTAODebugTest.filteredAOTexture) {
+        g_GTAODebugTest.filteredAOTexture->Release();
+        g_GTAODebugTest.filteredUAV->Release();
+        if (g_GTAODebugTest.filterShader) g_GTAODebugTest.filterShader->Release();
+        if (g_GTAODebugTest.filterCB) g_GTAODebugTest.filterCB->Release();
+    }
+    
+    // 1. Filtered AO Texture (R32_FLOAT)
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R32_FLOAT;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+    
+    device->CreateTexture2D(&desc, nullptr, &g_GTAODebugTest.filteredAOTexture);
+    device->CreateUnorderedAccessView(g_GTAODebugTest.filteredAOTexture, nullptr, 
+                                      &g_GTAODebugTest.filteredUAV);
+    
+    // 2. Filter Compute Shader
+    device->CreateComputeShader(g_GTAOFilterCS, sizeof(g_GTAOFilterCS), nullptr, 
+                                &g_GTAODebugTest.filterShader);
+    
+    // 3. Constant Buffer (16 bytes aligned)
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = (sizeof(FilterParams) + 15) & ~15; // 32 bytes
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    device->CreateBuffer(&cbDesc, nullptr, &g_GTAODebugTest.filterCB);
+    
+    g_GTAODebugTest.cachedWidth = width;
+    g_GTAODebugTest.cachedHeight = height;
+}
 
 // Initialize blue noise texture (one-time, immutable)
 static void InitializeBlueNoiseResources(ID3D11Device* device)
@@ -2185,7 +2249,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     aoDesc.Height = height;
     aoDesc.MipLevels = 1;
     aoDesc.ArraySize = 1;
-    aoDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    aoDesc.Format = DXGI_FORMAT_R32G32_FLOAT;  // RG: x=AO, y=LinearDepth
     aoDesc.SampleDesc.Count = 1;
     aoDesc.Usage = D3D11_USAGE_DEFAULT;
     aoDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
@@ -2202,7 +2266,7 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     // Create UAV for AO output
     ID3D11UnorderedAccessView* aoUAV = nullptr;
     D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    uavDesc.Format = DXGI_FORMAT_R32G32_FLOAT;  // RG: x=AO, y=LinearDepth
     uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
     hr = device->CreateUnorderedAccessView(aoTexture, &uavDesc, &aoUAV);
     if (FAILED(hr)) {
@@ -2502,7 +2566,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     UINT dispatchX = (width + 7) / 8;
     UINT dispatchY = (height + 7) / 8;
     context->Dispatch(dispatchX, dispatchY, 1);
-    context->Flush();
     
     // Unbind
     ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
@@ -2513,11 +2576,62 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     context->CSSetSamplers(0, 1, nullSampler);
     context->CSSetShader(nullptr, nullptr, 0);
     
-    // Save AO output
+    // ===== NORMAL-AWARE FILTER PASS =====
+    // Initialize filter resources (creates only if null or wrong size)
+    InitializeFilterResources(device, width, height);
+    
+    // Create SRV for the raw AO texture we just wrote to
+    D3D11_SHADER_RESOURCE_VIEW_DESC rawAoSrvDesc = {};
+    rawAoSrvDesc.Format = DXGI_FORMAT_R32G32_FLOAT;  // RG: AO + Depth
+    rawAoSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    rawAoSrvDesc.Texture2D.MipLevels = 1;
+    ID3D11ShaderResourceView* rawAOSRV = nullptr;
+    device->CreateShaderResourceView(aoTexture, &rawAoSrvDesc, &rawAOSRV);
+    
+    // Setup filter constants
+    if (SUCCEEDED(context->Map(g_GTAODebugTest.filterCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        FilterParams* fparams = (FilterParams*)mapped.pData;
+        fparams->invScreenSize[0] = 1.0f / width;
+        fparams->invScreenSize[1] = 1.0f / height;
+        fparams->normalPower = 32.0f;      // Sharper edges
+        fparams->depthSigma = 0.5f;        // 0.5 meters depth sensitivity
+        context->Unmap(g_GTAODebugTest.filterCB, 0);
+    }
+    
+    // Bind and dispatch filter
+    context->CSSetShader(g_GTAODebugTest.filterShader, nullptr, 0);
+    context->CSSetConstantBuffers(0, 1, &g_GTAODebugTest.filterCB);
+    
+    // Bind inputs: Raw AO (contains depth), Normals
+    ID3D11ShaderResourceView* filterSrvs[2] = {
+        rawAOSRV,       // AO + Depth (t0)
+        normalSRV       // View normals (t1)
+    };
+    context->CSSetShaderResources(0, 2, filterSrvs);
+    
+    // Bind output
+    context->CSSetUnorderedAccessViews(0, 1, &g_GTAODebugTest.filteredUAV, nullptr);
+    
+    // Dispatch (8x8 threads as per shader)
+    context->Dispatch(dispatchX, dispatchY, 1);
+    context->Flush();
+    
+    // Unbind filter
+    ID3D11UnorderedAccessView* filterNullUAV[1] = { nullptr };
+    ID3D11ShaderResourceView* filterNullSRV[2] = { nullptr, nullptr };
+    context->CSSetUnorderedAccessViews(0, 1, filterNullUAV, nullptr);
+    context->CSSetShaderResources(0, 2, filterNullSRV);
+    context->CSSetShader(nullptr, nullptr, 0);
+    
+    // Release temporary raw AO SRV
+    rawAOSRV->Release();
+    // ===== END FILTER PASS =====
+    
+    // Save filtered AO output
     snprintf(path, MAX_PATH, "%s\\ao_output.png", outputDirectory ? outputDirectory : ".");
-    if (!SaveR32FloatTextureAsPNG(aoTexture, path, 1.0f))
+    if (!SaveR32FloatTextureAsPNG(g_GTAODebugTest.filteredAOTexture, path, 1.0f))
     {
-        LogToFile("[GTAO] Failed to save AO output");
+        LogToFile("[GTAO] Failed to save filtered AO output");
         success = false;
     }
     

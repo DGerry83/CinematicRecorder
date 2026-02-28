@@ -4,7 +4,7 @@
 Texture2D<float> g_DepthTexture : register(t0);
 Texture2D<float4> g_NormalTexture : register(t1);
 Texture2D<float> BlueNoiseTexture : register(t2);  // 256x256 R8 blue noise
-RWTexture2D<float> g_AOTexture : register(u0);
+RWTexture2D<float2> g_AOTexture : register(u0);  // x=AO, y=LinearDepth (viewZ)
 
 SamplerState pointSampler : register(s0);  // Point sampler for Hi-Z depth sampling
 
@@ -103,7 +103,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // (depth range check removed as it fails with reversed-Z and large far planes)
     if (length(worldNormal) < 0.001 || normalData.a < 0.1)
     {
-        g_AOTexture[coord] = 1.0;
+        g_AOTexture[coord] = float2(1.0, 0.0);  // Sky: AO=1, depth=0
         return;
     }
     
@@ -244,5 +244,5 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (Intensity > 1.0)
         ao = lerp(ao, ao * ao, saturate(Intensity - 1.0));
     
-    g_AOTexture[coord] = saturate(ao);
+    g_AOTexture[coord] = float2(saturate(ao), viewZ);  // Pack AO + linear depth
 }
