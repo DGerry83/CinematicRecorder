@@ -2019,170 +2019,10 @@ struct GTAOParams {
     // Total: 128 bytes exactly (8 float4s)
 };
 
-// Helper to save ARGB32 texture red channel as grayscale PNG
-// Helper to save ARGB32 texture red channel as grayscale PNG
-static bool SaveDepthTextureAsPNG(ID3D11Texture2D* texture, const char* filename, float normalizeScale = 100.0f)
-{
-    if (!texture) return false;
-    
-    ID3D11Device* device = nullptr;
-    texture->GetDevice(&device);
-    if (!device) return false;
-    
-    ID3D11DeviceContext* context = nullptr;
-    device->GetImmediateContext(&context);
-    if (!context) { device->Release(); return false; }
-    
-    D3D11_TEXTURE2D_DESC srcDesc;
-    texture->GetDesc(&srcDesc);
-    
-    LogToFile("[GTAO] Depth texture format: %d (R32_FLOAT=%d), Size: %dx%d", 
-              srcDesc.Format, DXGI_FORMAT_R32_FLOAT, srcDesc.Width, srcDesc.Height);
-    
-    D3D11_TEXTURE2D_DESC stagingDesc = srcDesc;
-    stagingDesc.Usage = D3D11_USAGE_STAGING;
-    stagingDesc.BindFlags = 0;
-    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    stagingDesc.MiscFlags = 0;
-    
-    ID3D11Texture2D* stagingTex = nullptr;
-    HRESULT hr = device->CreateTexture2D(&stagingDesc, nullptr, &stagingTex);
-    if (FAILED(hr)) { context->Release(); device->Release(); return false; }
-    
-    // Verify staging texture format
-    D3D11_TEXTURE2D_DESC stagingCheck;
-    stagingTex->GetDesc(&stagingCheck);
-    LogToFile("[GTAO] Staging texture format: %d", stagingCheck.Format);
-    
-    context->CopyResource(stagingTex, texture);
-    context->Flush();
-    
-    D3D11_MAPPED_SUBRESOURCE mapped;
-    hr = context->Map(stagingTex, 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) { stagingTex->Release(); context->Release(); device->Release(); return false; }
-    
-    int width = srcDesc.Width;
-    int height = srcDesc.Height;
-    std::vector<uint8_t> pixels(width * height);
-    
-    LogToFile("[GTAO] RowPitch: %d (expected: %d)", mapped.RowPitch, width * 4);
-    
-    // Handle DXGI_FORMAT_R32_FLOAT (41) or DXGI_FORMAT_R32_TYPELESS (39)
-    // R32_TYPELESS is the underlying format for depth buffers, stores raw 32-bit floats
-    if (srcDesc.Format == DXGI_FORMAT_R32_FLOAT || srcDesc.Format == 39) // 39 = R32_TYPELESS
-    {
-        for (int y = 0; y < height; y++)
-        {
-            float* srcRow = (float*)((uint8_t*)mapped.pData + y * mapped.RowPitch);
-            for (int x = 0; x < width; x++)
-            {
-                float depth = srcRow[x];
-                float val = depth * normalizeScale;
-                if (val < 0.0f) val = 0.0f;
-                if (val > 1.0f) val = 1.0f;
-                pixels[y * width + x] = (uint8_t)(val * 255.0f);
-            }
-        }
-    }
-    else
-    {
-        // Fallback for other formats
-        LogToFile("[GTAO] Warning: Unexpected depth format %d", srcDesc.Format);
-        
-        for (int y = 0; y < height; y++)
-        {
-            uint8_t* srcRow = (uint8_t*)mapped.pData + y * mapped.RowPitch;
-            for (int x = 0; x < width; x++)
-            {
-                uint8_t r = srcRow[x * 4 + 0];
-                float val = (r / 255.0f) * normalizeScale;
-                if (val < 0.0f) val = 0.0f;
-                if (val > 1.0f) val = 1.0f;
-                pixels[y * width + x] = (uint8_t)(val * 255.0f);
-            }
-        }
-    }
-    
-    context->Unmap(stagingTex, 0);
-    stagingTex->Release();
-    context->Release();
-    device->Release();
-    
-    return stbi_write_png(filename, width, height, 1, pixels.data(), width) != 0;
-}
-
-// Helper to save ARGB32F normal texture as RGB PNG
-static bool SaveNormalTextureAsPNG(ID3D11Texture2D* texture, const char* filename)
-{
-    if (!texture) return false;
-    
-    ID3D11Device* device = nullptr;
-    texture->GetDevice(&device);
-    if (!device) return false;
-    
-    ID3D11DeviceContext* context = nullptr;
-    device->GetImmediateContext(&context);
-    if (!context) { device->Release(); return false; }
-    
-    D3D11_TEXTURE2D_DESC srcDesc;
-    texture->GetDesc(&srcDesc);
-    
-    D3D11_TEXTURE2D_DESC stagingDesc = srcDesc;
-    stagingDesc.Usage = D3D11_USAGE_STAGING;
-    stagingDesc.BindFlags = 0;
-    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    stagingDesc.MiscFlags = 0;
-    
-    ID3D11Texture2D* stagingTex = nullptr;
-    HRESULT hr = device->CreateTexture2D(&stagingDesc, nullptr, &stagingTex);
-    if (FAILED(hr)) { context->Release(); device->Release(); return false; }
-    
-    context->CopyResource(stagingTex, texture);
-    context->Flush();
-    
-    D3D11_MAPPED_SUBRESOURCE mapped;
-    hr = context->Map(stagingTex, 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) { stagingTex->Release(); context->Release(); device->Release(); return false; }
-    
-    int width = srcDesc.Width;
-    int height = srcDesc.Height;
-    std::vector<uint8_t> pixels(width * height * 3);
-    
-    for (int y = 0; y < height; y++)
-    {
-        uint32_t* srcRow = (uint32_t*)((uint8_t*)mapped.pData + y * mapped.RowPitch);
-        for (int x = 0; x < width; x++)
-        {
-            uint32_t packed = srcRow[x];
-            
-            // Unpack 10-10-10-2 (R10G10B10A2_UNORM)
-            uint8_t r = ((packed >> 0) & 0x3FF) >> 2;   // 10 bits -> 8 bits
-            uint8_t g = ((packed >> 10) & 0x3FF) >> 2;  // 10 bits -> 8 bits  
-            uint8_t b = ((packed >> 20) & 0x3FF) >> 2;  // 10 bits -> 8 bits
-            
-            int idx = (y * width + x) * 3;
-            pixels[idx + 0] = r;
-            pixels[idx + 1] = g;
-            pixels[idx + 2] = b;
-        }
-    }
-    
-    context->Unmap(stagingTex, 0);
-    stagingTex->Release();
-    context->Release();
-    device->Release();
-    
-    // Save as PNG (RGB)
-    return stbi_write_png(filename, width, height, 3, pixels.data(), width * 3) != 0;
-}
-
 extern "C" __declspec(dllexport)
 void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex, int width, int height,
                           const float* invProj, const float* worldToView, float nearPlane, float farPlane)
 {
-    LogToFile("[GTAO] CR_GTAODebugSetInput called: %dx%d, depthTex=%p, normalTex=%p, near=%f, far=%f", 
-              width, height, depthTex, normalTex, nearPlane, farPlane);
-    
     g_GTAODebugTest.depthTexture = depthTex;
     g_GTAODebugTest.normalTexture = normalTex;
     g_GTAODebugTest.width = width;
@@ -2192,7 +2032,6 @@ void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex,
     
     if (invProj) {
         memcpy(g_GTAODebugTest.invProj, invProj, sizeof(float) * 16);
-        LogToFile("[GTAO] Inverse projection matrix received");
     } else {
         // Identity fallback
         memset(g_GTAODebugTest.invProj, 0, sizeof(g_GTAODebugTest.invProj));
@@ -2200,21 +2039,16 @@ void CR_GTAODebugSetInput(ID3D11Texture2D* depthTex, ID3D11Texture2D* normalTex,
         g_GTAODebugTest.invProj[5] = 1.0f;
         g_GTAODebugTest.invProj[10] = 1.0f;
         g_GTAODebugTest.invProj[15] = 1.0f;
-        LogToFile("[GTAO] Using identity projection matrix");
     }
     
     if (worldToView) {
         memcpy(g_GTAODebugTest.worldToView, worldToView, sizeof(float) * 9);
-        LogToFile("[GTAO] World-to-view matrix received");
     } else {
         memset(g_GTAODebugTest.worldToView, 0, sizeof(g_GTAODebugTest.worldToView));
         g_GTAODebugTest.worldToView[0] = 1.0f;
         g_GTAODebugTest.worldToView[4] = 1.0f;
         g_GTAODebugTest.worldToView[8] = 1.0f;
-        LogToFile("[GTAO] Using identity world-to-view matrix");
     }
-    
-    LogToFile("[GTAO] Input stored successfully");
 }
 
 // Helper to save R32_FLOAT texture as grayscale PNG
@@ -2277,10 +2111,14 @@ static bool SaveR32FloatTextureAsPNG(ID3D11Texture2D* texture, const char* filen
 extern "C" __declspec(dllexport)
 int CR_GTAODebugExecute(const char* outputDirectory)
 {
-    LogToFile("[GTAO] CR_GTAODebugExecute called: %s", outputDirectory ? outputDirectory : "null");
-    
     char path[MAX_PATH];
     bool success = true;
+    
+    // Validate input
+    if (!g_GTAODebugTest.depthTexture) {
+        LogToFile("[GTAO] Error: depth texture is null");
+        return -1;
+    }
     
     // Get device from depth texture
     ID3D11Device* device = nullptr;
@@ -2300,30 +2138,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     
     int width = g_GTAODebugTest.width;
     int height = g_GTAODebugTest.height;
-    
-    // Save depth as grayscale PNG (ARGB32 format - depth in red channel)
-    snprintf(path, MAX_PATH, "%s\\depth_input.png", outputDirectory ? outputDirectory : ".");
-    if (SaveDepthTextureAsPNG(g_GTAODebugTest.depthTexture, path, 1.0f))
-    {
-        LogToFile("[GTAO] Depth saved: %s", path);
-    }
-    else
-    {
-        LogToFile("[GTAO] Failed to save depth");
-        success = false;
-    }
-    
-    // Save normals as RGB PNG
-    snprintf(path, MAX_PATH, "%s\\normal_input.png", outputDirectory ? outputDirectory : ".");
-    if (SaveNormalTextureAsPNG(g_GTAODebugTest.normalTexture, path))
-    {
-        LogToFile("[GTAO] Normals saved: %s", path);
-    }
-    else
-    {
-        LogToFile("[GTAO] Failed to save normals");
-        success = false;
-    }
     
     // Create AO output texture (R32_FLOAT)
     D3D11_TEXTURE2D_DESC aoDesc = {};
@@ -2359,44 +2173,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         return -1;
     }
     
-    // Create debug view-normals texture (ARGB32 for RGB output)
-    D3D11_TEXTURE2D_DESC debugNormDesc = {};
-    debugNormDesc.Width = width;
-    debugNormDesc.Height = height;
-    debugNormDesc.MipLevels = 1;
-    debugNormDesc.ArraySize = 1;
-    debugNormDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-    debugNormDesc.SampleDesc.Count = 1;
-    debugNormDesc.Usage = D3D11_USAGE_DEFAULT;
-    debugNormDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-    
-    ID3D11Texture2D* debugNormalsTexture = nullptr;
-    hr = device->CreateTexture2D(&debugNormDesc, nullptr, &debugNormalsTexture);
-    if (FAILED(hr)) {
-        LogToFile("[GTAO] Failed to create debug normals texture");
-        aoUAV->Release();
-        aoTexture->Release();
-        context->Release();
-        device->Release();
-        return -1;
-    }
-    
-    // Create UAV for debug normals output
-    ID3D11UnorderedAccessView* debugNormalsUAV = nullptr;
-    D3D11_UNORDERED_ACCESS_VIEW_DESC debugUavDesc = {};
-    debugUavDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-    debugUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-    hr = device->CreateUnorderedAccessView(debugNormalsTexture, &debugUavDesc, &debugNormalsUAV);
-    if (FAILED(hr)) {
-        LogToFile("[GTAO] Failed to create debug normals UAV");
-        debugNormalsTexture->Release();
-        aoUAV->Release();
-        aoTexture->Release();
-        context->Release();
-        device->Release();
-        return -1;
-    }
-    
     // Create Hi-Z texture with mip chain
     int hiZMipCount = (int)(log2(max(width, height))) + 1;
     hiZMipCount = min(hiZMipCount, 12);  // Cap at 12 mips (4096->1)
@@ -2415,8 +2191,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     hr = device->CreateTexture2D(&hiZDesc, nullptr, &hiZTexture);
     if (FAILED(hr)) {
         LogToFile("[GTAO] Failed to create Hi-Z texture");
-        debugNormalsUAV->Release();
-        debugNormalsTexture->Release();
         aoUAV->Release();
         aoTexture->Release();
         context->Release();
@@ -2430,8 +2204,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     if (FAILED(hr)) {
         LogToFile("[GTAO] Failed to create Hi-Z compute shader");
         hiZTexture->Release();
-        debugNormalsUAV->Release();
-        debugNormalsTexture->Release();
         aoUAV->Release();
         aoTexture->Release();
         context->Release();
@@ -2458,8 +2230,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         LogToFile("[GTAO] Failed to create Hi-Z constant buffer");
         hiZShader->Release();
         hiZTexture->Release();
-        debugNormalsUAV->Release();
-        debugNormalsTexture->Release();
         aoUAV->Release();
         aoTexture->Release();
         context->Release();
@@ -2552,8 +2322,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     context->CSSetUnorderedAccessViews(0, 1, nullHiZUAV, nullptr);
     context->CSSetShaderResources(0, 1, nullHiZSRV);
     context->CSSetShader(nullptr, nullptr, 0);
-    
-    LogToFile("[GTAO] Hi-Z generated: %d mips", hiZMipCount);
     
     // Create SRVs for input textures (GTAO will sample from Hi-Z)
     ID3D11ShaderResourceView* depthSRV = nullptr;
@@ -2678,29 +2446,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
         params->worldToViewRow2[2] = g_GTAODebugTest.worldToView[8];
         params->worldToViewRow2[3] = 0.0f;
         
-        LogToFile("[GTAO] tanHalfFOVX=%f, tanHalfFOVY=%f", tanHalfFOVX, tanHalfFOVY);
-        LogToFile("[GTAO] Expected (60deg FOV): ~0.577");
-        
-        // === PROJECTION DEBUG LOGGING ===
-        LogToFile("[GTAO] === PROJECTION DEBUG ===");
-        LogToFile("[GTAO] Camera: near=%f, far=%f", 
-                  g_GTAODebugTest.nearPlane, g_GTAODebugTest.farPlane);
-        LogToFile("[GTAO] invProj matrix (first 6 elements): [%f, %f, %f, %f, %f, %f]",
-                  g_GTAODebugTest.invProj[0], g_GTAODebugTest.invProj[1], 
-                  g_GTAODebugTest.invProj[2], g_GTAODebugTest.invProj[3],
-                  g_GTAODebugTest.invProj[4], g_GTAODebugTest.invProj[5]);
-        LogToFile("[GTAO] Extracted tanHalfFOVX=%f, tanHalfFOVY=%f", 
-                  tanHalfFOVX, tanHalfFOVY);
-        LogToFile("[GTAO] ndcToViewMul=[%f, %f], ndcToViewAdd=[%f, %f]",
-                  params->ndcToViewMul[0], params->ndcToViewMul[1],
-                  params->ndcToViewAdd[0], params->ndcToViewAdd[1]);
-        LogToFile("[GTAO] depthUnpackConsts=[%f, %f] (for %fkm far plane)",
-                  params->depthUnpackConsts[0], params->depthUnpackConsts[1],
-                  g_GTAODebugTest.farPlane / 1000.0f);
-        
-        LogToFile("[GTAO] ========================");
-        // === END LOGGING ===
-        
         context->Unmap(constantBuffer, 0);
     }
     
@@ -2710,8 +2455,8 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     ID3D11ShaderResourceView* srvs[2] = { depthSRV, normalSRV };
     context->CSSetShaderResources(0, 2, srvs);
     context->CSSetSamplers(0, 1, &pointSampler);  // Bind point sampler for Hi-Z
-    ID3D11UnorderedAccessView* uavs[2] = { aoUAV, debugNormalsUAV };
-    context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+    ID3D11UnorderedAccessView* uavs[1] = { aoUAV };
+    context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
     
     // 8x8 thread groups, so divide by 8 (not 16)
     UINT dispatchX = (width + 7) / 8;
@@ -2719,35 +2464,18 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     context->Dispatch(dispatchX, dispatchY, 1);
     context->Flush();
     
-    LogToFile("[GTAO] Compute shader dispatched: %dx%d (8x8 threads)", dispatchX, dispatchY);
-    
-    // Save debug view-space normals
-    snprintf(path, MAX_PATH, "%s\\normal_viewspace.png", outputDirectory ? outputDirectory : ".");
-    if (SaveNormalTextureAsPNG(debugNormalsTexture, path))
-    {
-        LogToFile("[GTAO] View-space normals saved: %s", path);
-    }
-    else
-    {
-        LogToFile("[GTAO] Failed to save view-space normals");
-    }
-    
     // Unbind
-    ID3D11UnorderedAccessView* nullUAV[2] = { nullptr, nullptr };
+    ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
     ID3D11ShaderResourceView* nullSRV[2] = { nullptr, nullptr };
     ID3D11SamplerState* nullSampler[1] = { nullptr };
-    context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
+    context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
     context->CSSetShaderResources(0, 2, nullSRV);
     context->CSSetSamplers(0, 1, nullSampler);
     context->CSSetShader(nullptr, nullptr, 0);
     
     // Save AO output
     snprintf(path, MAX_PATH, "%s\\ao_output.png", outputDirectory ? outputDirectory : ".");
-    if (SaveR32FloatTextureAsPNG(aoTexture, path, 1.0f))
-    {
-        LogToFile("[GTAO] AO output saved: %s", path);
-    }
-    else
+    if (!SaveR32FloatTextureAsPNG(aoTexture, path, 1.0f))
     {
         LogToFile("[GTAO] Failed to save AO output");
         success = false;
@@ -2757,7 +2485,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     constantBuffer->Release();
     aoShader->Release();
     aoUAV->Release();
-    debugNormalsUAV->Release();
     if (depthSRV) depthSRV->Release();
     if (normalSRV) normalSRV->Release();
     if (pointSampler) pointSampler->Release();
@@ -2765,7 +2492,6 @@ int CR_GTAODebugExecute(const char* outputDirectory)
     hiZConstantBuffer->Release();
     hiZTexture->Release();
     aoTexture->Release();
-    debugNormalsTexture->Release();
     context->Release();
     device->Release();
     

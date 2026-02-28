@@ -4,7 +4,6 @@
 Texture2D<float> g_DepthTexture : register(t0);
 Texture2D<float4> g_NormalTexture : register(t1);
 RWTexture2D<float> g_AOTexture : register(u0);
-RWTexture2D<float4> g_DebugViewNormals : register(u1);  // Debug: view-space normals
 
 SamplerState pointSampler : register(s0);  // Point sampler for Hi-Z depth sampling
 
@@ -108,30 +107,6 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     );
     float3 viewNormal = mul(worldToView, worldNormal);
     
-    // DEBUG: Write view normals to debug texture
-    g_DebugViewNormals[coord] = float4(viewNormal * 0.5 + 0.5, 1.0);
-    
-    // Diagnostic 1: View-space normals Y component
-    //g_AOTexture[coord] = viewNormal.y * 0.5 + 0.5; // Output Y component as greyscale
-    //return;
-    
-    // Diagnostic 2: View vector (direction to camera) Y component
-    // Uncomment to test view vector instead of normal
-    // g_AOTexture[coord] = viewVec.y * 0.5 + 0.5;
-    // return;
-    
-    // === TEMPORARY DEBUG VISUALIZATIONS (uncomment one to verify) ===
-    // 1. Verify viewZ linearization (should be smooth gradient, darker near camera)
-    // g_AOTexture[coord] = frac(-viewZ / 100.0); return;
-    
-    // 2. Verify view-space XY reconstruction (should show radial gradient from center)
-    // float2 viewXY = pos.xy / viewZ; // Divide by Z to get tan(theta)
-    // g_DebugViewNormals[coord] = float4(viewXY * 0.5 + 0.5, 0.5, 1.0); return;
-    
-    // 3. Verify view vector (should point toward camera, mostly blue/purple)
-    // g_DebugViewNormals[coord] = float4(viewVec * 0.5 + 0.5, 1.0); return;
-    // === END TEMPORARY DEBUG ===
-    
     // 4. Push toward camera (less negative Z) to avoid self-occlusion
     // Use 0.99999 for FP32 (0.01% offset = ~75 units at 750km far plane)
     viewZ *= 0.99999;
@@ -141,8 +116,6 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float2 pixelSizeAtViewZ = viewZ * NDCToViewMul * InvScreenSize;
     float screenSpaceRadius = EffectRadius / max(abs(pixelSizeAtViewZ.x), 0.0001);
     screenSpaceRadius = min(screenSpaceRadius, 50.0); // Max 50 pixels to prevent excessive sampling on distant grass
-    
-    // (Debug tests removed)
     
     // 6. Minimum sample distance (avoid self-sampling center pixel)
     const float pixelTooCloseThreshold = 1.3;

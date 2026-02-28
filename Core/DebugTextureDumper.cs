@@ -24,8 +24,6 @@ namespace CinematicRecorder.Core
                     string ffmpegPath = Path.Combine(pluginDataPath, "FFMpeg");
                     string dllPath = Path.Combine(pluginDataPath, "CinematicRecorderNative.dll");
 
-                    Debug.Log($"[DebugTextureDumper] Loading native DLL from: {dllPath}");
-
                     if (!Directory.Exists(ffmpegPath))
                     {
                         Debug.LogError($"[DebugTextureDumper] FFmpeg folder not found: {ffmpegPath}");
@@ -47,7 +45,6 @@ namespace CinematicRecorder.Core
                         return;
                     }
 
-                    Debug.Log("[DebugTextureDumper] Native DLL loaded successfully");
                 }
             }
             catch (Exception ex)
@@ -86,8 +83,6 @@ namespace CinematicRecorder.Core
         /// </summary>
         public static void PerformDump()
         {
-            Debug.Log("[DebugTextureDumper] PerformDump called");
-            
             Camera camera = Camera.main;
             if (camera == null)
             {
@@ -143,7 +138,6 @@ namespace CinematicRecorder.Core
             _camera.AddCommandBuffer(CameraEvent.BeforeImageEffectsOpaque, _normalCommandBuffer);
             
             _initialized = true;
-            Debug.Log("[DebugTextureDumper] Initialized");
         }
         
         void Update()
@@ -171,22 +165,11 @@ namespace CinematicRecorder.Core
             
             yield return null;
             
-            // Save C# side PNGs
-            string depthCSPath = Path.Combine(_outputDir, $"depth_{_timestamp}_cs.png");
-            string normalCSPath = Path.Combine(_outputDir, $"normal_{_timestamp}_cs.png");
-            
-            SaveRenderTextureAsPNG(_depthRT, depthCSPath, isDepth: true);
-            SaveRenderTextureAsPNG(_normalRT, normalCSPath, isDepth: false);
-            
-            Debug.Log($"[DebugTextureDumper] C# PNGs saved: {depthCSPath}, {normalCSPath}");
-            
             // Call native plugin
             try
             {
                 IntPtr depthPtr = _depthRT.GetNativeTexturePtr();
                 IntPtr normalPtr = _normalRT.GetNativeTexturePtr();
-                
-                Debug.Log($"[DebugTextureDumper] Passing to native: depth={depthPtr}, normal={normalPtr}");
                 
                 // Get camera projection matrix and convert to array for marshaling
                 // Use GL.GetGPUProjectionMatrix to get GPU-compatible matrix (handles coordinate conversion)
@@ -215,17 +198,11 @@ namespace CinematicRecorder.Core
                 worldToViewArray[7] = worldToCamera[2, 1];
                 worldToViewArray[8] = worldToCamera[2, 2];
                 
-                Debug.Log($"[DebugTextureDumper] Camera: near={_camera.nearClipPlane}, far={_camera.farClipPlane}");
-                
                 CR_GTAODebugSetInput(depthPtr, normalPtr, _depthRT.width, _depthRT.height,
                                      invProjArray, worldToViewArray, _camera.nearClipPlane, _camera.farClipPlane);
                 int result = CR_GTAODebugExecute(_outputDir);
                 
-                if (result == 0)
-                {
-                    Debug.Log("[DebugTextureDumper] Native plugin completed successfully");
-                }
-                else
+                if (result != 0)
                 {
                     Debug.LogError($"[DebugTextureDumper] Native plugin failed with code: {result}");
                 }
@@ -239,37 +216,6 @@ namespace CinematicRecorder.Core
             if (_depthRT != null) _depthRT.Release();
             if (_normalRT != null) _normalRT.Release();
             Destroy(gameObject);
-        }
-        
-        void SaveRenderTextureAsPNG(RenderTexture rt, string filename, bool isDepth = false)
-        {
-            // For depth (RFloat), convert to ARGB32 for PNG export while preserving original
-            if (isDepth && rt.format == RenderTextureFormat.RFloat)
-            {
-                RenderTexture tempRT = RenderTexture.GetTemporary(rt.width, rt.height, 0, RenderTextureFormat.ARGB32);
-                Graphics.Blit(rt, tempRT);
-                
-                RenderTexture.active = tempRT;
-                Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
-                tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-                tex.Apply();
-                File.WriteAllBytes(filename, tex.EncodeToPNG());
-                Destroy(tex);
-                RenderTexture.active = null;
-                
-                RenderTexture.ReleaseTemporary(tempRT);
-            }
-            else
-            {
-                // Normal path for ARGB32
-                RenderTexture.active = rt;
-                Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
-                tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-                tex.Apply();
-                File.WriteAllBytes(filename, tex.EncodeToPNG());
-                Destroy(tex);
-                RenderTexture.active = null;
-            }
         }
     }
 }
