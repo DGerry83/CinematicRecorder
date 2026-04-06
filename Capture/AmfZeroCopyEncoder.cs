@@ -46,7 +46,15 @@ namespace CinematicRecorder.Capture
                     IntPtr hModule = LoadLibrary(dllPath);
                     if (hModule == IntPtr.Zero)
                     {
-                        Debug.LogError($"[AmfZeroCopyEncoder] LoadLibrary failed: {Marshal.GetLastWin32Error()}");
+                        int error = Marshal.GetLastWin32Error();
+                        // Error 126 = missing dependency (expected on non-AMD systems)
+                        // Error 193 = wrong architecture (corrupted install)
+                        // Other errors = likely corrupted
+                        if (error != 126)
+                        {
+                            Debug.LogError($"[AmfZeroCopyEncoder] LoadLibrary failed: error {error}");
+                        }
+                        // Silently return for error 126 (driver dependency missing)
                         return;
                     }
 

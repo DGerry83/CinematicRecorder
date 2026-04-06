@@ -37,7 +37,15 @@ namespace CinematicRecorder.Capture
                     IntPtr hModule = LoadLibraryW(dllPath);
                     if (hModule == IntPtr.Zero)
                     {
-                        Debug.LogError($"[NvencZeroCopyEncoder] Failed to load native DLL: {Marshal.GetLastWin32Error()}");
+                        int error = Marshal.GetLastWin32Error();
+                        // Error 126 = missing dependency (expected on non-NVIDIA systems)
+                        // Error 193 = wrong architecture (corrupted install)
+                        // Other errors = likely corrupted
+                        if (error != 126)
+                        {
+                            Debug.LogError($"[NvencZeroCopyEncoder] Failed to load native DLL: error {error}");
+                        }
+                        // Silently return for error 126 (driver dependency missing)
                         return;
                     }
                     FreeLibrary(hModule);
