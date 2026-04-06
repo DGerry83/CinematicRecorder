@@ -355,7 +355,7 @@ namespace CinematicRecorder.Capture
                 // Apply jittered matrix for rendering
                 camera.projectionMatrix = jitteredMatrix;
 
-                Debug.Log($"[OfflineCapture] Jitter applied: subFrame={_currentSubFrameIndex}, offset=({h.x:F4}, {h.y:F4}), baseFOV={cameraToolsMatrix[1,1]:F4}");
+                // Debug.Log($"[OfflineCapture] Jitter applied: subFrame={_currentSubFrameIndex}, offset=({h.x:F4}, {h.y:F4}), baseFOV={cameraToolsMatrix[1,1]:F4}");
 
                 yield return CaptureTabSubFrame(_currentSubFrameIndex);
 
@@ -407,7 +407,7 @@ namespace CinematicRecorder.Capture
         // NEW: Capture single sub-frame for TAB accumulation
         private IEnumerator CaptureTabSubFrame(int subFrameIndex)
         {
-            Debug.Log($"[OfflineCapture] Starting sub-frame capture for index {subFrameIndex}");
+            // Debug.Log($"[OfflineCapture] Starting sub-frame capture for index {subFrameIndex}");
 
             int renderIdx = frameIndex % 2; // Still double-buffer for safety
 
@@ -417,7 +417,7 @@ namespace CinematicRecorder.Capture
             yield return new WaitForEndOfFrame();
 
             IntPtr nativeTexPtr = renderTextures[renderIdx].GetNativeTexturePtr();
-            Debug.Log($"[OfflineCapture] Got native texture pointer for sub-frame {subFrameIndex}: {nativeTexPtr}");
+            // Debug.Log($"[OfflineCapture] Got native texture pointer for sub-frame {subFrameIndex}: {nativeTexPtr}");
 
             // Submit to accumulation array
             if (usingNvencPath && nvencZeroCopyEncoder != null)
@@ -428,7 +428,9 @@ namespace CinematicRecorder.Capture
             {
                 bool success = zeroCopyEncoder.SubmitSubFrame(nativeTexPtr, subFrameIndex);
                 if (success)
-                    Debug.Log($"[OfflineCapture] Sub-frame {subFrameIndex} submitted successfully");
+                {
+                    // Debug.Log($"[OfflineCapture] Sub-frame {subFrameIndex} submitted successfully");
+                }
                 else
                     Debug.LogError($"[OfflineCapture] FAILED to submit sub-frame {subFrameIndex}");
             }
