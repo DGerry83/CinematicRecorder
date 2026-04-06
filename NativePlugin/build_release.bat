@@ -40,4 +40,15 @@ if errorlevel 1 (
 )
 
 echo Release build successful: build\CinematicRecorderNative.dll
+
+REM Deploy to KSP test installation
+set DEPLOY_PATH=C:\SSDGames\KSPReleaseTest\GameData\CinematicRecorder\PluginData
+if not exist "%DEPLOY_PATH%" mkdir "%DEPLOY_PATH%"
+copy /Y "build\CinematicRecorderNative.dll" "%DEPLOY_PATH%\"
+if errorlevel 1 (
+    echo Deploy failed!
+    exit /b 1
+)
+echo Deployed to: %DEPLOY_PATH%
+
 endlocal
