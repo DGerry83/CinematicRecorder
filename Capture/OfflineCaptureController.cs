@@ -676,8 +676,12 @@ namespace CinematicRecorder.Capture
                 QualityPreset = SessionState.NvencPreset, // 0,1,2 maps to P1,P4,P7
                 Codec = 1, // HEVC primary
                 GopSize = playbackFps * 2,
-                Reserved1 = 0,
-                Reserved2 = 0
+                EnableTAB = 0,
+                EnableCAS = 0,
+                EnableDither = 0,
+                TABSubFrameCount = 8,
+                CASSharpness = 0.0f,
+                _padding = 0
             };
 
             IntPtr firstTexturePtr = renderTextures[0].GetNativeTexturePtr();

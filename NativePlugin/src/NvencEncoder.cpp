@@ -1,4 +1,8 @@
 #include "NvencEncoder.h"
+#include "TemporalAccumulation.h"
+#include "CASSharpen.h"
+#include "../shaders/BlueNoiseDitherBytecode.h"
+#include "EmbeddedResources.h"
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
@@ -20,14 +24,25 @@ NvencEncoder::NvencEncoder()
     : m_hEncoder(nullptr), m_hNvencLib(nullptr), m_device(nullptr), m_context(nullptr),
       m_unityDevice(nullptr), m_usingSharedDevice(false), m_bufferIndex(0),
       m_bitstreamBuffer(nullptr), m_formatContext(nullptr), m_videoStream(nullptr),
-      m_frameCount(0), m_width(0), m_height(0), m_fps(0), m_initialized(false), m_isHEVC(false) {
+      m_frameCount(0), m_width(0), m_height(0), m_fps(0), m_initialized(false), m_isHEVC(false),
+      m_tabComputeShader(nullptr), m_casComputeShader(nullptr), m_ditherComputeShader(nullptr),
+      m_preComputeQuery(nullptr), m_postComputeQuery(nullptr),
+      m_blueNoiseTexture(nullptr), m_blueNoiseSRV(nullptr),
+      m_casParamsBuffer(nullptr), m_ditherParamsBuffer(nullptr),
+      m_isTabMode(false), m_currentAccumBuffer(0), m_currentSubFrame(0), m_tabSubFrameCount(8),
+      m_tabWeightBuffer(nullptr) {
     
     memset(m_encodeTextures, 0, sizeof(m_encodeTextures));
+    memset(m_accumulationArray, 0, sizeof(m_accumulationArray));
+    memset(m_accumulationSRV, 0, sizeof(m_accumulationSRV));
     memset(m_sharedHandles, 0, sizeof(m_sharedHandles));
     memset(m_registeredResources, 0, sizeof(m_registeredResources));
     memset(m_mappedInputs, 0, sizeof(m_mappedInputs));
     memset(m_errorBuffer, 0, sizeof(m_errorBuffer));
     memset(&m_nvencFunctions, 0, sizeof(m_nvencFunctions));
+    memset(m_intermediateTextures, 0, sizeof(m_intermediateTextures));
+    memset(m_intermediateSRV, 0, sizeof(m_intermediateSRV));
+    memset(m_intermediateUAV, 0, sizeof(m_intermediateUAV));
 }
 
 NvencEncoder::~NvencEncoder() {
@@ -83,7 +98,7 @@ bool NvencEncoder::LoadNvencLibrary() {
     
     m_hNvencLib = LoadLibraryA("nvEncodeAPI64.dll");
     if (!m_hNvencLib) {
-        SetError("Failed to load nvEncodeAPI64.dll (Error: %lu)", GetLastError());
+        LogDebug("nvEncodeAPI64.dll not found (expected on non-NVIDIA systems)");
         return false;
     }
     
@@ -296,6 +311,23 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     m_bitstreamBuffer = bitstreamBuffer.bitstreamBuffer;
     LogDebug("Bitstream buffer created");
     
+    // Initialize compute shaders (non-fatal)
+    InitializeComputeShaders();
+    
+    // Create intermediate textures for shader pipeline
+    if (!CreateIntermediateTextures(m_width, m_height)) {
+        return false;
+    }
+    
+    // Create blue noise texture (non-fatal)
+    CreateBlueNoiseTexture();
+    
+    // Create constant buffers (non-fatal)
+    CreateConstantBuffers();
+    
+    // Create accumulation array (non-fatal)
+    CreateAccumulationArray(m_width, m_height);
+    
     // Create encode textures
     D3D11_TEXTURE2D_DESC texDesc = {};
     texDesc.Width = m_width;
@@ -422,9 +454,17 @@ bool NvencEncoder::Initialize(ID3D11Device* unityDevice, ID3D11Texture2D* textur
     return true;
 }
 
-bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex) {
+bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex, bool enableCAS, float sharpness) {
+    std::lock_guard<std::mutex> lock(m_encodeMutex);
+    
     if (!m_initialized) return false;
     
+    // Use CAS preprocessing path if enabled and shader is available
+    if (enableCAS && m_casComputeShader) {
+        return EncodeFrameWithCAS(unityTexture, frameIndex, sharpness);
+    }
+    
+    // Otherwise use original direct path
     int idx = m_bufferIndex;
     m_bufferIndex = 1 - idx;
     
@@ -462,42 +502,8 @@ bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex
         LogDebug("Frame %lld - CopyResource completed", frameIndex);
     }
     
-    // Map input resource
-    NV_ENC_MAP_INPUT_RESOURCE mapRes = {};
-    mapRes.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
-    mapRes.registeredResource = m_registeredResources[idx];
-    
-    NVENCSTATUS status = m_nvencFunctions.nvEncMapInputResource(m_hEncoder, &mapRes);
-    if (status != NV_ENC_SUCCESS) {
-        SetError("nvEncMapInputResource failed: %s", NvencStatusToString(status));
-        return false;
-    }
-    m_mappedInputs[idx] = mapRes.mappedResource;
-    LogDebug("Frame %lld - Mapped input: %p, Format: %d", frameIndex, mapRes.mappedResource, mapRes.mappedBufferFmt);
-    
-    // Encode picture
-    NV_ENC_PIC_PARAMS picParams = {};
-    picParams.version = NV_ENC_PIC_PARAMS_VER;
-    picParams.inputBuffer = m_mappedInputs[idx];
-    picParams.outputBitstream = m_bitstreamBuffer;
-    picParams.inputWidth = m_width;
-    picParams.inputHeight = m_height;
-    picParams.bufferFmt = NV_ENC_BUFFER_FORMAT_ARGB;
-    picParams.frameIdx = (uint32_t)frameIndex;
-    
-    status = m_nvencFunctions.nvEncEncodePicture(m_hEncoder, &picParams);
-    
-    // Unmap immediately after encode
-    m_nvencFunctions.nvEncUnmapInputResource(m_hEncoder, m_mappedInputs[idx]);
-    m_mappedInputs[idx] = nullptr;
-    
-    if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
-        SetError("nvEncEncodePicture failed: %s", NvencStatusToString(status));
-        return false;
-    }
-    LogDebug("Frame %lld - EncodePicture submitted", frameIndex);
-    
-    return ProcessOutput();
+    // Use the extracted EncodeNVENC method
+    return EncodeNVENC(idx, frameIndex);
 }
 
 bool NvencEncoder::ProcessOutput() {
@@ -563,8 +569,457 @@ bool NvencEncoder::ProcessOutput() {
     return true;
 }
 
+bool NvencEncoder::InitializeComputeShaders() {
+    HRESULT hr;
+    
+    // TAB shader
+    hr = m_device->CreateComputeShader(
+        g_TemporalAccumulationCS, 
+        sizeof(g_TemporalAccumulationCS),
+        nullptr, 
+        &m_tabComputeShader
+    );
+    if (FAILED(hr)) {
+        LogDebug("Failed to create TAB compute shader: 0x%08X", hr);
+        // Non-fatal - can still encode without preprocessing
+    }
+    
+    // CAS shader
+    hr = m_device->CreateComputeShader(
+        g_CASSharpenCS,
+        sizeof(g_CASSharpenCS),
+        nullptr,
+        &m_casComputeShader
+    );
+    if (FAILED(hr)) {
+        LogDebug("Failed to create CAS compute shader: 0x%08X", hr);
+    }
+    
+    // Dither shader - NOTE: uses g_main, not g_BlueNoiseDitherCS
+    hr = m_device->CreateComputeShader(
+        g_main,
+        sizeof(g_main),
+        nullptr,
+        &m_ditherComputeShader
+    );
+    if (FAILED(hr)) {
+        LogDebug("Failed to create dither compute shader: 0x%08X", hr);
+    }
+    
+    // Create sync queries
+    D3D11_QUERY_DESC queryDesc = {};
+    queryDesc.Query = D3D11_QUERY_EVENT;
+    m_device->CreateQuery(&queryDesc, &m_preComputeQuery);
+    m_device->CreateQuery(&queryDesc, &m_postComputeQuery);
+    
+    return true;  // Non-fatal - can encode without shaders
+}
+
+bool NvencEncoder::CreateIntermediateTextures(int width, int height) {
+    for (int i = 0; i < 2; i++) {
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+        
+        HRESULT hr = m_device->CreateTexture2D(&desc, nullptr, &m_intermediateTextures[i]);
+        if (FAILED(hr)) {
+            SetError("Failed to create intermediate texture %d", i);
+            return false;
+        }
+        
+        // Create SRV
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        
+        hr = m_device->CreateShaderResourceView(m_intermediateTextures[i], &srvDesc, &m_intermediateSRV[i]);
+        if (FAILED(hr)) return false;
+        
+        // Create UAV
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Texture2D.MipSlice = 0;
+        
+        hr = m_device->CreateUnorderedAccessView(m_intermediateTextures[i], &uavDesc, &m_intermediateUAV[i]);
+        if (FAILED(hr)) return false;
+    }
+    
+    return true;
+}
+
+bool NvencEncoder::CreateBlueNoiseTexture() {
+    // g_BlueNoise256x256R8 is defined in EmbeddedResources.h (65536 bytes = 256x256 R8)
+    
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = 256;
+    desc.Height = 256;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = g_BlueNoise256x256R8;
+    initData.SysMemPitch = 256;
+    
+    HRESULT hr = m_device->CreateTexture2D(&desc, &initData, &m_blueNoiseTexture);
+    if (FAILED(hr)) {
+        LogDebug("Failed to create blue noise texture: 0x%08X", hr);
+        return false;
+    }
+    
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    
+    hr = m_device->CreateShaderResourceView(m_blueNoiseTexture, &srvDesc, &m_blueNoiseSRV);
+    if (FAILED(hr)) {
+        LogDebug("Failed to create blue noise SRV: 0x%08X", hr);
+        return false;
+    }
+    
+    LogDebug("Blue noise texture created successfully (256x256 R8)");
+    return true;
+}
+
+bool NvencEncoder::CreateConstantBuffers() {
+    D3D11_BUFFER_DESC desc = {};
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    
+    // CAS params (16 bytes)
+    desc.ByteWidth = 16;
+    if (FAILED(m_device->CreateBuffer(&desc, nullptr, &m_casParamsBuffer))) {
+        return false;
+    }
+    
+    // Dither params (16 bytes)
+    if (FAILED(m_device->CreateBuffer(&desc, nullptr, &m_ditherParamsBuffer))) {
+        return false;
+    }
+    
+    return true;
+}
+
+void NvencEncoder::HardSyncGPU(ID3D11Query* query, const char* stageName) {
+    if (!query) return;
+    
+    m_context->End(query);
+    
+    DWORD startTime = GetTickCount();
+    while (S_FALSE == m_context->GetData(query, nullptr, 0, 0)) {
+        Sleep(1);
+        if (GetTickCount() - startTime > 5000) {
+            LogDebug("[NVENC] GPU sync timeout in %s", stageName);
+            break;
+        }
+    }
+}
+
+bool NvencEncoder::EncodeNVENC(int idx, int64_t frameIndex) {
+    // Map input resource
+    NV_ENC_MAP_INPUT_RESOURCE mapRes = {};
+    mapRes.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
+    mapRes.registeredResource = m_registeredResources[idx];
+    
+    NVENCSTATUS status = m_nvencFunctions.nvEncMapInputResource(m_hEncoder, &mapRes);
+    if (status != NV_ENC_SUCCESS) {
+        SetError("nvEncMapInputResource failed: %s", NvencStatusToString(status));
+        return false;
+    }
+    m_mappedInputs[idx] = mapRes.mappedResource;
+    
+    // Encode picture
+    NV_ENC_PIC_PARAMS picParams = {};
+    picParams.version = NV_ENC_PIC_PARAMS_VER;
+    picParams.inputBuffer = m_mappedInputs[idx];
+    picParams.outputBitstream = m_bitstreamBuffer;
+    picParams.inputWidth = m_width;
+    picParams.inputHeight = m_height;
+    picParams.bufferFmt = NV_ENC_BUFFER_FORMAT_ARGB;
+    picParams.frameIdx = (uint32_t)frameIndex;
+    
+    status = m_nvencFunctions.nvEncEncodePicture(m_hEncoder, &picParams);
+    
+    // Unmap immediately after encode
+    m_nvencFunctions.nvEncUnmapInputResource(m_hEncoder, m_mappedInputs[idx]);
+    m_mappedInputs[idx] = nullptr;
+    
+    if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
+        SetError("nvEncEncodePicture failed: %s", NvencStatusToString(status));
+        return false;
+    }
+    
+    return ProcessOutput();
+}
+
+bool NvencEncoder::EncodeFrameWithCAS(ID3D11Texture2D* unityTexture, int64_t frameIndex, float sharpness) {
+    int idx = m_bufferIndex;
+    m_bufferIndex = 1 - idx;
+    
+    // Step 1: Copy Unity texture to intermediate[0]
+    m_context->CopyResource(m_intermediateTextures[0], unityTexture);
+    m_context->Flush();
+    
+    // Step 2: Run CAS shader
+    // Update constant buffer
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(m_context->Map(m_casParamsBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        struct CASParams {
+            float sharpness;
+            float padding[3];
+        } params = { sharpness, {0,0,0} };
+        memcpy(mapped.pData, &params, sizeof(params));
+        m_context->Unmap(m_casParamsBuffer, 0);
+    }
+    
+    // Bind shader
+    m_context->CSSetShader(m_casComputeShader, nullptr, 0);
+    m_context->CSSetConstantBuffers(0, 1, &m_casParamsBuffer);
+    m_context->CSSetShaderResources(0, 1, &m_intermediateSRV[0]);
+    m_context->CSSetUnorderedAccessViews(0, 1, &m_intermediateUAV[1], nullptr);
+    
+    // Dispatch
+    UINT dispatchX = (m_width + 15) / 16;
+    UINT dispatchY = (m_height + 15) / 16;
+    m_context->Dispatch(dispatchX, dispatchY, 1);
+    
+    // Hard sync
+    HardSyncGPU(m_postComputeQuery, "CAS");
+    
+    // Unbind (MANDATORY - prevents D3D11 resource hazards)
+    ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+    ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+    ID3D11Buffer* nullCB[1] = { nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+    m_context->CSSetShaderResources(0, 1, nullSRV);
+    m_context->CSSetConstantBuffers(0, 1, nullCB);
+    m_context->CSSetShader(nullptr, nullptr, 0);
+    m_context->Flush();
+    
+    // Step 3: Copy result to encode texture
+    m_context->CopyResource(m_encodeTextures[idx], m_intermediateTextures[1]);
+    m_context->Flush();
+    
+    // Step 4: NVENC encode
+    return EncodeNVENC(idx, frameIndex);
+}
+
+bool NvencEncoder::CreateAccumulationArray(int width, int height) {
+    for (int i = 0; i < 2; i++) {
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 8;  // 8 slices for sub-frames
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        
+        HRESULT hr = m_device->CreateTexture2D(&desc, nullptr, &m_accumulationArray[i]);
+        if (FAILED(hr)) {
+            SetError("Failed to create accumulation array %d", i);
+            return false;
+        }
+        
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        srvDesc.Texture2DArray.MipLevels = 1;
+        srvDesc.Texture2DArray.ArraySize = 8;
+        
+        hr = m_device->CreateShaderResourceView(m_accumulationArray[i], &srvDesc, &m_accumulationSRV[i]);
+        if (FAILED(hr)) {
+            SetError("Failed to create accumulation SRV %d", i);
+            return false;
+        }
+    }
+    
+    // Create weight buffer
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = 48;  // 8 floats weights + 1 float total + padding
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    
+    if (FAILED(m_device->CreateBuffer(&cbDesc, nullptr, &m_tabWeightBuffer))) {
+        SetError("Failed to create TAB weight buffer");
+        return false;
+    }
+    
+    return true;
+}
+
+bool NvencEncoder::SubmitSubFrame(ID3D11Texture2D* unityTexture, int sliceIndex) {
+    if (!m_initialized || !unityTexture) return false;
+    if (sliceIndex < 0 || sliceIndex >= 8) return false;
+    
+    // Copy to specific slice of accumulation array
+    UINT subResource = D3D11CalcSubresource(0, sliceIndex, 1);
+    m_context->CopySubresourceRegion(
+        m_accumulationArray[m_currentAccumBuffer],
+        subResource,
+        0, 0, 0,
+        unityTexture,
+        0,
+        nullptr
+    );
+    m_context->Flush();
+    
+    return true;
+}
+
+void NvencEncoder::SetTabMode(bool enabled, int subFrameCount) {
+    m_isTabMode = enabled;
+    m_tabSubFrameCount = subFrameCount;
+    m_currentAccumBuffer = 0;
+    m_currentSubFrame = 0;
+}
+
+bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
+    int idx = m_bufferIndex;
+    m_bufferIndex = 1 - idx;
+    
+    // Step 1: Run TAB shader to average accumulated sub-frames
+    // Update weight buffer with Gaussian weights
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(m_context->Map(m_tabWeightBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        // Simple uniform weights for now (can be made Gaussian later)
+        float* weights = (float*)mapped.pData;
+        int count = m_tabSubFrameCount > 0 ? m_tabSubFrameCount : 8;
+        float weight = 1.0f / count;
+        for (int i = 0; i < 8; i++) {
+            weights[i] = (i < count) ? weight : 0.0f;
+        }
+        weights[8] = 1.0f;  // Total weight
+        m_context->Unmap(m_tabWeightBuffer, 0);
+    }
+    
+    // Bind TAB shader
+    m_context->CSSetShader(m_tabComputeShader, nullptr, 0);
+    m_context->CSSetConstantBuffers(0, 1, &m_tabWeightBuffer);
+    m_context->CSSetShaderResources(0, 1, &m_accumulationSRV[m_currentAccumBuffer]);
+    m_context->CSSetUnorderedAccessViews(0, 1, &m_intermediateUAV[0], nullptr);
+    
+    // Dispatch
+    UINT dispatchX = (m_width + 15) / 16;
+    UINT dispatchY = (m_height + 15) / 16;
+    m_context->Dispatch(dispatchX, dispatchY, 1);
+    
+    // Hard sync
+    HardSyncGPU(m_postComputeQuery, "TAB");
+    
+    // Unbind TAB resources
+    ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+    ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+    ID3D11Buffer* nullCB[1] = { nullptr };
+    m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+    m_context->CSSetShaderResources(0, 1, nullSRV);
+    m_context->CSSetConstantBuffers(0, 1, nullCB);
+    
+    // Step 2: Run CAS if enabled
+    int outputIdx = 0;
+    if (sharpness > 0.0f && m_casComputeShader) {
+        // Update CAS params
+        if (SUCCEEDED(m_context->Map(m_casParamsBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            struct CASParams {
+                float sharpness;
+                float padding[3];
+            } params = { sharpness, {0,0,0} };
+            memcpy(mapped.pData, &params, sizeof(params));
+            m_context->Unmap(m_casParamsBuffer, 0);
+        }
+        
+        // Bind CAS shader
+        m_context->CSSetShader(m_casComputeShader, nullptr, 0);
+        m_context->CSSetConstantBuffers(0, 1, &m_casParamsBuffer);
+        m_context->CSSetShaderResources(0, 1, &m_intermediateSRV[0]);
+        m_context->CSSetUnorderedAccessViews(0, 1, &m_intermediateUAV[1], nullptr);
+        
+        m_context->Dispatch(dispatchX, dispatchY, 1);
+        HardSyncGPU(m_postComputeQuery, "CAS");
+        
+        // Unbind CAS resources
+        m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+        m_context->CSSetShaderResources(0, 1, nullSRV);
+        m_context->CSSetConstantBuffers(0, 1, nullCB);
+        
+        outputIdx = 1;  // CAS output is in intermediate[1]
+    }
+    
+    // Unbind shader
+    m_context->CSSetShader(nullptr, nullptr, 0);
+    m_context->Flush();
+    
+    // Step 3: Copy result to encode texture
+    m_context->CopyResource(m_encodeTextures[idx], m_intermediateTextures[outputIdx]);
+    m_context->Flush();
+    
+    // Step 4: NVENC encode
+    return EncodeNVENC(idx, frameIndex);
+}
+
 void NvencEncoder::Shutdown() {
     LogDebug("Shutting down NVENC encoder");
+    
+    // Cleanup compute shaders
+    if (m_tabComputeShader) { 
+        m_tabComputeShader->Release(); 
+        m_tabComputeShader = nullptr; 
+    }
+    if (m_casComputeShader) { 
+        m_casComputeShader->Release(); 
+        m_casComputeShader = nullptr; 
+    }
+    if (m_ditherComputeShader) { 
+        m_ditherComputeShader->Release(); 
+        m_ditherComputeShader = nullptr; 
+    }
+
+    // Cleanup queries
+    if (m_preComputeQuery) { 
+        m_preComputeQuery->Release(); 
+        m_preComputeQuery = nullptr; 
+    }
+    if (m_postComputeQuery) { 
+        m_postComputeQuery->Release(); 
+        m_postComputeQuery = nullptr; 
+    }
+
+    // Cleanup intermediate textures
+    for (int i = 0; i < 2; i++) {
+        if (m_intermediateUAV[i]) { m_intermediateUAV[i]->Release(); m_intermediateUAV[i] = nullptr; }
+        if (m_intermediateSRV[i]) { m_intermediateSRV[i]->Release(); m_intermediateSRV[i] = nullptr; }
+        if (m_intermediateTextures[i]) { m_intermediateTextures[i]->Release(); m_intermediateTextures[i] = nullptr; }
+    }
+
+    // Cleanup blue noise
+    if (m_blueNoiseSRV) { m_blueNoiseSRV->Release(); m_blueNoiseSRV = nullptr; }
+    if (m_blueNoiseTexture) { m_blueNoiseTexture->Release(); m_blueNoiseTexture = nullptr; }
+
+    // Cleanup constant buffers
+    if (m_casParamsBuffer) { m_casParamsBuffer->Release(); m_casParamsBuffer = nullptr; }
+    if (m_ditherParamsBuffer) { m_ditherParamsBuffer->Release(); m_ditherParamsBuffer = nullptr; }
+    
+    // Cleanup accumulation array
+    for (int i = 0; i < 2; i++) {
+        if (m_accumulationSRV[i]) { m_accumulationSRV[i]->Release(); m_accumulationSRV[i] = nullptr; }
+        if (m_accumulationArray[i]) { m_accumulationArray[i]->Release(); m_accumulationArray[i] = nullptr; }
+    }
+    if (m_tabWeightBuffer) { m_tabWeightBuffer->Release(); m_tabWeightBuffer = nullptr; }
     
     if (m_hEncoder) {
         // Flush encoder
@@ -713,6 +1168,46 @@ __declspec(dllexport) int CR_ShutdownNvencEncoder(void* encoderHandle)
     NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
     encoder->Shutdown();
     delete encoder;
+    return 0;
+}
+
+__declspec(dllexport) int CR_NvencSubmitSubFrame(
+    void* encoderHandle,
+    ID3D11Texture2D* texture,
+    int sliceIndex)
+{
+    if (!encoderHandle) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Null encoder handle", _TRUNCATE);
+        return -1;
+    }
+    NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
+    return encoder->SubmitSubFrame(texture, sliceIndex) ? 0 : -1;
+}
+
+__declspec(dllexport) int CR_NvencFinalizeTemporalFrame(
+    void* encoderHandle,
+    long long frameIndex,
+    float sharpness)
+{
+    if (!encoderHandle) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Null encoder handle", _TRUNCATE);
+        return -1;
+    }
+    NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
+    return encoder->FinalizeTemporalFrame(frameIndex, sharpness) ? 0 : -1;
+}
+
+__declspec(dllexport) int CR_NvencSetTabMode(
+    void* encoderHandle,
+    int enabled,
+    int subFrameCount)
+{
+    if (!encoderHandle) {
+        strncpy_s(g_errorBuffer, sizeof(g_errorBuffer), "[NVENC] Null encoder handle", _TRUNCATE);
+        return -1;
+    }
+    NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
+    encoder->SetTabMode(enabled != 0, subFrameCount);
     return 0;
 }
 
