@@ -126,11 +126,9 @@ namespace CinematicRecorder.Core
                 throw new MissingMethodException("Could not find RestoreMainCamera method");
 
             MethodInfo prefix = typeof(HullCamPatches).GetMethod("RestoreMain_Prefix");
-            MethodInfo postfix = typeof(HullCamPatches).GetMethod("RestoreMain_Postfix");
 
             harmony.Patch(restoreMethod,
-                prefix: new HarmonyMethod(prefix),
-                postfix: new HarmonyMethod(postfix));
+                prefix: new HarmonyMethod(prefix));
         }
     }
 }
