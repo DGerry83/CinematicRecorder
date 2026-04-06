@@ -43,6 +43,5 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     accumulated /= TotalWeight;
     
     // Saturate for UNORM output (R8G8B8A8_UNORM)
-    // The encoder texture expects 0-1 range, R16G16B16A16_FLOAT input may have values outside this range
     g_OutputTexture[coord] = saturate(accumulated);
 }

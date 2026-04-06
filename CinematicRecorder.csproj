@@ -60,6 +60,7 @@
     <Compile Include="Core\CameraPanelConfig.cs" />
     <Compile Include="Core\CinematicRecorderAddon.cs" />
     <Compile Include="Core\DeterministicCaptureSession.cs" />
+    <Compile Include="Core\HaltonSequence.cs" />
     <Compile Include="Core\HarmonyBootstrap.cs" />
     <Compile Include="Core\SafetyMonitor.cs" />
     <Compile Include="Core\ZoomController\CameraToolsZoomController.cs" />
@@ -91,6 +92,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="UI\AdvancedCameraOptionsWindow.cs" />
     <Compile Include="UI\AdvancedOptionsWindow.cs" />
+    <Compile Include="UI\AdvancedSettingsWindow.cs" />
     <Compile Include="UI\CameraPanelController.cs" />
     <Compile Include="UI\CameraPanelPreset.cs" />
     <Compile Include="UI\CameraSlotManager.cs" />

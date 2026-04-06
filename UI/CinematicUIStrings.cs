@@ -89,6 +89,15 @@
             public const string QualityHigh = "High Quality";
             public const string QualityCompressed = "Compressed";
 
+            // Temporal Accumulation Blur Strings
+            public const string TemporalAccumulationToggle = " Temporal Accumulation Blur";
+            public const string TemporalAccumulationTooltip = "Simulates motion blur by accumulating multiple sub-frames per output frame. Only available with GPU encoding. 180° shutter simulation at default settings.";
+            public const string ShutterSoftnessLabel = "Shutter Softness:";
+            public const string EffectiveShutterFormat = "Effective Shutter: {0}°";
+            public const string EffectiveShutter180 = "180°";
+            public const string SubFrameCountLabel = "Sub-frames: {0}";
+            public const string TabAMFOnlyWarning = "Temporal Accumulation requires AMD encoder (NVENC support coming soon).";
+
             // PNG Sequence Strings
             public const string PngSequenceToggle = " PNG Sequence";
             public const string PngSequenceTooltip = "Output individual PNG frames. Forces software encoding and disables hardware acceleration.";
@@ -134,6 +143,38 @@
             // Advanced Camera Settings Panel
             public const string AdvancedCameraButton = "Adv. Camera";
             public const string AdvancedCameraHeader = "Advanced Camera Settings";
+        }
+
+        public static class AdvancedSettings
+        {
+            public const string WindowTitle = "Advanced Settings";
+            public const string EncodingTab = "Encoding";
+            public const string RenderingTab = "Rendering";
+            
+            // Encoding tab
+            public const string SafeModeToggle = " Safe Mode (CPU Encoding)";
+            public const string SafeModeTooltip = "Forces CPU-based x264 encoding. Use this if you experience issues with the GPU paths.";
+            public const string AudioCaptureToggle = " Enable Audio Capture";
+            public const string AudioCaptureTooltip = "Records synchronized WAV audio alongside video. Does not work above 30fps capture rates.";
+            public const string PngSequenceToggle = " PNG Sequence Mode";
+            public const string PngSequenceTooltip = "Outputs individual PNG frames. Forces software encoding and disables hardware acceleration.";
+            
+            // Rendering tab
+            public const string TemporalAccumulationToggle = " Temporal Accumulation Blur";
+            public const string TemporalAccumulationTooltip = "Simulates motion blur by accumulating multiple sub-frames per output frame. Only available with GPU encoding.";
+            public const string ShutterSoftnessLabel = "Shutter Softness:";
+            public const string EffectiveShutterFormat = "Effective Shutter: {0}°";
+            public const string EffectiveShutter180 = "180°";
+            public const string SubFrameCountLabel = "Sub-frames: {0}";
+            public const string TabAMFOnlyWarning = "Temporal Accumulation requires AMD encoder (NVENC support coming soon).";
+            public const string GradientProtectionToggle = " Gradient Protection";
+            public const string GradientProtectionTooltip = "Reduces color banding in dark areas. Only available with AMD encoder.";
+            public const string AMFOnlyWarning = "Advanced options require AMD encoder.";
+            
+            // Sharpening (only when TAB enabled)
+            public const string SharpeningToggle = " Sharpening";
+            public const string SharpeningTooltip = "Applies contrast-adaptive sharpening to counteract TAB softness.";
+            public const string SharpeningStrengthLabel = "Sharpness: {0:F0}%";
         }
 
         public static class AdvancedCameraOptions

@@ -19,12 +19,14 @@ namespace CinematicRecorder.Core
         public static bool PngSequence { get; set; } = false;
         public static bool EnableAudioCapture { get; set; } = false;
         #endregion
+
         #region Encoder Selection
         /// <summary>
         /// Selected encoder: 0=AMF (AMD HEVC), 1=NVENC (NVIDIA HEVC), 2=CPU (x264)
         /// </summary>
         public static int SelectedEncoderTab { get; set; } = 0;
         #endregion
+
         #region AMF Settings
         public static float AmfQualitySlider { get; set; } = 0.5f; // Quality ↔ File Size slider (0–1)
 
@@ -45,6 +47,7 @@ namespace CinematicRecorder.Core
         /// </summary>
         public static int AmfCqpValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, AmfQualitySlider));
         #endregion
+
         #region NVENC Settings
         public static float NvencQualitySlider { get; set; } = 0.5f;
         /// <summary>
@@ -62,6 +65,7 @@ namespace CinematicRecorder.Core
         /// </summary>
         public static int NvencCqValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, NvencQualitySlider));
         #endregion
+
         #region CPU Settings  
         public static float CpuQualitySlider { get; set; } = 0.5f;
         /// <summary>
@@ -79,12 +83,14 @@ namespace CinematicRecorder.Core
         /// </summary>
         public static int CpuCrfValue => Mathf.RoundToInt(Mathf.Lerp(24f, 0f, CpuQualitySlider));
         #endregion
+
         #region Ramp Configuration
         public static float RampDurationDefault { get; set; } = 0.5f;  // 0.1 to 3.0 seconds
         public static float RampExponent { get; set; } = 2.0f;         // 0.3 (rush start) to 3.0 (rush end)
         public const float RampExponentMin = 0.05f;
         public const float RampExponentMax = 3.0f;
         #endregion
+
         #region CameraTools Integration
         /// <summary>
         /// When true, pathing cameras advance by video frame time (1/60s per frame).
@@ -93,6 +99,39 @@ namespace CinematicRecorder.Core
         /// </summary>
         public static bool CameraPathPlaybackTiming { get; set; } = false;
         #endregion
+
+        #region Temporal Accumulation
+        /// <summary>
+        /// Enable Temporal Accumulation Blur (motion blur via sub-frame accumulation).
+        /// Only available with GPU zero-copy encoders (AMF/NVENC).
+        /// </summary>
+        public static bool EnableTemporalAccumulation { get; set; } = false;
+
+        /// <summary>
+        /// Number of sub-frames to accumulate per output frame (default 8 for 180° shutter at 60fps).
+        /// Higher values = smoother blur but more GPU memory and processing time.
+        /// </summary>
+        public static int TabSubFrameCount { get; set; } = 8;
+
+        /// <summary>
+        /// Gaussian sigma for sub-frame weighting (default 1.5).
+        /// Lower = sharper center weight, Higher = more even distribution.
+        /// </summary>
+        public static float TabSigma { get; set; } = 1.5f;
+
+        /// <summary>
+        /// Enable sharpening filter (unsharp mask) on TAB output.
+        /// Helps counteract the softness introduced by temporal accumulation.
+        /// </summary>
+        public static bool TabEnableSharpening { get; set; } = false;
+
+        /// <summary>
+        /// Sharpening strength (0.0 to 0.5). Default 0.25.
+        /// Higher values = stronger sharpening effect.
+        /// </summary>
+        public static float TabSharpeningStrength { get; set; } = 0.25f;
+        #endregion
+
         #region Utility Methods
         public static void ResetCaptureSettings()
         {

@@ -27,23 +27,36 @@ namespace CinematicRecorder.UI
 
         private GUIStyle windowStyle;
         private bool stylesInitialized;
-        private bool showAdvancedPanel = false;
+        private AdvancedSettingsWindow advancedSettingsWindow;
 
         private readonly int[] frameratePresets = { 24, 30, 48, 60, 120, 240, 384 };
         private readonly string[] encoderTabNames = { Settings.EncoderAMD, Settings.EncoderNVIDIA, Settings.EncoderCPU };
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
         #endregion
+
         #region Unity Lifecycle
+        void Start()
+        {
+            advancedSettingsWindow = gameObject.AddComponent<AdvancedSettingsWindow>();
+            advancedSettingsWindow.Initialize(this);
+        }
+
+        void OnDestroy()
+        {
+            if (advancedSettingsWindow != null)
+            {
+                Destroy(advancedSettingsWindow);
+            }
+        }
+
         private void OnGUI()
         {
             if (!renderDisplay) return;
 
             if (Event.current.type == EventType.Layout)
             {
-                float targetWidth = showAdvancedPanel
-                    ? (CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH + CinematicUIResources.Layout.Settings.ADVANCED_PANEL_WIDTH + 10)
-                    : CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH;
+                float targetWidth = CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH;
                 windowRect.width = Mathf.Lerp(windowRect.width, targetWidth, 0.25f);
                 if (Mathf.Abs(windowRect.width - targetWidth) < 1f)
                     windowRect.width = targetWidth;
@@ -65,6 +78,7 @@ namespace CinematicRecorder.UI
             );
         }
         #endregion
+
         #region Initialization
         private void InitStyles()
         {
@@ -73,6 +87,7 @@ namespace CinematicRecorder.UI
             stylesInitialized = true;
         }
         #endregion
+
         #region Window Layout
         private void DrawWindow(int id)
         {
@@ -84,21 +99,22 @@ namespace CinematicRecorder.UI
 
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Settings.ADVANCED_TOGGLE_WIDTH));
             GUIStyle advStyle = CinematicUIResources.Styles.Button();
-            if (showAdvancedPanel)
+            bool advancedVisible = advancedSettingsWindow != null && advancedSettingsWindow.IsVisible;
+            if (advancedVisible)
             {
                 advStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
                 advStyle.fontStyle = FontStyle.Bold;
             }
 
-            string arrow = showAdvancedPanel ? Common.arrowL : Common.arrowR;
+            string arrow = advancedVisible ? Common.arrowL : Common.arrowR;
             string buttonText = arrow + Settings.AdvancedButton;
             if (GUILayout.Button(buttonText, advStyle, GUILayout.Height(CinematicUIResources.Layout.Settings.ADVANCED_TOGGLE_HEIGHT)))
             {
-                showAdvancedPanel = !showAdvancedPanel;
+                ToggleAdvancedSettingsWindow();
             }
             GUILayout.EndVertical();
             GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
+            
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH - CinematicUIResources.Spacing.NORMAL * 2));
 
             DrawCaptureTimingSection();
@@ -109,21 +125,29 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawRecordButton();
             GUILayout.EndVertical();
-
-            if (showAdvancedPanel)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT / 2);
-                GUI.color = CinematicUIResources.Colors.SEPARATOR_GRAY;
-                GUILayout.Box("", GUILayout.Width(CinematicUIResources.Layout.SEPARATOR_LINE_WIDTH), GUILayout.ExpandHeight(true));
-                GUI.color = Color.white;
-                GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
-
-                GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Settings.ADVANCED_PANEL_WIDTH - CinematicUIResources.Layout.Settings.ADVANCED_MARGIN));
-                DrawAdvancedContent();
-                GUILayout.EndVertical();
-            }
-            GUILayout.EndHorizontal();
+            
             GUI.DragWindow();
+        }
+
+        private void ToggleAdvancedSettingsWindow()
+        {
+            if (advancedSettingsWindow == null)
+            {
+                advancedSettingsWindow = gameObject.AddComponent<AdvancedSettingsWindow>();
+                advancedSettingsWindow.Initialize(this);
+                advancedSettingsWindow.Show();
+            }
+            else
+            {
+                if (advancedSettingsWindow.IsVisible)
+                {
+                    advancedSettingsWindow.Hide();
+                }
+                else
+                {
+                    advancedSettingsWindow.Show();
+                }
+            }
         }
         private void DrawRecordButton()
         {
@@ -167,6 +191,7 @@ namespace CinematicRecorder.UI
                     zeroCopy);
         }
         #endregion
+
         #region Status Display
         private void DrawStatusSection()
         {
@@ -257,6 +282,7 @@ namespace CinematicRecorder.UI
                 style.normal.textColor = Color.cyan;
         }
         #endregion
+
         #region Capture Settings
         private void DrawCaptureTimingSection()
         {
@@ -330,6 +356,7 @@ namespace CinematicRecorder.UI
             GUILayout.EndHorizontal();
         }
         #endregion
+
         #region Encoding Settings
         private void DrawEncodingFoldout()
         {
@@ -544,176 +571,24 @@ namespace CinematicRecorder.UI
             SessionState.CpuPreset = selectedSpeed;
         }
         #endregion
-        #region Advanced Panel
-        private void DrawAdvancedContent()
-        {
-            GUIStyle headerStyle = CinematicUIResources.Styles.Header();
-            GUILayout.Label(Settings.AdvancedOptionsHeader, headerStyle);
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawSafeModeToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawAudioCaptureToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawPngSequenceToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
-            tooltipStyle.wordWrap = true;
 
-
-            if (SessionState.SelectedEncoderTab == 0)
-            {
-                GUIStyle ditherStyle = CinematicUIResources.Styles.Toggle();
-                if (!SessionState.AmfUseBlueNoiseDither)
-                    ditherStyle.normal.textColor = CinematicUIResources.Colors.INFO_ORANGE;
-
-                SessionState.AmfUseBlueNoiseDither = GUILayout.Toggle(
-                    SessionState.AmfUseBlueNoiseDither,
-                    Settings.GradientProtection,
-                    ditherStyle
-                );
-
-                
-                tooltipStyle.wordWrap = true;
-
-                if (SessionState.AmfUseBlueNoiseDither)
-                    GUILayout.Label(Settings.GradientTooltip, tooltipStyle);
-            }
-            else
-            {
-                GUIStyle infoStyle = CinematicUIResources.Styles.Info();
-                infoStyle.wordWrap = true;
-                GUILayout.Label(Settings.AMFOnlyWarning, infoStyle);
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            GUIStyle placeholderStyle = CinematicUIResources.Styles.Info();
-            GUILayout.Label(Settings.PostProcessText, placeholderStyle);
-        }
-        private void DrawAudioCaptureToggle()
-        {
-            bool wasEnabled = GUI.enabled;
-            if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            // Style: Green + Bold when active
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.EnableAudioCapture)
-            {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.EnableAudioCapture,
-                Settings.EnableAudioLabel,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.EnableAudioCapture && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.EnableAudioCapture = newValue;
-                UnityEngine.Debug.Log($"[CinematicRecorder] EnableAudioCapture = {newValue}");
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(Settings.AudioTooltip, helpStyle);
-
-            GUI.enabled = wasEnabled;
-        }
-        private void DrawSafeModeToggle()
-        {
-            // Lock during recording to prevent mid-stream codec switches
-            bool wasEnabled = GUI.enabled;
-            if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            // Style: Green + Bold when active
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.ForceSoftwareEncoding)
-            {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            // Toggle
-            bool newValue = GUILayout.Toggle(
-                SessionState.ForceSoftwareEncoding,
-                Settings.SafeModeToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.ForceSoftwareEncoding && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.ForceSoftwareEncoding = newValue;
-                UnityEngine.Debug.Log($"[CinematicRecorder] ForceSoftwareEncoding = {newValue}");
-            }
-
-            // Help text
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(Settings.SafeModeTooltip, helpStyle);
-
-            // Warning when disabled during recording
-            if (DeterministicCaptureSession.IsRunning)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUIStyle warningStyle = CinematicUIResources.Styles.Label(
-                    CinematicUIResources.Colors.INFO_ORANGE,
-                    fontSize: CinematicUIResources.Typography.INFO
-                );
-                GUILayout.Label(Settings.SafeModeRecordingWarning, warningStyle);
-            }
-
-            GUI.enabled = wasEnabled;
-        }
-        private void DrawPngSequenceToggle()
-        {
-            bool wasEnabled = GUI.enabled;
-            if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            // Style: Green + Bold when active (matching Safe Mode pattern)
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.PngSequence)
-            {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.PngSequence,
-                Settings.PngSequenceToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.PngSequence && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.PngSequence = newValue;
-                if (newValue)
-                {
-                    // Force software encoding when PNG mode is enabled (hardware encoders can't output PNGs)
-                    SessionState.ForceSoftwareEncoding = true;
-                    UnityEngine.Debug.Log("[CinematicRecorder] PNG Sequence enabled - forcing software encoding path");
-                }
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(Settings.PngSequenceTooltip, helpStyle);
-
-            GUI.enabled = wasEnabled;
-        }
-        #endregion
         #region Public API
         public bool IsVisible => renderDisplay;
         public event Action OnDialogDismissed;
+
+        /// <summary>
+        /// Returns the current window rectangle for docking.
+        /// </summary>
+        public Rect GetWindowRect() => windowRect;
+
+        /// <summary>
+        /// Returns the X coordinate of the right edge for docking child windows.
+        /// </summary>
+        public float GetDockEdgeX()
+        {
+            return windowRect.x + CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH;
+        }
+
         /// <summary>
         /// Data container for capture completion report.
         /// </summary>
@@ -726,17 +601,21 @@ namespace CinematicRecorder.UI
             public string EncodingMode;
             public string OutputFilePath;
         }
+
         public void Show()
         {
             renderDisplay = true;
             stopRequested = false;
             InitStyles();
         }
+
         public void Hide()
         {
             renderDisplay = false;
             OnDialogDismissed?.Invoke();
         }
         #endregion
+
+
     }
 }

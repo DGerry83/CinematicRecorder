@@ -20,9 +20,16 @@ typedef struct {
     int Codec;                // 0=H264, 1=HEVC
     int GopSize;              // Keyframe interval in frames
     int EnableVbaq;           // 0=Off, 1=On (Variance-Based Adaptive Quantization)
-    int UseBlueNoiseDither;   // NEW: 0 = CopyResource, 1 = Compute Dither
+    int UseBlueNoiseDither;   // 0 = CopyResource, 1 = Compute Dither
     int Reserved2;            // Reserved (remains at end for padding/compatibility)
 } AmfEncoderSettings;
+
+// NEW: Temporal Accumulation Blur settings struct
+typedef struct {
+    int Enabled;              // 0=Off, 1=On
+    int SubFrameCount;        // Number of sub-frames to accumulate (typically 8)
+    float Sigma;              // Gaussian blur sigma (typically 1.5)
+} TabSettings;
 
 // NEW: Set the Unity D3D11 device once (optional, can also use InitFromTexture)
 __declspec(dllexport)
@@ -61,6 +68,27 @@ int CR_ShutdownEncoder(CREncoderHandle encoder);
 
 __declspec(dllexport)
 const char* CR_GetLastError();
+
+// NEW: Temporal Accumulation Blur API
+
+// Configure TAB mode. Must be called after CR_InitEncoder/FromTexture but before first frame.
+// If enabled, encoder switches to accumulation mode with specified sub-frame count and Gaussian sigma.
+__declspec(dllexport)
+int CR_SetTemporalAccumulation(CREncoderHandle encoder, const TabSettings* settings);
+
+// Submit a single sub-frame for accumulation. 
+// 'subFrameIndex' must be 0 to (SubFrameCount-1).
+// Copies from unityTexture to internal accumulation array slice [subFrameIndex].
+// Returns immediately (non-blocking GPU copy).
+__declspec(dllexport)
+int CR_SubmitSubFrame(CREncoderHandle encoder, ID3D11Texture2D* unityTexture, int subFrameIndex);
+
+// Finalize accumulated sub-frames and encode the result.
+// Dispatches compute shader to weighted-average accumulation array into encoder texture,
+// then encodes the frame and blocks until complete.
+// 'outputFrameIndex' is the frame number for the encoded output (passed to encoder).
+__declspec(dllexport)
+int CR_FinalizeTemporalFrame(CREncoderHandle encoder, long long outputFrameIndex);
 
 #ifdef __cplusplus
 }

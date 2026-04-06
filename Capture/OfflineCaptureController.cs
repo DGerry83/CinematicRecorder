@@ -34,7 +34,7 @@ namespace CinematicRecorder.Capture
 
 
         private float simFrameDelta;  // Current physics step size, updated each frame
-        private int frameIndex;       
+        private int frameIndex;
         private float startTime;
 
         private RenderTexture[] renderTextures;
@@ -44,7 +44,17 @@ namespace CinematicRecorder.Capture
 
         private int actualCapturedFrames = 0;
         private readonly AudioCaptureController _audioController;
+
+        // NEW: Temporal Accumulation Blur state
+        private bool _isTabEnabled = false;
+        private int _tabSubFrameCount = 8;
+        private int _currentSubFrameIndex = 0;
+
+        // NEW: Jitter state for TAB mode only (Halton sequence sub-pixel sampling)
+        private Vector2[] _haltonOffsets = new Vector2[8];          // Raw offsets for debug logging and future shader use
+        private bool _projectionJitterEnabled;                      // True only during TAB sub-frame loop
         #endregion
+
         #region Constructor
         public OfflineCaptureController(
                     Camera camera,
@@ -74,6 +84,7 @@ namespace CinematicRecorder.Capture
         }
         // OfflineCaptureController constructor
         #endregion
+
         #region Public API
         public string OutputPath => outputPath;
         public AudioCaptureController AudioController => _audioController;
@@ -100,6 +111,7 @@ namespace CinematicRecorder.Capture
             }
         }
         #endregion
+
         #region Capture Session
         /// <summary>
         /// Ramps physics timestep from current to target over multiple frames to avoid physics explosions.
@@ -150,6 +162,12 @@ namespace CinematicRecorder.Capture
             SetupRenderTargets();
             SetupEncoder();
 
+            // NEW: Configure TAB if applicable
+            if (usingZeroCopyPath && !SessionState.PngSequence)
+            {
+                SetupTemporalAccumulation();
+            }
+
             if (_audioController != null)
                 _audioController.Initialize();
 
@@ -158,6 +176,52 @@ namespace CinematicRecorder.Capture
 
             yield break;
         }
+
+        // NEW: Setup TAB mode on encoder if enabled in SessionState
+        private void SetupTemporalAccumulation()
+        {
+            // Only enable TAB if zero-copy path is active and user enabled it in settings
+            if (SessionState.EnableTemporalAccumulation && usingZeroCopyPath)
+            {
+                _isTabEnabled = true;
+                _tabSubFrameCount = SessionState.TabSubFrameCount > 0 ? SessionState.TabSubFrameCount : 8;
+
+                if (usingNvencPath && nvencZeroCopyEncoder != null)
+                {
+                    // NVENC path - deferred for later implementation
+                    _isTabEnabled = false;
+                    Debug.LogWarning("[OfflineCapture] TAB requested but NVENC not yet implemented, disabling TAB");
+                }
+                else if (usingZeroCopyPath && zeroCopyEncoder != null)
+                {
+                    bool success = zeroCopyEncoder.EnableTemporalAccumulation(true, _tabSubFrameCount, SessionState.TabSigma);
+                    if (!success)
+                    {
+                        _isTabEnabled = false;
+                        Debug.LogError("[OfflineCapture] Failed to enable TAB on AMF encoder");
+                    }
+                    else
+                    {
+                        Debug.Log($"[OfflineCapture] Temporal Accumulation Blur enabled ({_tabSubFrameCount} sub-frames)");
+                        
+                        // Configure sharpening if enabled
+                        if (SessionState.TabEnableSharpening)
+                        {
+                            bool sharpenSuccess = zeroCopyEncoder.SetTabSharpening(true, SessionState.TabSharpeningStrength);
+                            if (!sharpenSuccess)
+                            {
+                                Debug.LogWarning("[OfflineCapture] Failed to configure sharpening");
+                            }
+                            else
+                            {
+                                Debug.Log($"[OfflineCapture] Sharpening enabled (strength={SessionState.TabSharpeningStrength:F2})");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// Main capture loop supporting both limited duration and unlimited (manual stop) modes.
         /// Updates physics timestep dynamically based on SessionState time scale changes.
@@ -199,22 +263,17 @@ namespace CinematicRecorder.Capture
                     simFrameDelta = 0.0001f;
                 }
 
-                _audioController?.CaptureSubFrame(simFrameDelta);
-
-                if (usingZeroCopyPath)
+                // MODIFIED: Branch based on TAB mode
+                if (_isTabEnabled && usingZeroCopyPath)
                 {
-                    yield return CaptureFrameZeroCopy(frameIndex);
+                    // Temporal Accumulation Blur path: 16-step cycle per output frame
+                    yield return RunTabCaptureCycle(currentSimFps);
                 }
                 else
                 {
-                    yield return CaptureFrameStandard();
+                    // Standard path: 1 step per frame
+                    yield return RunStandardCaptureStep(currentSimFps);
                 }
-
-                DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
-
-                _audioController?.FinalizeOutputFrame(currentSimFps);
-
-                DeterministicCaptureSession.InvokeOnPhysicsStepped(simFrameDelta);
 
                 DeterministicCaptureSession.UpdateProgress(
                     actualCapturedFrames,
@@ -236,11 +295,174 @@ namespace CinematicRecorder.Capture
                 frameIndex++;
             }
         }
+
+        // NEW: Standard single-step capture (original behavior)
+        private IEnumerator RunStandardCaptureStep(float currentSimFps)
+        {
+            _audioController?.CaptureSubFrame(simFrameDelta);
+
+            if (usingZeroCopyPath)
+            {
+                yield return CaptureFrameZeroCopy(frameIndex);
+            }
+            else
+            {
+                yield return CaptureFrameStandard();
+            }
+
+            DeterministicCaptureSession.AccumulatedSimulatedSeconds += simFrameDelta;
+
+            _audioController?.FinalizeOutputFrame(currentSimFps);
+
+            DeterministicCaptureSession.InvokeOnPhysicsStepped(simFrameDelta);
+        }
+
+        // NEW: TAB 16-step cycle (8 rendered + 8 skipped for 180° shutter)
+        private IEnumerator RunTabCaptureCycle(float currentSimFps)
+        {
+            float stepDelta = simFrameDelta / 16.0f;
+
+            // CRITICAL: Increase capture rate to match micro-step timing
+            // Each WaitForEndOfFrame should take stepDelta seconds, not simFrameDelta
+            int microStepRate = Mathf.RoundToInt(currentSimFps * 16);
+            Time.captureFramerate = microStepRate;
+            Time.fixedDeltaTime = stepDelta;
+            Time.maximumDeltaTime = stepDelta;
+            TimeWarp_FixedDeltaTime_Patch.OverrideValue = stepDelta;
+            if (Planetarium.fetch != null)
+                Planetarium.fetch.fixedDeltaTime = stepDelta;
+
+            _projectionJitterEnabled = true;
+
+            // Steps 1-8: Shutter Open - Render and accumulate sub-frames
+            for (_currentSubFrameIndex = 0; _currentSubFrameIndex < _tabSubFrameCount; _currentSubFrameIndex++)
+            {
+                _audioController?.CaptureSubFrame(stepDelta);
+
+                // CRITICAL: Read CameraTools' current intended matrix (FOV may have changed)
+                Matrix4x4 cameraToolsMatrix = camera.projectionMatrix;
+
+                // Apply Halton jitter to a COPY of CameraTools matrix (calculated on-the-fly)
+                // ±0.707 pixel offset for sub-pixel AA (1/√2 for diagonal coverage)
+                Vector2 h = HaltonSequence.Sequence23[_currentSubFrameIndex];
+                float offsetX = (h.x - 0.5f) * 2.828f / width;
+                float offsetY = (h.y - 0.5f) * 2.828f / height;
+
+                Matrix4x4 jitteredMatrix = cameraToolsMatrix;
+                jitteredMatrix[0, 2] += offsetX;  // m02 - horizontal shift
+                jitteredMatrix[1, 2] += offsetY;  // m12 - vertical shift
+
+                // Apply jittered matrix for rendering
+                camera.projectionMatrix = jitteredMatrix;
+
+                Debug.Log($"[OfflineCapture] Jitter applied: subFrame={_currentSubFrameIndex}, offset=({h.x:F4}, {h.y:F4}), baseFOV={cameraToolsMatrix[1,1]:F4}");
+
+                yield return CaptureTabSubFrame(_currentSubFrameIndex);
+
+                // CRITICAL: Restore CameraTools' clean matrix immediately after render
+                // This ensures:
+                // 1. CameraTools sees its intended FOV during physics/InvokeOnPhysicsStepped
+                // 2. Next iteration reads fresh CameraTools state (no jitter accumulation)
+                // NOTE: Use ResetProjectionMatrix() to resume Unity's FOV-driven matrix computation
+                camera.ResetProjectionMatrix();
+
+                DeterministicCaptureSession.AccumulatedSimulatedSeconds += stepDelta;
+                DeterministicCaptureSession.InvokeOnPhysicsStepped(stepDelta);
+
+                if (DeterministicCaptureSession.StopRequested)
+                    yield break;
+            }
+
+            _projectionJitterEnabled = false;
+
+            // Steps 9-16: Shutter Closed - Physics continues but no render
+            int skippedFrames = _tabSubFrameCount;
+            for (int skip = 0; skip < skippedFrames; skip++)
+            {
+                _audioController?.CaptureSubFrame(stepDelta);
+
+                yield return new WaitForEndOfFrame();
+
+                DeterministicCaptureSession.AccumulatedSimulatedSeconds += stepDelta;
+                DeterministicCaptureSession.InvokeOnPhysicsStepped(stepDelta);
+
+                if (DeterministicCaptureSession.StopRequested)
+                    yield break;
+            }
+
+            // Restore capture rate for next outer loop iteration
+            Time.captureFramerate = Mathf.RoundToInt(currentSimFps);
+
+            if (!DeterministicCaptureSession.StopRequested)
+            {
+                bool success = FinalizeTemporalFrame(actualCapturedFrames);
+                if (!success)
+                    Debug.LogError("[OfflineCapture] TAB finalization failed");
+
+                _audioController?.FinalizeOutputFrame(currentSimFps);
+                actualCapturedFrames++;
+            }
+        }
+
+        // NEW: Capture single sub-frame for TAB accumulation
+        private IEnumerator CaptureTabSubFrame(int subFrameIndex)
+        {
+            Debug.Log($"[OfflineCapture] Starting sub-frame capture for index {subFrameIndex}");
+
+            int renderIdx = frameIndex % 2; // Still double-buffer for safety
+
+            captureBuffer.Clear();
+            captureBuffer.Blit(BuiltinRenderTextureType.CurrentActive, renderTextures[renderIdx]);
+
+            yield return new WaitForEndOfFrame();
+
+            IntPtr nativeTexPtr = renderTextures[renderIdx].GetNativeTexturePtr();
+            Debug.Log($"[OfflineCapture] Got native texture pointer for sub-frame {subFrameIndex}: {nativeTexPtr}");
+
+            // Submit to accumulation array
+            if (usingNvencPath && nvencZeroCopyEncoder != null)
+            {
+                Debug.LogWarning($"[OfflineCapture] NVENC not implemented, skipping sub-frame {subFrameIndex}");
+            }
+            else if (usingZeroCopyPath && zeroCopyEncoder != null)
+            {
+                bool success = zeroCopyEncoder.SubmitSubFrame(nativeTexPtr, subFrameIndex);
+                if (success)
+                    Debug.Log($"[OfflineCapture] Sub-frame {subFrameIndex} submitted successfully");
+                else
+                    Debug.LogError($"[OfflineCapture] FAILED to submit sub-frame {subFrameIndex}");
+            }
+            else
+            {
+                Debug.LogError($"[OfflineCapture] No valid encoder path for sub-frame {subFrameIndex}");
+            }
+        }
+
+        // NEW: Finalize TAB frame (compute + encode + block)
+        private bool FinalizeTemporalFrame(int outputFrameIndex)
+        {
+            if (usingNvencPath && nvencZeroCopyEncoder != null)
+            {
+                // NVENC not implemented yet
+                return false;
+            }
+            else if (usingZeroCopyPath && zeroCopyEncoder != null)
+            {
+                // This blocks until encode is complete (synchronous per design requirement)
+                return zeroCopyEncoder.FinalizeTemporalFrame(outputFrameIndex);
+            }
+            return false;
+        }
+
+        // NOTE: CalculateJitteredMatrices() removed - jitter is now calculated on-the-fly
+        // in RunTabCaptureCycle() to ensure CameraTools FOV changes are respected
         #endregion
+
         #region Frame Capture
         /// <summary>
         /// Zero-copy capture path using GPU texture handles. Double-buffers render textures to pipeline
         /// rendering and encoding asynchronously.
+        /// MODIFIED: Now returns IEnumerator for coroutine compatibility with TAB mode.
         /// </summary>
         private IEnumerator CaptureFrameZeroCopy(int frameIndex)
         {
@@ -307,10 +529,20 @@ namespace CinematicRecorder.Capture
         }
         /// <summary>
         /// Encodes the final pending frame from the zero-copy double buffer and logs capture statistics.
+        /// MODIFIED: Handles TAB mode where finalization is done in the loop.
         /// </summary>
         private IEnumerator FinalizeEncoding()
         {
-            // Encode final buffered frame for zero-copy path
+            // If TAB mode, the final frame was already encoded in the loop
+            // Just ensure any pending operations complete
+            if (_isTabEnabled)
+            {
+                UnityEngine.Debug.Log($"[OfflineCapture] TAB capture complete. Encoded {actualCapturedFrames} output frames " +
+                    $"({DeterministicCaptureSession.AccumulatedSimulatedSeconds:F2}s simulated)");
+                yield break;
+            }
+
+            // Standard path: Encode final buffered frame
             if (usingZeroCopyPath && actualCapturedFrames > 0)
             {
                 int lastIdx = (actualCapturedFrames - 1) % 2;
@@ -324,6 +556,7 @@ namespace CinematicRecorder.Capture
             yield break;
         }
         #endregion
+
         #region Encoder Setup
         private void SetupRenderTargets()
         {
@@ -565,6 +798,7 @@ namespace CinematicRecorder.Capture
             }
         }
         #endregion
+
         #region Cleanup
         private void Cleanup(float originalFixedDelta, float originalMaxDelta, int originalCaptureFramerate, double originalPlanetariumDelta)
         {
@@ -584,7 +818,12 @@ namespace CinematicRecorder.Capture
             FinalizeEncoder();
 
             if (camera != null)
+            {
+                // Note: We don't restore projection matrix here because
+                // CameraTools manages its own matrix. Forcing a restore would
+                // overwrite CameraTools' intended FOV state.
                 camera.targetTexture = null;
+            }
 
             if (DeterministicCaptureSession.IsRunning)
             {
