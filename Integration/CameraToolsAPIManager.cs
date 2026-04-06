@@ -39,6 +39,8 @@ namespace CinematicRecorder.Integration
         private static System.Reflection.MethodInfo _getCurrentPathTimeMethod;
         private static System.Reflection.MethodInfo _getCurrentStateMethod;
         private static System.Reflection.MethodInfo _pathExistsMethod;
+        private static System.Reflection.MethodInfo _getInitialVelocityAsVector3Method;
+        private static System.Reflection.MethodInfo _setInitialVelocityMethod;
 
         private static System.Reflection.MethodInfo _activateCameraMethod;
         private static System.Reflection.MethodInfo _deactivateCameraMethod;
@@ -132,6 +134,8 @@ namespace CinematicRecorder.Integration
                 _getManualFOVMethod = _integrationType.GetMethod("GetManualFOV", Type.EmptyTypes);
                 _getCurrentPathTimeMethod = _integrationType.GetMethod("GetCurrentPathTime", Type.EmptyTypes);
                 _getCurrentStateMethod = _integrationType.GetMethod("GetCurrentState", Type.EmptyTypes);
+                _getInitialVelocityAsVector3Method = _integrationType.GetMethod("GetInitialVelocityAsVector3", Type.EmptyTypes);
+                _setInitialVelocityMethod = _integrationType.GetMethod("SetInitialVelocity", new[] { typeof(Vector3d) });
 
                 _activateCameraMethod = _integrationType.GetMethod("ActivateCamera", Type.EmptyTypes);
                 _deactivateCameraMethod = _integrationType.GetMethod("DeactivateCamera", Type.EmptyTypes);
@@ -279,6 +283,31 @@ namespace CinematicRecorder.Integration
             {
                 Debug.LogError($"[CameraToolsAPIManager] GetCurrentPathTime failed: {ex.Message}");
                 return 0f;
+            }
+        }
+        public static Vector3 GetInitialVelocityAsVector3()
+        {
+            if (!IsAvailable || _getInitialVelocityAsVector3Method == null) return Vector3.zero;
+            try
+            {
+                return (Vector3)_getInitialVelocityAsVector3Method.Invoke(null, null);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[CameraToolsAPIManager] GetInitialVelocityAsVector3 failed: {ex.Message}");
+                return Vector3.zero;
+            }
+        }
+        public static void SetInitialVelocity(Vector3d velocity)
+        {
+            if (!IsAvailable || _setInitialVelocityMethod == null) return;
+            try
+            {
+                _setInitialVelocityMethod.Invoke(null, new object[] { velocity });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[CameraToolsAPIManager] SetInitialVelocity failed: {ex.Message}");
             }
         }
         #endregion

@@ -205,7 +205,7 @@ namespace CinematicRecorder.Integration
             settings.SaveRotation = CameraToolsReflectionProvider.GetBool(CameraToolsReflectionProvider.SaveRotationField, false);
             settings.FmPivotMode = CameraToolsReflectionProvider.ConvertToLocalFMPivotMode(
                 CameraToolsReflectionProvider.GetField<object>(CameraToolsReflectionProvider.FmPivotModeField));
-            settings.InitialVelocity = CameraToolsReflectionProvider.GetVector3(CameraToolsReflectionProvider.InitialVelocityField, Vector3.zero);
+            settings.InitialVelocity = CameraToolsAPIManager.GetInitialVelocityAsVector3();
             settings.MaintainInitialVelocity = CameraToolsReflectionProvider.GetBool(CameraToolsReflectionProvider.MaintainInitialVelocityField, false);
             settings.UseOrbital = CameraToolsReflectionProvider.GetBool(CameraToolsReflectionProvider.UseOrbitalField, false);
             settings.AutoZoom = CameraToolsReflectionProvider.GetBool(CameraToolsReflectionProvider.AutoZoomStationaryField, false);
@@ -333,9 +333,9 @@ namespace CinematicRecorder.Integration
             if (pivotModeValue != null)
                 CameraToolsReflectionProvider.SetField(CameraToolsReflectionProvider.FmPivotModeField, pivotModeValue);
 
-            // Initial velocity still requires reflection (no API yet)
+            // Set initial velocity via API for stationary camera velocity maintenance
             if (settings.MaintainInitialVelocity && settings.InitialVelocity != Vector3.zero)
-                CameraToolsReflectionProvider.SetVector3(CameraToolsReflectionProvider.InitialVelocityField, settings.InitialVelocity);
+                CameraToolsAPIManager.SetInitialVelocity(new Vector3d(settings.InitialVelocity.x, settings.InitialVelocity.y, settings.InitialVelocity.z));
 
             // FOV is handled by SetExternalFOV in the main ApplySettings method, but set manualFOV field for persistence
             if (settings.ManualFOV > 0)
