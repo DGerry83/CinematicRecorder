@@ -375,3 +375,4 @@ FodyWeavers.xsd
 /dll_copy_config.txt
 /NativePlugin/nvenc/nvEncodeAPI.h
 /ReferenceNotes
+/StructToolset
