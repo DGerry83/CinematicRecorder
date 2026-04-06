@@ -113,6 +113,16 @@ namespace CinematicRecorder.Capture
                 return false;
             }
 
+            // Verify our native DLL exists before attempting P/Invoke
+            IntPtr hModule = LoadLibraryW("CinematicRecorderNative.dll");
+            if (hModule == IntPtr.Zero)
+            {
+                Debug.LogError("[NvencZeroCopyEncoder] CRITICAL: CinematicRecorderNative.dll is missing or corrupted. " +
+                    "Please reinstall the mod.");
+                return false;
+            }
+            FreeLibrary(hModule);
+
             Debug.Log($"[NvencZeroCopyEncoder] Initializing: {width}x{height}@{fps}, " +
                 $"RC={settings.RateControlMode}, QP={settings.QpI}, Preset={settings.QualityPreset}");
 
@@ -145,6 +155,11 @@ namespace CinematicRecorder.Capture
             catch (EntryPointNotFoundException ex)
             {
                 Debug.LogError($"[NvencZeroCopyEncoder] Export not found: {ex.Message}");
+                return false;
+            }
+            catch (DllNotFoundException)
+            {
+                // Driver dependency missing - expected on non-NVIDIA systems, silent fail
                 return false;
             }
             catch (Exception ex)
