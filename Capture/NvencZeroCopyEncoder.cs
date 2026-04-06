@@ -12,6 +12,43 @@ namespace CinematicRecorder.Capture
         private bool _isInitialized;
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
+        private static bool _nativeDllAvailable;
+        #endregion
+
+        #region Static Initialization
+        static NvencZeroCopyEncoder()
+        {
+            _nativeDllAvailable = false;
+            try
+            {
+                string assemblyPath = Path.GetDirectoryName(typeof(NvencZeroCopyEncoder).Assembly.Location);
+                if (assemblyPath != null)
+                {
+                    string pluginDataPath = Path.GetFullPath(Path.Combine(assemblyPath, "..", "PluginData"));
+                    string dllPath = Path.Combine(pluginDataPath, "CinematicRecorderNative.dll");
+
+                    if (!File.Exists(dllPath))
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] Native DLL not found: {dllPath}");
+                        return;
+                    }
+
+                    // Verify we can load it
+                    IntPtr hModule = LoadLibraryW(dllPath);
+                    if (hModule == IntPtr.Zero)
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] Failed to load native DLL: {Marshal.GetLastWin32Error()}");
+                        return;
+                    }
+                    FreeLibrary(hModule);
+                    _nativeDllAvailable = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Static init error: {ex.Message}");
+            }
+        }
         #endregion
         #region Structs
         /// <summary>
@@ -113,15 +150,12 @@ namespace CinematicRecorder.Capture
                 return false;
             }
 
-            // Verify our native DLL exists before attempting P/Invoke
-            IntPtr hModule = LoadLibraryW("CinematicRecorderNative.dll");
-            if (hModule == IntPtr.Zero)
+            // Check if native DLL was loaded successfully during static init
+            if (!_nativeDllAvailable)
             {
-                Debug.LogError("[NvencZeroCopyEncoder] CRITICAL: CinematicRecorderNative.dll is missing or corrupted. " +
-                    "Please reinstall the mod.");
+                // Silent fail - static init already logged the specific error
                 return false;
             }
-            FreeLibrary(hModule);
 
             Debug.Log($"[NvencZeroCopyEncoder] Initializing: {width}x{height}@{fps}, " +
                 $"RC={settings.RateControlMode}, QP={settings.QpI}, Preset={settings.QualityPreset}");

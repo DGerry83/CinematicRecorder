@@ -235,6 +235,11 @@ namespace CinematicRecorder.Capture
                 Debug.LogError($"[AmfZeroCopyEncoder] Function not found in DLL: {ex.Message}");
                 return false;
             }
+            catch (DllNotFoundException)
+            {
+                // Driver dependency missing - expected on non-AMD systems, silent fail
+                return false;
+            }
             catch (Exception ex)
             {
                 Debug.LogError($"[AmfZeroCopyEncoder] Exception: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
