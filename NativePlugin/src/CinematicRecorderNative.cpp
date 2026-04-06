@@ -66,7 +66,7 @@ static void InitLogFile()
             {
                 *(secondLastSlash + 1) = '\0';  // Keep backslash, remove \PluginData
                 strcat_s(dllPath, MAX_PATH, "CinematicRecorder_Native.log");
-                g_logFile.open(dllPath, std::ios::app);
+                g_logFile.open(dllPath, std::ios::trunc);  // Reset log on each launch
             }
         }
     }
@@ -74,7 +74,7 @@ static void InitLogFile()
     // Fallback if we couldn't get DLL path
     if (!g_logFile.is_open())
     {
-        g_logFile.open("CinematicRecorder_Native.log", std::ios::app);
+        g_logFile.open("CinematicRecorder_Native.log", std::ios::trunc);  // Reset log on each launch
     }
     
     g_logInitialized = true;
