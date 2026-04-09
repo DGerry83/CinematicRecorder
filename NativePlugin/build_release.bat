@@ -22,7 +22,7 @@ if not exist "%CONFIG_FILE%" (
 if not exist build mkdir build
 if not exist build\intermediate mkdir build\intermediate
 
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 if errorlevel 1 exit /b 1
 
 cl ^
@@ -83,25 +83,30 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%CONFIG_FILE%") do (
         
         if not exist "!PLUGINDATA_PATH!" (
             echo   Creating folder: !PLUGINDATA_PATH!
-            mkdir "!PLUGINDATA_PATH!"
+            mkdir "!PLUGINDATA_PATH!" 2>nul
             if errorlevel 1 (
                 echo   ERROR: Could not create folder
                 set /a "COPY_ERRORS+=1"
-                echo.
-                goto :next_folder
+            ) else (
+                copy /Y "build\%FILENAME%" "!PLUGINDATA_PATH!\" >nul 2>&1
+                if errorlevel 1 (
+                    echo   ERROR: Failed to copy
+                    set /a "COPY_ERRORS+=1"
+                ) else (
+                    echo   OK: !PLUGINDATA_PATH!\%FILENAME%
+                )
             )
-        )
-        
-        copy /Y "build\%FILENAME%" "!PLUGINDATA_PATH!\" >nul
-        if errorlevel 1 (
-            echo   ERROR: Failed to copy
-            set /a "COPY_ERRORS+=1"
         ) else (
-            echo   OK: !PLUGINDATA_PATH!\%FILENAME%
+            copy /Y "build\%FILENAME%" "!PLUGINDATA_PATH!\" >nul 2>&1
+            if errorlevel 1 (
+                echo   ERROR: Failed to copy
+                set /a "COPY_ERRORS+=1"
+            ) else (
+                echo   OK: !PLUGINDATA_PATH!\%FILENAME%
+            )
         )
         echo.
     )
-    :next_folder
 )
 
 echo ==============================================

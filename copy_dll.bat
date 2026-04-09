@@ -58,26 +58,32 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%CONFIG_FILE%") do (
         REM Create target folder if it doesn't exist
         if not exist "%%B" (
             echo   Creating folder: %%B
-            mkdir "%%B"
+            mkdir "%%B" 2>nul
             if errorlevel 1 (
                 echo   ERROR: Could not create folder %%B
                 set /a "COPY_ERRORS+=1"
-                echo.
-                goto :next_folder
+            ) else (
+                REM Copy the file
+                copy /Y "%~1" "%%B\%FILENAME%" >nul 2>&1
+                if errorlevel 1 (
+                    echo   ERROR: Failed to copy to %%B
+                    set /a "COPY_ERRORS+=1"
+                ) else (
+                    echo   OK: %%B\%FILENAME%
+                )
             )
-        )
-        
-        REM Copy the file
-        copy /Y "%~1" "%%B\%FILENAME%" >nul
-        if errorlevel 1 (
-            echo   ERROR: Failed to copy to %%B
-            set /a "COPY_ERRORS+=1"
         ) else (
-            echo   OK: %%B\%FILENAME%
+            REM Copy the file
+            copy /Y "%~1" "%%B\%FILENAME%" >nul 2>&1
+            if errorlevel 1 (
+                echo   ERROR: Failed to copy to %%B
+                set /a "COPY_ERRORS+=1"
+            ) else (
+                echo   OK: %%B\%FILENAME%
+            )
         )
         echo.
     )
-    :next_folder
 )
 
 REM ==============================================
