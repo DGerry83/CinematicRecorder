@@ -13,6 +13,7 @@ namespace CinematicRecorder.Capture
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
         private static bool _nativeDllAvailable;
+        private static IntPtr _nativeLibraryHandle; // Keep native plugin DLL loaded
         private static IntPtr _nvencLibraryHandle; // Keep NVENC driver DLL loaded
         #endregion
 
@@ -70,7 +71,9 @@ namespace CinematicRecorder.Capture
                     }
 
                     Debug.Log($"[NvencZeroCopyEncoder] Export found at 0x{procAddr.ToInt64():X}");
-                    FreeLibrary(hModule);
+                    
+                    // Keep native plugin DLL loaded (required for P/Invoke to find it)
+                    _nativeLibraryHandle = hModule;
 
                     // Pre-load NVENC driver DLL to ensure it's available for P/Invoke
                     // This matches the AMF pattern where dependencies are verified before use
