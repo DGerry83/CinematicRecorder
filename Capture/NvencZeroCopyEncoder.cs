@@ -69,8 +69,19 @@ namespace CinematicRecorder.Capture
                     }
 
                     Debug.Log($"[NvencZeroCopyEncoder] Export found at 0x{procAddr.ToInt64():X}");
-
                     FreeLibrary(hModule);
+
+                    // Verify NVENC driver DLL is available (dependency of native plugin)
+                    IntPtr nvencModule = LoadLibraryW("nvEncodeAPI64.dll");
+                    if (nvencModule == IntPtr.Zero)
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        Debug.Log($"[NvencZeroCopyEncoder] nvEncodeAPI64.dll not available (error {error}) - expected on non-NVIDIA systems");
+                        return;
+                    }
+                    FreeLibrary(nvencModule);
+                    Debug.Log("[NvencZeroCopyEncoder] nvEncodeAPI64.dll verified available");
+                    
                     _nativeDllAvailable = true;
                 }
             }
@@ -227,9 +238,10 @@ namespace CinematicRecorder.Capture
                 Debug.LogError($"[NvencZeroCopyEncoder] Export not found: {ex.Message}");
                 return false;
             }
-            catch (DllNotFoundException)
+            catch (DllNotFoundException ex)
             {
-                // Driver dependency missing - expected on non-NVIDIA systems, silent fail
+                // Driver dependency missing - expected on non-NVIDIA systems
+                Debug.LogWarning($"[NvencZeroCopyEncoder] NVENC driver dependency not found: {ex.Message}");
                 return false;
             }
             catch (Exception ex)
