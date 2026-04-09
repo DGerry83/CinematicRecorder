@@ -25,7 +25,16 @@ namespace CinematicRecorder.Capture
                 if (assemblyPath != null)
                 {
                     string pluginDataPath = Path.GetFullPath(Path.Combine(assemblyPath, "..", "PluginData"));
+                    string ffmpegPath = Path.Combine(pluginDataPath, "FFMpeg");
                     string dllPath = Path.Combine(pluginDataPath, "CinematicRecorderNative.dll");
+
+                    Debug.Log($"[NvencZeroCopyEncoder] Loading from: {dllPath}");
+
+                    if (!Directory.Exists(ffmpegPath))
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] FFmpeg folder not found: {ffmpegPath}");
+                        return;
+                    }
 
                     if (!File.Exists(dllPath))
                     {
@@ -33,7 +42,9 @@ namespace CinematicRecorder.Capture
                         return;
                     }
 
-                    // Verify we can load it
+                    SetDllDirectory(ffmpegPath);
+
+                    // Verify the specific export exists before loading
                     IntPtr hModule = LoadLibraryW(dllPath);
                     if (hModule == IntPtr.Zero)
                     {
@@ -43,18 +54,29 @@ namespace CinematicRecorder.Capture
                         // Other errors = likely corrupted
                         if (error != 126)
                         {
-                            Debug.LogError($"[NvencZeroCopyEncoder] Failed to load native DLL: error {error}");
+                            Debug.LogError($"[NvencZeroCopyEncoder] LoadLibrary failed: error {error}");
                         }
                         // Silently return for error 126 (driver dependency missing)
                         return;
                     }
+
+                    IntPtr procAddr = GetProcAddress(hModule, "CR_InitNvencEncoderFromTexture");
+                    if (procAddr == IntPtr.Zero)
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] Export 'CR_InitNvencEncoderFromTexture' not found in DLL!");
+                        FreeLibrary(hModule);
+                        return;
+                    }
+
+                    Debug.Log($"[NvencZeroCopyEncoder] Export found at 0x{procAddr.ToInt64():X}");
+
                     FreeLibrary(hModule);
                     _nativeDllAvailable = true;
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[NvencZeroCopyEncoder] Static init error: {ex.Message}");
+                Debug.LogError($"[NvencZeroCopyEncoder] Static init error: {ex}");
             }
         }
         #endregion
@@ -89,6 +111,12 @@ namespace CinematicRecorder.Capture
 
         [DllImport("kernel32", SetLastError = true)]
         private static extern bool FreeLibrary(IntPtr hModule);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
 
         [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr CR_GetLastError();

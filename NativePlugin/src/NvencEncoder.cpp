@@ -96,19 +96,28 @@ const char* NvencEncoder::NvencStatusToString(NVENCSTATUS status) {
 bool NvencEncoder::LoadNvencLibrary() {
     LogDebug("Loading nvEncodeAPI64.dll...");
     
+    // Add detailed logging before load
     m_hNvencLib = LoadLibraryA("nvEncodeAPI64.dll");
     if (!m_hNvencLib) {
-        LogDebug("nvEncodeAPI64.dll not found (expected on non-NVIDIA systems)");
+        DWORD lastError = ::GetLastError();
+        LogDebug("nvEncodeAPI64.dll not found (expected on non-NVIDIA systems), error: %lu", lastError);
         return false;
     }
     
+    LogDebug("nvEncodeAPI64.dll loaded successfully at %p", m_hNvencLib);
+    
+    LogDebug("Attempting GetProcAddress for NvEncodeAPICreateInstance");
     auto createInstance = (NVENCAPICREATEINSTANCEPROC)GetProcAddress(m_hNvencLib, "NvEncodeAPICreateInstance");
     if (!createInstance) {
-        SetError("Failed to get NvEncodeAPICreateInstance");
+        DWORD lastError = ::GetLastError();
+        SetError("Failed to get NvEncodeAPICreateInstance, error: %lu", lastError);
         return false;
     }
     
+    LogDebug("NvEncodeAPICreateInstance found at %p", createInstance);
+    
     m_nvencFunctions.version = NV_ENCODE_API_FUNCTION_LIST_VER;
+    LogDebug("Calling NvEncodeAPICreateInstance with version %u", m_nvencFunctions.version);
     NVENCSTATUS status = createInstance(&m_nvencFunctions);
     
     if (status != NV_ENC_SUCCESS) {
@@ -121,6 +130,8 @@ bool NvencEncoder::LoadNvencLibrary() {
 }
 
 bool NvencEncoder::ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Texture2D* textureHint) {
+    LogDebug("ValidateOrCreateDevice called");
+    
     if (!unityDevice) {
         SetError("Unity device is null");
         return false;
@@ -128,8 +139,10 @@ bool NvencEncoder::ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Textu
     
     m_unityDevice = unityDevice;
     m_unityDevice->AddRef();
+    LogDebug("Unity device retained");
     
     // Try direct device usage first by attempting to create a session
+    LogDebug("Attempting direct Unity device usage...");
     {
         NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params = {};
         params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
@@ -172,6 +185,7 @@ bool NvencEncoder::ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Textu
     DXGI_ADAPTER_DESC adapterDesc;
     adapter->GetDesc(&adapterDesc);
     LogDebug("Creating secondary device on adapter: %S", adapterDesc.Description);
+    LogDebug("Adapter info: VendorId=0x%04X, DeviceId=0x%04X", adapterDesc.VendorId, adapterDesc.DeviceId);
     
     D3D11_CREATE_DEVICE_FLAG createFlags = (D3D11_CREATE_DEVICE_FLAG)(
         D3D11_CREATE_DEVICE_VIDEO_SUPPORT | 
@@ -203,6 +217,7 @@ bool NvencEncoder::ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Textu
     
     LogDebug("Secondary device created with VIDEO_SUPPORT, Feature Level: %d", level);
     m_usingSharedDevice = true;
+    LogDebug("ValidateOrCreateDevice complete, usingSharedDevice=%s", m_usingSharedDevice ? "true" : "false");
     return true;
 }
 
@@ -224,7 +239,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
         SetError("nvEncOpenEncodeSessionEx failed: %s", NvencStatusToString(status));
         return false;
     }
-    LogDebug("Encode session opened");
+    LogDebug("Encode session opened, encoder handle: %p", m_hEncoder);
     
     // Initialize params
     NV_ENC_INITIALIZE_PARAMS initParams = {};
@@ -298,7 +313,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
         SetError("nvEncInitializeEncoder failed: %s", NvencStatusToString(status));
         return false;
     }
-    LogDebug("Encoder initialized successfully");
+    LogDebug("Encoder initialized successfully (codec: %s)", m_isHEVC ? "HEVC" : "H264");
     
     // Create bitstream buffer
     NV_ENC_CREATE_BITSTREAM_BUFFER bitstreamBuffer = {};
@@ -309,26 +324,35 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
         return false;
     }
     m_bitstreamBuffer = bitstreamBuffer.bitstreamBuffer;
-    LogDebug("Bitstream buffer created");
+    LogDebug("Bitstream buffer created, handle: %p", m_bitstreamBuffer);
     
     // Initialize compute shaders (non-fatal)
+    LogDebug("Initializing compute shaders...");
     InitializeComputeShaders();
+    LogDebug("Compute shaders initialized");
     
     // Create intermediate textures for shader pipeline
+    LogDebug("Creating intermediate textures...");
     if (!CreateIntermediateTextures(m_width, m_height)) {
+        SetError("Failed to create intermediate textures");
         return false;
     }
+    LogDebug("Intermediate textures created");
     
     // Create blue noise texture (non-fatal)
+    LogDebug("Creating blue noise texture...");
     CreateBlueNoiseTexture();
     
     // Create constant buffers (non-fatal)
+    LogDebug("Creating constant buffers...");
     CreateConstantBuffers();
     
     // Create accumulation array (non-fatal)
+    LogDebug("Creating accumulation array...");
     CreateAccumulationArray(m_width, m_height);
     
     // Create encode textures
+    LogDebug("Creating encode textures...");
     D3D11_TEXTURE2D_DESC texDesc = {};
     texDesc.Width = m_width;
     texDesc.Height = m_height;
@@ -349,6 +373,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
             SetError("Failed to create encode texture %d (0x%08X)", i, hr);
             return false;
         }
+        LogDebug("Encode texture %d created", i);
         
         if (m_usingSharedDevice) {
             IDXGIResource* dxgiRes = nullptr;
@@ -381,31 +406,44 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
         LogDebug("Registered resource %d: %p", i, m_registeredResources[i]);
     }
     
+    LogDebug("InitializeEncoder complete");
     return true;
 }
 
 bool NvencEncoder::InitializeFFmpeg(const char* outputPath) {
-    LogDebug("Initializing FFmpeg muxer: %s", outputPath);
+    LogDebug("InitializeFFmpeg called");
+    LogDebug("Initializing FFmpeg muxer: %s", outputPath ? outputPath : "(null)");
     
+    if (!outputPath) {
+        SetError("Output path is null");
+        return false;
+    }
+    
+    LogDebug("Guessing output format (matroska)...");
     const AVOutputFormat* fmt = av_guess_format("matroska", nullptr, nullptr);
     if (!fmt) {
         SetError("MKV muxer not found");
         return false;
     }
+    LogDebug("MKV muxer found: %s", fmt->name);
     
     AVFormatContext* ctx = nullptr;
+    LogDebug("Allocating output context...");
     if (avformat_alloc_output_context2(&ctx, fmt, nullptr, outputPath) < 0) {
         SetError("avformat_alloc_output_context2 failed");
         return false;
     }
     m_formatContext = ctx;
+    LogDebug("Output context allocated");
     
+    LogDebug("Creating video stream...");
     AVStream* stream = avformat_new_stream(ctx, nullptr);
     if (!stream) {
         SetError("avformat_new_stream failed");
         return false;
     }
     m_videoStream = stream;
+    LogDebug("Video stream created, index: %d", stream->index);
     
     AVCodecParameters* par = stream->codecpar;
     par->codec_type = AVMEDIA_TYPE_VIDEO;
@@ -422,12 +460,15 @@ bool NvencEncoder::InitializeFFmpeg(const char* outputPath) {
     stream->avg_frame_rate = { m_fps, 1 };
     
     if (!(ctx->oformat->flags & AVFMT_NOFILE)) {
+        LogDebug("Opening output file...");
         if (avio_open(&ctx->pb, outputPath, AVIO_FLAG_WRITE) < 0) {
             SetError("avio_open failed for %s", outputPath);
             return false;
         }
+        LogDebug("Output file opened");
     }
     
+    LogDebug("Writing format header...");
     if (avformat_write_header(ctx, nullptr) < 0) {
         SetError("avformat_write_header failed");
         return false;
@@ -440,14 +481,40 @@ bool NvencEncoder::InitializeFFmpeg(const char* outputPath) {
 bool NvencEncoder::Initialize(ID3D11Device* unityDevice, ID3D11Texture2D* textureHint,
                               int width, int height, int fps, const char* outputPath,
                               const NvencEncoderSettings& settings) {
+    LogDebug("NVENC Initialize called");
+    LogDebug("Parameters: %dx%d @ %d fps, output=%s", width, height, fps, outputPath ? outputPath : "(null)");
+    
     m_width = width;
     m_height = height;
     m_fps = fps;
     
-    if (!LoadNvencLibrary()) return false;
-    if (!ValidateOrCreateDevice(unityDevice, textureHint)) return false;
-    if (!InitializeEncoder(settings)) return false;
-    if (!InitializeFFmpeg(outputPath)) return false;
+    LogDebug("Phase 1: Loading NVENC library...");
+    if (!LoadNvencLibrary()) {
+        LogDebug("Phase 1 FAILED: LoadNvencLibrary returned false");
+        return false;
+    }
+    LogDebug("Phase 1 complete: NVENC library loaded");
+    
+    LogDebug("Phase 2: Validating/Creating device...");
+    if (!ValidateOrCreateDevice(unityDevice, textureHint)) {
+        LogDebug("Phase 2 FAILED: ValidateOrCreateDevice returned false");
+        return false;
+    }
+    LogDebug("Phase 2 complete: Device ready");
+    
+    LogDebug("Phase 3: Initializing encoder...");
+    if (!InitializeEncoder(settings)) {
+        LogDebug("Phase 3 FAILED: InitializeEncoder returned false");
+        return false;
+    }
+    LogDebug("Phase 3 complete: Encoder initialized");
+    
+    LogDebug("Phase 4: Initializing FFmpeg...");
+    if (!InitializeFFmpeg(outputPath)) {
+        LogDebug("Phase 4 FAILED: InitializeFFmpeg returned false");
+        return false;
+    }
+    LogDebug("Phase 4 complete: FFmpeg ready");
     
     m_initialized = true;
     LogDebug("NVENC Encoder fully initialized and ready");
