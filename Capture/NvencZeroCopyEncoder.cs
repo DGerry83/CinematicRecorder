@@ -13,6 +13,7 @@ namespace CinematicRecorder.Capture
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
         private static bool _nativeDllAvailable;
+        private static IntPtr _nvencLibraryHandle; // Keep NVENC driver DLL loaded
         #endregion
 
         #region Static Initialization
@@ -71,16 +72,16 @@ namespace CinematicRecorder.Capture
                     Debug.Log($"[NvencZeroCopyEncoder] Export found at 0x{procAddr.ToInt64():X}");
                     FreeLibrary(hModule);
 
-                    // Verify NVENC driver DLL is available (dependency of native plugin)
-                    IntPtr nvencModule = LoadLibraryW("nvEncodeAPI64.dll");
-                    if (nvencModule == IntPtr.Zero)
+                    // Pre-load NVENC driver DLL to ensure it's available for P/Invoke
+                    // This matches the AMF pattern where dependencies are verified before use
+                    _nvencLibraryHandle = LoadLibraryW("nvEncodeAPI64.dll");
+                    if (_nvencLibraryHandle == IntPtr.Zero)
                     {
                         int error = Marshal.GetLastWin32Error();
                         Debug.Log($"[NvencZeroCopyEncoder] nvEncodeAPI64.dll not available (error {error}) - expected on non-NVIDIA systems");
                         return;
                     }
-                    FreeLibrary(nvencModule);
-                    Debug.Log("[NvencZeroCopyEncoder] nvEncodeAPI64.dll verified available");
+                    Debug.Log("[NvencZeroCopyEncoder] nvEncodeAPI64.dll pre-loaded successfully");
                     
                     _nativeDllAvailable = true;
                 }
