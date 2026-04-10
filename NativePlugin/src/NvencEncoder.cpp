@@ -253,6 +253,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     initParams.enableEncodeAsync = 0;
     initParams.enablePTD = 1;
     initParams.bufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
+    initParams.tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
     
     // Select codec
     if (settings.Codec == 1) {
@@ -277,6 +278,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     // Configure
     NV_ENC_CONFIG encodeConfig = {};
     encodeConfig.version = NV_ENC_CONFIG_VER;
+    encodeConfig.profileGUID = NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
     encodeConfig.gopLength = settings.GopSize;
     encodeConfig.frameIntervalP = 1;
     encodeConfig.mvPrecision = NV_ENC_MV_PRECISION_QUARTER_PEL;
