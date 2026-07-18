@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>Library</OutputType>
+		<RootNamespace>CinematicRecorder</RootNamespace>
+		<AssemblyName>CinematicRecorder</AssemblyName>
+		<TargetFramework>net48</TargetFramework>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<PlatformTarget>x64</PlatformTarget>
+		<LangVersion>latest</LangVersion>
+		<Version>0.1.0.0</Version>
+		<LangVersion>latest</LangVersion>
+		<Copyright>Copyright © DGerry 2026, GPL 3.0</Copyright>
+	</PropertyGroup>
+	<!-- General -->
+	<PropertyGroup>
+		<RepoRoot>$(SolutionDir)</RepoRoot>
+	</PropertyGroup>
+	<!-- KSPBT -->
+	<PropertyGroup>
+		<KSPBT_ModPluginFolder>Plugins</KSPBT_ModPluginFolder>
+		<KSPBT_GenerateDependencyAttributes>false</KSPBT_GenerateDependencyAttributes>
+	</PropertyGroup>
+	<!-- Mod Dependencies -->
+	<ItemGroup>
+		<ModReference Include="0Harmony">
+			<DLLPath>GameData/000_Harmony/0Harmony.dll</DLLPath>
+			<CKANIdentifier>Harmony2</CKANIdentifier>
+			<GenerateDependencyAttribute>false</GenerateDependencyAttribute>
+		</ModReference>
+	</ItemGroup>
+	<!-- Packages -->
+	<ItemGroup>
+		<PackageReference Include="FFmpeg.AutoGen" Version="5.1.2.3" />
+		<PackageReference Include="KSPBuildTools" Version="1.1.1" />
+	</ItemGroup>
+	<!-- Copy text files -->
+	<Target Name="CopyTextFiles" AfterTargets="Build" BeforeTargets="CopyToGame">
+		<Copy SourceFiles="$(RepoRoot)readme.md" DestinationFiles="$(KSPBT_ModRoot)Readme.txt" />
+		<Copy SourceFiles="$(RepoRoot)license.txt" DestinationFiles="$(KSPBT_ModRoot)License.txt" />
+	</Target>
+	<!-- Copy mod folder to game -->
+	<Target Name="CopyToGame" AfterTargets="Build">
+		<ItemGroup>
+			<ModFiles Include="$(KSPBT_ModRoot)\**\*" />
+		</ItemGroup>
+		<Copy SourceFiles="@(ModFiles)" DestinationFiles="@(ModFiles->'$(KSPBT_GameRoot)/GameData/$(MSBuildProjectName)/%(RecursiveDir)%(Filename)%(Extension)')" />
+	</Target>
+</Project>

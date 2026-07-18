@@ -376,3 +376,4 @@ FodyWeavers.xsd
 /NativePlugin/nvenc/nvEncodeAPI.h
 /ReferenceNotes
 /StructToolset
+GameData/CinematicRecorder/*.txt
