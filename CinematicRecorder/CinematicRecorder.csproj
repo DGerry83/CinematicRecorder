@@ -13,13 +13,20 @@
 	</PropertyGroup>
 	<!-- General -->
 	<PropertyGroup>
-		<RepoRoot>$(SolutionDir)</RepoRoot>
+		<RepoRoot Condition="'$(SolutionDir)' != ''">$(SolutionDir)</RepoRoot>
+		<RepoRoot Condition="'$(SolutionDir)' == ''">$(MSBuildProjectDirectory)/../</RepoRoot>
 	</PropertyGroup>
 	<!-- KSPBT -->
 	<PropertyGroup>
 		<KSPBT_ModPluginFolder>Plugins</KSPBT_ModPluginFolder>
 		<KSPBT_GenerateDependencyAttributes>false</KSPBT_GenerateDependencyAttributes>
 	</PropertyGroup>
+	<!-- AVC version file (generated to GameData mod folder on build) -->
+	<ItemGroup>
+		<KSPVersionFile Include="$(MSBuildProjectDirectory)/CinematicRecorder.version">
+			<Destination>$(KSPBT_ModRoot)/CinematicRecorder.version</Destination>
+		</KSPVersionFile>
+	</ItemGroup>
 	<!-- Mod Dependencies -->
 	<ItemGroup>
 		<ModReference Include="0Harmony">
@@ -39,7 +46,7 @@
 		<Copy SourceFiles="$(RepoRoot)license.txt" DestinationFiles="$(KSPBT_ModRoot)License.txt" />
 	</Target>
 	<!-- Copy mod folder to game -->
-	<Target Name="CopyToGame" AfterTargets="Build">
+	<Target Name="CopyToGame" AfterTargets="Build" DependsOnTargets="KSPBT_GenerateVersionFile">
 		<ItemGroup>
 			<ModFiles Include="$(KSPBT_ModRoot)\**\*" />
 		</ItemGroup>

@@ -368,12 +368,12 @@ MigrationBackup/
 FodyWeavers.xsd
 /.vscode/tasks.json
 /.vscode/settings.json
-/NativePlugin/amf
-/NativePlugin/ffmpeg
+/CinematicRecorderNative/amf
+/CinematicRecorderNative/ffmpeg
 /FolderList.txt
-/NativePlugin/build
+/CinematicRecorderNative/build
+/CinematicRecorderNative/nvenc/nvEncodeAPI.h
 /dll_copy_config.txt
-/NativePlugin/nvenc/nvEncodeAPI.h
 /ReferenceNotes
 /StructToolset
 GameData/CinematicRecorder/*.txt
