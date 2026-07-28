@@ -101,6 +101,7 @@ bool NvencEncoder::LoadNvencLibrary() {
     if (!m_hNvencLib) {
         DWORD lastError = ::GetLastError();
         LogDebug("nvEncodeAPI64.dll not found (expected on non-NVIDIA systems), error: %lu", lastError);
+        SetError("nvEncodeAPI64.dll not found (expected on non-NVIDIA systems), error: %lu", lastError);
         return false;
     }
     
