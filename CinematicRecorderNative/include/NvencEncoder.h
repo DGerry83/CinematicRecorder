@@ -42,10 +42,17 @@ private:
     bool ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Texture2D* textureHint);
     bool InitializeEncoder(const NvencEncoderSettings& settings);
     bool InitializeFFmpeg(const char* outputPath);
+    // F8: fetch SPS/PPS from NVENC and build avcC extradata for the matroska muxer
+    // (without extradata, avformat_write_header fails with INVALIDDATA). avStream is
+    // an AVStream*, kept opaque to avoid pulling FFmpeg headers into this header.
+    bool SetH264ExtradataFromNvenc(void* avStream);
     void LogDebug(const char* fmt, ...);
     void SetError(const char* fmt, ...);
     const char* NvencStatusToString(NVENCSTATUS status);
     bool ProcessOutput();
+    // F9: like ProcessOutput but reports whether a packet was actually written, so
+    // the shutdown drain can stop instead of spinning on LOCK_BUSY.
+    bool ProcessOutput(bool* wrotePacket);
     
     // NVENC handles
     void* m_hEncoder;
@@ -62,6 +69,12 @@ private:
     ID3D11Texture2D* m_encodeTextures[2];
     HANDLE m_sharedHandles[2];
     int m_bufferIndex;
+    // F2/F3: encode textures are created in the source texture's own DXGI format so
+    // CopyResource is legal by construction; the matching NVENC format is declared
+    // (B8G8R8A8_UNORM -> ARGB, R8G8B8A8_UNORM -> ABGR). Detected from the source
+    // texture at init.
+    DXGI_FORMAT m_encodeTextureFormat;
+    NV_ENC_BUFFER_FORMAT m_encodeBufferFormat;
     
     // NVENC resources
     NV_ENC_REGISTERED_PTR m_registeredResources[2];
@@ -71,7 +84,9 @@ private:
     // FFmpeg
     void* m_formatContext;
     void* m_videoStream;
+    bool m_headerWritten; // avformat_write_header succeeded; trailer safe to write
     int64_t m_frameCount;
+    int m_deferredFrames; // frames NVENC buffered (NEED_MORE_INPUT); drained at EOS
     int m_width, m_height, m_fps;
     bool m_initialized;
     bool m_isHEVC;

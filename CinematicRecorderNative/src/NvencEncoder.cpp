@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -23,7 +24,10 @@ typedef NVENCSTATUS (NVENCAPI *NVENCAPICREATEINSTANCEPROC)(NV_ENCODE_API_FUNCTIO
 NvencEncoder::NvencEncoder()
     : m_hEncoder(nullptr), m_hNvencLib(nullptr), m_device(nullptr), m_context(nullptr),
       m_unityDevice(nullptr), m_usingSharedDevice(false), m_bufferIndex(0),
+      m_encodeTextureFormat(DXGI_FORMAT_UNKNOWN), m_encodeBufferFormat(NV_ENC_BUFFER_FORMAT_UNDEFINED),
       m_bitstreamBuffer(nullptr), m_formatContext(nullptr), m_videoStream(nullptr),
+      m_headerWritten(false),
+      m_deferredFrames(0),
       m_frameCount(0), m_width(0), m_height(0), m_fps(0), m_initialized(false), m_isHEVC(false),
       m_tabComputeShader(nullptr), m_casComputeShader(nullptr), m_ditherComputeShader(nullptr),
       m_preComputeQuery(nullptr), m_postComputeQuery(nullptr),
@@ -276,8 +280,23 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     LogDebug("Using Preset: %s", settings.QualityPreset == 0 ? "P1(Speed)" : 
              (settings.QualityPreset == 2 ? "P7(Quality)" : "P4(Balanced)"));
     
-    // Configure
-    NV_ENC_CONFIG encodeConfig = {};
+    // Configure: start from the driver's preset config (the header-recommended flow)
+    // and apply our overrides on top. A zero-built NV_ENC_CONFIG leaves fields like
+    // frameFieldMode=0, which nvEncInitializeEncoder tolerates but nvEncEncodePicture
+    // rejects with UNSUPPORTED_PARAM for RGB input (probe-verified, RTX 3050,
+    // driver 595.97, 2026-07-28); a zero chromaFormatIDC additionally fails init with
+    // INVALID_PARAM (F1).
+    NV_ENC_PRESET_CONFIG presetConfig = {};
+    presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
+    presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
+    status = m_nvencFunctions.nvEncGetEncodePresetConfigEx(m_hEncoder, initParams.encodeGUID,
+                                                           initParams.presetGUID,
+                                                           initParams.tuningInfo, &presetConfig);
+    if (status != NV_ENC_SUCCESS) {
+        SetError("nvEncGetEncodePresetConfigEx failed: %s", NvencStatusToString(status));
+        return false;
+    }
+    NV_ENC_CONFIG encodeConfig = presetConfig.presetCfg;
     encodeConfig.version = NV_ENC_CONFIG_VER;
     encodeConfig.profileGUID = NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
     encodeConfig.gopLength = settings.GopSize;
@@ -307,6 +326,11 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     } else {
         encodeConfig.encodeCodecConfig.h264Config.idrPeriod = settings.GopSize;
         encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
+        // F1: chromaFormatIDC=0 (4:0:0 monochrome) is rejected by the driver at
+        // nvEncInitializeEncoder with INVALID_PARAM; 1 = YUV 4:2:0. Hardware-proven
+        // root cause (nvprobe bisection, RTX 3050, driver 595.97, 2026-07-28). The
+        // Ex preset config already carries 1; set it explicitly for clarity.
+        encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = 1;
     }
     
     initParams.encodeConfig = &encodeConfig;
@@ -361,7 +385,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     texDesc.Height = m_height;
     texDesc.MipLevels = 1;
     texDesc.ArraySize = 1;
-    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.Format = m_encodeTextureFormat; // F2/F3: match the source format exactly
     texDesc.SampleDesc.Count = 1;
     texDesc.Usage = D3D11_USAGE_DEFAULT;
     texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -397,7 +421,7 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
         regRes.pitch = 0;
         regRes.subResourceIndex = 0;
         regRes.resourceToRegister = m_encodeTextures[i];
-        regRes.bufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
+        regRes.bufferFormat = m_encodeBufferFormat; // F2: declare the actual texture layout
         regRes.bufferUsage = NV_ENC_INPUT_IMAGE;
         
         status = m_nvencFunctions.nvEncRegisterResource(m_hEncoder, &regRes);
@@ -471,13 +495,110 @@ bool NvencEncoder::InitializeFFmpeg(const char* outputPath) {
         LogDebug("Output file opened");
     }
     
+    // F8: the matroska muxer requires H264 extradata (avcC CodecPrivate) - without
+    // it avformat_write_header fails with INVALIDDATA (probe-verified 2026-07-28).
+    if (!m_isHEVC) {
+        LogDebug("Fetching SPS/PPS extradata from NVENC...");
+        if (!SetH264ExtradataFromNvenc(stream)) {
+            return false; // SetError already called
+        }
+        LogDebug("Extradata set (%d bytes)", par->extradata_size);
+    }
+    
     LogDebug("Writing format header...");
     if (avformat_write_header(ctx, nullptr) < 0) {
         SetError("avformat_write_header failed");
         return false;
     }
+    m_headerWritten = true;
     
     LogDebug("FFmpeg muxer ready");
+    return true;
+}
+
+// F8: pull SPS/PPS out-of-band from NVENC (Annex-B) and repackage as avcC extradata,
+// which is what the matroska muxer expects in CodecPrivate for AV_CODEC_ID_H264.
+// Mirrors the AMF path's "extradata before header" ordering (CinematicRecorderNative.cpp:807-837).
+bool NvencEncoder::SetH264ExtradataFromNvenc(void* avStream) {
+    AVStream* stream = (AVStream*)avStream;
+    
+    uint8_t payload[1024];
+    uint32_t payloadSize = 0;
+    NV_ENC_SEQUENCE_PARAM_PAYLOAD spspps = {};
+    spspps.version = NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER;
+    spspps.spsppsBuffer = payload;
+    spspps.inBufferSize = sizeof(payload);
+    spspps.outSPSPPSPayloadSize = &payloadSize;
+    
+    NVENCSTATUS status = m_nvencFunctions.nvEncGetSequenceParams(m_hEncoder, &spspps);
+    if (status != NV_ENC_SUCCESS) {
+        SetError("nvEncGetSequenceParams failed: %s", NvencStatusToString(status));
+        return false;
+    }
+    uint32_t size = payloadSize;
+    
+    // Locate Annex-B start codes (00 00 01; 4-byte form contains the 3-byte form at +1)
+    std::vector<uint32_t> sc;
+    for (uint32_t i = 0; i + 3 < size; i++) {
+        if (payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 1) {
+            sc.push_back(i);
+            i += 2;
+        }
+    }
+    
+    // Split into NALs, keep SPS (type 7) and PPS (type 8)
+    std::vector<std::pair<const uint8_t*, uint32_t>> sps, pps;
+    for (size_t k = 0; k < sc.size(); k++) {
+        uint32_t start = sc[k] + 3;
+        uint32_t end = (k + 1 < sc.size()) ? sc[k + 1] : size;
+        while (end > start && payload[end - 1] == 0) end--; // trailing zeros belong to next prefix
+        if (end <= start) continue;
+        uint8_t nalType = payload[start] & 0x1F;
+        if (nalType == 7) sps.push_back({ payload + start, end - start });
+        else if (nalType == 8) pps.push_back({ payload + start, end - start });
+    }
+    
+    if (sps.empty() || pps.empty() || sps[0].second < 4) {
+        SetError("nvEncGetSequenceParams returned no usable SPS/PPS (%zu SPS, %zu PPS)",
+                 sps.size(), pps.size());
+        return false;
+    }
+    
+    // Build avcC: version, profile/compat/level from SPS, 4-byte NAL lengths, SPS/PPS lists
+    size_t total = 7;
+    for (auto& n : sps) total += 2 + n.second;
+    total += 1;
+    for (auto& n : pps) total += 2 + n.second;
+    
+    uint8_t* avcc = (uint8_t*)av_mallocz(total + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (!avcc) {
+        SetError("av_mallocz failed for extradata");
+        return false;
+    }
+    
+    uint8_t* p = avcc;
+    *p++ = 1;             // configurationVersion
+    *p++ = sps[0].first[1]; // AVCProfileIndication
+    *p++ = sps[0].first[2]; // profile_compatibility
+    *p++ = sps[0].first[3]; // AVCLevelIndication
+    *p++ = 0xFF;          // 6 reserved bits + lengthSizeMinusOne = 3 (4-byte lengths)
+    *p++ = (uint8_t)(0xE0 | sps.size());
+    for (auto& n : sps) {
+        *p++ = (uint8_t)(n.second >> 8);
+        *p++ = (uint8_t)(n.second & 0xFF);
+        memcpy(p, n.first, n.second);
+        p += n.second;
+    }
+    *p++ = (uint8_t)pps.size();
+    for (auto& n : pps) {
+        *p++ = (uint8_t)(n.second >> 8);
+        *p++ = (uint8_t)(n.second & 0xFF);
+        memcpy(p, n.first, n.second);
+        p += n.second;
+    }
+    
+    stream->codecpar->extradata = avcc;
+    stream->codecpar->extradata_size = (int)total;
     return true;
 }
 
@@ -504,6 +625,31 @@ bool NvencEncoder::Initialize(ID3D11Device* unityDevice, ID3D11Texture2D* textur
         return false;
     }
     LogDebug("Phase 2 complete: Device ready");
+    
+    // F2/F3: determine the source texture format up front. Encode textures are created
+    // in this exact format so CopyResource is legal by construction, and the matching
+    // NVENC buffer format is declared (B8G8R8A8 -> ARGB, R8G8B8A8 -> ABGR). An
+    // unexpected format fails init loudly instead of silently no-op copying later.
+    if (!textureHint) {
+        SetError("Source texture hint is null; cannot determine encode format");
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC srcDesc = {};
+    textureHint->GetDesc(&srcDesc);
+    LogDebug("Source texture: format=%d, %ux%u", (int)srcDesc.Format, srcDesc.Width, srcDesc.Height);
+    if (srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
+        m_encodeTextureFormat = srcDesc.Format;
+        m_encodeBufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
+    } else if (srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM) {
+        m_encodeTextureFormat = srcDesc.Format;
+        m_encodeBufferFormat = NV_ENC_BUFFER_FORMAT_ABGR;
+    } else {
+        SetError("Unsupported source texture format %d (expected B8G8R8A8_UNORM or R8G8B8A8_UNORM)",
+                 (int)srcDesc.Format);
+        return false;
+    }
+    LogDebug("Encode format selected: DXGI=%d, NVENC=%s", (int)m_encodeTextureFormat,
+             m_encodeBufferFormat == NV_ENC_BUFFER_FORMAT_ARGB ? "ARGB" : "ABGR");
     
     LogDebug("Phase 3: Initializing encoder...");
     if (!InitializeEncoder(settings)) {
@@ -567,6 +713,14 @@ bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex
             return false;
         }
     } else if (unityTexture) {
+        // F3: CopyResource silently no-ops on format mismatch - verify instead.
+        D3D11_TEXTURE2D_DESC frameDesc = {};
+        unityTexture->GetDesc(&frameDesc);
+        if (frameDesc.Format != m_encodeTextureFormat) {
+            SetError("Frame texture format %d does not match encode format %d; refusing blind CopyResource",
+                     (int)frameDesc.Format, (int)m_encodeTextureFormat);
+            return false;
+        }
         m_context->CopyResource(m_encodeTextures[idx], unityTexture);
         m_context->Flush();
         LogDebug("Frame %lld - CopyResource completed", frameIndex);
@@ -577,6 +731,12 @@ bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex
 }
 
 bool NvencEncoder::ProcessOutput() {
+    bool ignored;
+    return ProcessOutput(&ignored);
+}
+
+bool NvencEncoder::ProcessOutput(bool* wrotePacket) {
+    *wrotePacket = false;
     NV_ENC_LOCK_BITSTREAM lockBS = {};
     lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
     lockBS.outputBitstream = m_bitstreamBuffer;
@@ -590,6 +750,7 @@ bool NvencEncoder::ProcessOutput() {
         SetError("nvEncLockBitstream failed: %s", NvencStatusToString(status));
         return false;
     }
+    *wrotePacket = true;
     
     LogDebug("Bitstream locked: %u bytes, Frame %d", lockBS.bitstreamSizeInBytes, lockBS.frameIdx);
     
@@ -818,21 +979,33 @@ bool NvencEncoder::EncodeNVENC(int idx, int64_t frameIndex) {
     picParams.outputBitstream = m_bitstreamBuffer;
     picParams.inputWidth = m_width;
     picParams.inputHeight = m_height;
-    picParams.bufferFmt = NV_ENC_BUFFER_FORMAT_ARGB;
+    picParams.inputPitch = m_width; // F6: header prescribes inputWidth when pitch unknown
+    picParams.bufferFmt = mapRes.mappedBufferFmt; // F2: use the mapped format, per header
+    picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME; // F5
     picParams.frameIdx = (uint32_t)frameIndex;
     
     status = m_nvencFunctions.nvEncEncodePicture(m_hEncoder, &picParams);
     
-    // Unmap immediately after encode
+    // F7: only consume the bitstream when the encode actually produced output;
+    // NEED_MORE_INPUT means the frame was buffered by the encoder (counted so the
+    // EOS drain knows exactly how many packets remain - see F9 note in Shutdown).
+    bool encodeOk;
+    if (status == NV_ENC_SUCCESS) {
+        encodeOk = ProcessOutput();
+    } else if (status == NV_ENC_ERR_NEED_MORE_INPUT) {
+        m_deferredFrames++;
+        encodeOk = true;
+    } else {
+        SetError("nvEncEncodePicture failed: %s", NvencStatusToString(status));
+        encodeOk = false;
+    }
+    
+    // F4: unmap only after ProcessOutput has locked/consumed this frame's bitstream,
+    // matching the header contract and all reference implementations.
     m_nvencFunctions.nvEncUnmapInputResource(m_hEncoder, m_mappedInputs[idx]);
     m_mappedInputs[idx] = nullptr;
     
-    if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
-        SetError("nvEncEncodePicture failed: %s", NvencStatusToString(status));
-        return false;
-    }
-    
-    return ProcessOutput();
+    return encodeOk;
 }
 
 bool NvencEncoder::EncodeFrameWithCAS(ID3D11Texture2D* unityTexture, int64_t frameIndex, float sharpness) {
@@ -1098,8 +1271,19 @@ void NvencEncoder::Shutdown() {
         picParams.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
         m_nvencFunctions.nvEncEncodePicture(m_hEncoder, &picParams);
         
-        // Process remaining output
-        while (ProcessOutput()) {}
+        // Drain deferred frames. F9: nvEncLockBitstream SPINS (100% CPU) when called
+        // with no output pending (probe-verified on RTX 3050, driver 595.97 -
+        // nvprobe3 D2/D6), so the drain must lock exactly once per deferred
+        // (NEED_MORE_INPUT) frame and never more. In the current sync,
+        // no-B-frame config the count is 0 and this loop is a no-op: every frame's
+        // packet was already consumed per-frame, and EOS produces no new output.
+        for (int i = 0; i < m_deferredFrames; i++) {
+            bool wrote = false;
+            if (!ProcessOutput(&wrote) || !wrote) break; // LOCK_BUSY/error: stop, never spin
+        }
+        if (m_deferredFrames > 0)
+            LogDebug("EOS drain: %d deferred frames flushed", m_deferredFrames);
+        m_deferredFrames = 0;
         
         // Unregister resources
         for (int i = 0; i < 2; i++) {
@@ -1124,11 +1308,16 @@ void NvencEncoder::Shutdown() {
     }
     
     if (m_formatContext) {
-        av_write_trailer((AVFormatContext*)m_formatContext);
+        // Only write the trailer when the header was written - av_write_trailer on a
+        // context whose avformat_write_header failed (or never ran) dereferences
+        // uninitialized muxer state and crashes (WER: AV in avformat-59.dll).
+        if (m_headerWritten)
+            av_write_trailer((AVFormatContext*)m_formatContext);
         if (!(((AVFormatContext*)m_formatContext)->oformat->flags & AVFMT_NOFILE))
             avio_closep(&((AVFormatContext*)m_formatContext)->pb);
         avformat_free_context((AVFormatContext*)m_formatContext);
         m_formatContext = nullptr;
+        m_headerWritten = false;
     }
     
     if (m_context) {

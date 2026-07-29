@@ -246,6 +246,11 @@ void PrintReport(const VerifyReport& report) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Unbuffered stdout: phase markers must survive a hard crash (access violation
+    // on the NVIDIA run would otherwise discard the buffered output, hiding the
+    // crash location).
+    setvbuf(stdout, nullptr, _IONBF, 0);
+
     HarnessConfig cfg;
     if (!ParseArgs(argc, argv, cfg)) {
         PrintUsage();
