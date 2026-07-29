@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
@@ -15,6 +15,15 @@ namespace CinematicRecorder.Capture
         private static bool _nativeDllAvailable;
         private static IntPtr _nativeLibraryHandle; // Keep native plugin DLL loaded
         private static IntPtr _nvencLibraryHandle; // Keep NVENC driver DLL loaded
+        #endregion
+
+        #region Availability
+        /// <summary>
+        /// True when the NVENC zero-copy path can run on this machine: native plugin DLL
+        /// loaded, init export found, and the NVIDIA driver DLL (nvEncodeAPI64.dll) present.
+        /// Computed by the static constructor's probes; used for GPU auto-detection.
+        /// </summary>
+        public static bool IsAvailable => _nativeDllAvailable;
         #endregion
 
         #region Static Initialization
@@ -172,12 +181,6 @@ namespace CinematicRecorder.Capture
             IntPtr encoder,
             int enabled,
             int subFrameCount);
-
-        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int CR_NvencSetSharpening(
-            IntPtr encoder,
-            int enabled,
-            float strength);
         #endregion
         #region Public API
         public bool IsInitialized => _isInitialized;
@@ -402,37 +405,6 @@ namespace CinematicRecorder.Capture
             }
         }
 
-        /// <summary>
-        /// Sets sharpening filter parameters.
-        /// </summary>
-        public bool SetSharpening(bool enabled, float strength)
-        {
-            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
-            {
-                Debug.LogError("[NvencZeroCopyEncoder] Cannot set sharpening - encoder not initialized");
-                return false;
-            }
-
-            try
-            {
-                // Clamp strength to valid range
-                strength = Mathf.Clamp(strength, 0.0f, 0.5f);
-                
-                int result = CR_NvencSetSharpening(_encoderHandle, enabled ? 1 : 0, strength);
-                if (result != 0)
-                {
-                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
-                    Debug.LogError($"[NvencZeroCopyEncoder] Failed to set sharpening: {err}");
-                    return false;
-                }
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[NvencZeroCopyEncoder] SetSharpening exception: {ex.Message}");
-                return false;
-            }
-        }
         #endregion
         #region IDisposable
         public void Dispose()

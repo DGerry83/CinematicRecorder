@@ -1,4 +1,4 @@
-﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Audio;
 using CinematicRecorder.Capture;
 using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
@@ -460,11 +460,12 @@ namespace CinematicRecorder.Core
             // Output duration is based on playback FPS
             float outputDuration = finalFrames / (float)PlaybackFPS;
 
-            // Encoding mode string (simple + honest)
-            string encodingMode =
-                SessionState.SelectedEncoderTab == 0 ? "AMF (AMD HEVC)" :
-                SessionState.SelectedEncoderTab == 1 ? "NVENC (NVIDIA HEVC)" :
-                "CPU (x264)";
+            // Encoding mode string: the path that ACTUALLY ran (zero-copy vs FFmpeg
+            // fallback vs CPU) - the FFmpeg fallback also uses NVENC/AMF silicon and
+            // must be distinguishable in the report. Annotate encode-failure aborts (F12).
+            string encodingMode = controller.ActualEncoderMode;
+            if (controller.EncodeAborted)
+                encodingMode += $" - ABORTED ({controller.EncodeAbortReason})";
 
             // Pull output path from controller
             string outputPath = controller.OutputPath;

@@ -152,8 +152,6 @@ namespace CinematicRecorder.UI
 
         private void DrawEncodingTab()
         {
-            DrawSafeModeToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawAudioCaptureToggle();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawPngSequenceToggle();
@@ -171,57 +169,6 @@ namespace CinematicRecorder.UI
                 GUILayout.Space(CinematicUIResources.Spacing.LARGE);
                 DrawSharpeningToggle();
             }
-        }
-
-        private void DrawSafeModeToggle()
-        {
-            bool wasEnabled = GUI.enabled;
-            if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.ForceSoftwareEncoding)
-            {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.ForceSoftwareEncoding,
-                AdvancedSettings.SafeModeToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.ForceSoftwareEncoding && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.ForceSoftwareEncoding = newValue;
-                UnityEngine.Debug.Log($"[CinematicRecorder] ForceSoftwareEncoding = {newValue}");
-
-                // Disable TAB if software encoding forced (TAB requires GPU)
-                if (newValue && SessionState.EnableTemporalAccumulation)
-                {
-                    SessionState.EnableTemporalAccumulation = false;
-                    UnityEngine.Debug.Log("[CinematicRecorder] TAB disabled due to software encoding");
-                }
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(AdvancedSettings.SafeModeTooltip, helpStyle);
-
-            if (DeterministicCaptureSession.IsRunning)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUIStyle warningStyle = CinematicUIResources.Styles.Label(
-                    CinematicUIResources.Colors.INFO_ORANGE,
-                    fontSize: CinematicUIResources.Typography.INFO
-                );
-                GUILayout.Label(Settings.SafeModeRecordingWarning, warningStyle);
-            }
-
-            GUI.enabled = wasEnabled;
         }
 
         private void DrawAudioCaptureToggle()
@@ -306,8 +253,9 @@ namespace CinematicRecorder.UI
 
         private void DrawTemporalAccumulationSection()
         {
-            // Only available when GPU encoder selected (not CPU) and not in PNG mode
-            bool canUseTab = SessionState.SelectedEncoderTab != 2 && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding;
+            // TAB is AMD-only for now (NVENC wiring is Phase 4) and requires the GPU path
+            bool isAmd = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd;
+            bool canUseTab = isAmd && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding;
 
             bool wasEnabled = GUI.enabled;
             if (!canUseTab || DeterministicCaptureSession.IsRunning)
@@ -328,43 +276,23 @@ namespace CinematicRecorder.UI
                 toggleStyle
             );
 
-            // Warning for non-AMD encoders
-            if (SessionState.SelectedEncoderTab == 1 && canUseTab) // NVENC selected
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            if (!isAmd && SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Nvidia)
             {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                // NVIDIA machine: explain why TAB is missing
                 GUIStyle warningStyle = CinematicUIResources.Styles.Info();
                 warningStyle.wordWrap = true;
                 GUILayout.Label(AdvancedSettings.TabAMFOnlyWarning, warningStyle);
-                // Force disable if NVENC selected
-                if (SessionState.EnableTemporalAccumulation)
-                {
-                    newValue = false;
-                }
-            }
-            else if (SessionState.SelectedEncoderTab == 2 || SessionState.PngSequence || SessionState.ForceSoftwareEncoding)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUIStyle infoStyle = CinematicUIResources.Styles.Help();
-                infoStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.TemporalAccumulationTooltip, infoStyle);
             }
             else
             {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
                 GUIStyle helpStyle = CinematicUIResources.Styles.Help();
                 helpStyle.wordWrap = true;
                 GUILayout.Label(AdvancedSettings.TemporalAccumulationTooltip, helpStyle);
             }
 
-            // If TAB enabled and available, show controls
-            if (newValue && canUseTab && SessionState.SelectedEncoderTab == 0)
-            {
-                SessionState.EnableTemporalAccumulation = true;
-            }
-            else
-            {
-                SessionState.EnableTemporalAccumulation = false;
-            }
+            // TAB only sticks when actually usable
+            SessionState.EnableTemporalAccumulation = newValue && canUseTab;
 
             GUI.enabled = wasEnabled;
         }
@@ -373,7 +301,7 @@ namespace CinematicRecorder.UI
         {
             bool wasEnabled = GUI.enabled;
             // Gradient protection only available for AMD encoder
-            bool canUseGradient = SessionState.SelectedEncoderTab == 0;
+            bool canUseGradient = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd;
             if (!canUseGradient || DeterministicCaptureSession.IsRunning)
                 GUI.enabled = false;
 

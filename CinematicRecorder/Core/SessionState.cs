@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 namespace CinematicRecorder.Core
@@ -22,9 +22,33 @@ namespace CinematicRecorder.Core
 
         #region Encoder Selection
         /// <summary>
-        /// Selected encoder: 0=AMF (AMD HEVC), 1=NVENC (NVIDIA HEVC), 2=CPU (x264)
+        /// GPU encoder families detectable by probe (native DLL + export + driver DLL).
         /// </summary>
-        public static int SelectedEncoderTab { get; set; } = 0;
+        public enum GpuEncoder { None, Nvidia, Amd }
+
+        private static GpuEncoder? _detectedGpuEncoder;
+
+        /// <summary>
+        /// GPU encoder detected on this machine, computed once per KSP run from the
+        /// wrappers' availability probes (NVENC preferred when both are present).
+        /// The UI shows only this family's options; users never select a GPU manually.
+        /// </summary>
+        public static GpuEncoder DetectedGpuEncoder
+        {
+            get
+            {
+                if (!_detectedGpuEncoder.HasValue)
+                {
+                    _detectedGpuEncoder =
+                        Capture.NvencZeroCopyEncoder.IsAvailable ? GpuEncoder.Nvidia :
+                        Capture.AmfZeroCopyEncoder.IsAvailable ? GpuEncoder.Amd :
+                        GpuEncoder.None;
+                    UnityEngine.Debug.Log($"[CinematicRecorder] GPU encoder detection: {_detectedGpuEncoder.Value} " +
+                        $"(NVENC available: {Capture.NvencZeroCopyEncoder.IsAvailable}, AMF available: {Capture.AmfZeroCopyEncoder.IsAvailable})");
+                }
+                return _detectedGpuEncoder.Value;
+            }
+        }
         #endregion
 
         #region AMF Settings

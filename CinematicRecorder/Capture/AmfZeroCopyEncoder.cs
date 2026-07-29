@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
@@ -12,6 +12,18 @@ namespace CinematicRecorder.Capture
         private bool _isInitialized;
         private bool _isDisposed;
         private const string PluginName = "CinematicRecorderNative";
+        private static bool _nativeDllAvailable;
+        private static IntPtr _amfRuntimeHandle; // Keep AMF runtime DLL loaded
+        #endregion
+
+        #region Availability
+        /// <summary>
+        /// True when the AMF zero-copy path can run on this machine: native plugin DLL
+        /// loaded, init export found, and the AMF runtime (amfrt64.dll, installed with
+        /// AMD drivers) present. Computed by the static constructor's probes; used for
+        /// GPU auto-detection.
+        /// </summary>
+        public static bool IsAvailable => _nativeDllAvailable;
         #endregion
 
         #region Static Initialization
@@ -66,6 +78,19 @@ namespace CinematicRecorder.Capture
                     }
 
                     Debug.Log($"[AmfZeroCopyEncoder] Export found at 0x{procAddr.ToInt64():X}");
+
+                    // Probe the AMF runtime (amfrt64.dll ships with AMD drivers) - the
+                    // honest equivalent of the NVENC driver-DLL probe. Kept loaded on
+                    // success, mirroring the NVENC wrapper's pattern.
+                    _amfRuntimeHandle = LoadLibrary("amfrt64.dll");
+                    if (_amfRuntimeHandle == IntPtr.Zero)
+                    {
+                        Debug.Log("[AmfZeroCopyEncoder] amfrt64.dll not available - expected on non-AMD systems");
+                        return;
+                    }
+                    Debug.Log("[AmfZeroCopyEncoder] amfrt64.dll pre-loaded successfully");
+
+                    _nativeDllAvailable = true;
                 }
             }
             catch (Exception ex)

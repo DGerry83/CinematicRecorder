@@ -1,4 +1,4 @@
-﻿namespace CinematicRecorder.UI
+namespace CinematicRecorder.UI
 {
     public static class CinematicUIStrings
     {
@@ -67,6 +67,11 @@
             public const string AMDHEVC = "AMD (HEVC)";
             public const string NvidiaHEVC = "NVIDIA (HEVC)";
             public const string CPUx264 = "CPU (x264)";
+            // GPU auto-detection (Phase 3): replaces the manual vendor picker
+            public const string DetectedEncoderFormat = "Detected encoder: {0}";
+            public const string DetectedEncoderNvenc = "NVENC (NVIDIA)";
+            public const string DetectedEncoderAmf = "AMF (AMD)";
+            public const string DetectedEncoderCpu = "CPU (no GPU encoder detected)";
             public const string QualityLabel = "Quality Level:";
             public const string RateControlCQP = "Quality(CQ)";
             public const string RateControlVBR = "VBR";

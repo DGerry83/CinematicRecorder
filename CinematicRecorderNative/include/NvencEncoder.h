@@ -73,11 +73,9 @@ private:
     ID3D11Device* m_device;
     ID3D11DeviceContext* m_context;
     ID3D11Device* m_unityDevice;
-    bool m_usingSharedDevice;
     
     // Texture resources
     ID3D11Texture2D* m_encodeTextures[2];
-    HANDLE m_sharedHandles[2];
     int m_bufferIndex;
     // F2/F3: encode textures are created in the source texture's own DXGI format so
     // CopyResource is legal by construction; the matching NVENC format is declared
@@ -107,14 +105,14 @@ private:
     
     // Thread safety
     std::mutex m_encodeMutex;
+    std::mutex m_writeMutex; // serializes av_interleaved_write_frame (F16: was a
+                             // function-static shared across encoder instances)
     
     // Compute shaders (created from embedded bytecode)
     ID3D11ComputeShader* m_tabComputeShader;
     ID3D11ComputeShader* m_casComputeShader;
-    ID3D11ComputeShader* m_ditherComputeShader;
 
     // GPU Synchronization
-    ID3D11Query* m_preComputeQuery;
     ID3D11Query* m_postComputeQuery;
     
     // Intermediate textures for shader pipeline (ping-pong)
@@ -128,7 +126,6 @@ private:
 
     // Constant buffers
     ID3D11Buffer* m_casParamsBuffer;
-    ID3D11Buffer* m_ditherParamsBuffer;
     
     // TAB state
     bool m_isTabMode;

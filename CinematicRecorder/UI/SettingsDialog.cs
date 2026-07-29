@@ -1,4 +1,4 @@
-﻿using CinematicRecorder.Capture;
+using CinematicRecorder.Capture;
 using CinematicRecorder.Core;
 using CinematicRecorder.Integration;
 using System;
@@ -30,7 +30,6 @@ namespace CinematicRecorder.UI
         private AdvancedSettingsWindow advancedSettingsWindow;
 
         private readonly int[] frameratePresets = { 24, 30, 48, 60, 120, 240, 384 };
-        private readonly string[] encoderTabNames = { Settings.EncoderAMD, Settings.EncoderNVIDIA, Settings.EncoderCPU };
         private readonly string[] rateControlNames = { Settings.RateControlCQP, Settings.RateControlVBR };
         private readonly string[] speedPresetNames = { Settings.SpeedPresetSpeed, Settings.SpeedPresetBalanced, Settings.SpeedPresetQuality };
         #endregion
@@ -180,8 +179,10 @@ namespace CinematicRecorder.UI
             stopRequested = false;
             int simFps = frameratePresets[SessionState.SimFpsIndex];
             int playbackFps = frameratePresets[SessionState.PlaybackFpsIndex];
-            bool forceSoftware = SessionState.SelectedEncoderTab == 2;
-            bool zeroCopy = SessionState.SelectedEncoderTab != 2;
+            // Safe Mode forces the CPU path; otherwise zero-copy is tried automatically
+            // (availability probes pick NVENC or AMF - no manual GPU selection).
+            bool forceSoftware = SessionState.ForceSoftwareEncoding;
+            bool zeroCopy = !SessionState.ForceSoftwareEncoding;
 
             DeterministicCaptureSession.Run(
                     simFps,
@@ -369,30 +370,73 @@ namespace CinematicRecorder.UI
             GUILayout.BeginVertical(GUI.skin.box);
             GUILayout.Label(Settings.EncoderTitle, HighLogic.Skin.label);
 
-            int selected = SessionState.SelectedEncoderTab;
-            GUILayout.BeginHorizontal();
-
-            if (GUILayout.Toggle(selected == 0, Settings.EncoderAMD, HighLogic.Skin.toggle, GUILayout.Width(CinematicUIResources.Layout.Encoder.BTN_WIDTH_AMD)))
-                selected = 0;
+            // GPU auto-detection (Phase 3): show what the probes found and only the
+            // options relevant to it - users never pick a GPU family manually.
+            SessionState.GpuEncoder detected = SessionState.DetectedGpuEncoder;
+            string detectedName =
+                detected == SessionState.GpuEncoder.Nvidia ? Settings.DetectedEncoderNvenc :
+                detected == SessionState.GpuEncoder.Amd ? Settings.DetectedEncoderAmf :
+                Settings.DetectedEncoderCpu;
+            GUILayout.Label(string.Format(Settings.DetectedEncoderFormat, detectedName), HighLogic.Skin.label);
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            if (GUILayout.Toggle(selected == 1, Settings.EncoderNVIDIA, HighLogic.Skin.toggle, GUILayout.Width(CinematicUIResources.Layout.Encoder.BTN_WIDTH_NVIDIA)))
-                selected = 1;
+            // Safe Mode (forced CPU encoding) - disabled while recording.
+            // Same behavior as the old Advanced-tab toggle (single home now).
+            bool wasEnabled = GUI.enabled;
+            if (DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            GUIStyle safeModeStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.ForceSoftwareEncoding)
+            {
+                safeModeStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                safeModeStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                safeModeStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool safeMode = GUILayout.Toggle(
+                SessionState.ForceSoftwareEncoding,
+                Settings.SafeModeToggle,
+                safeModeStyle
+            );
+            if (safeMode != SessionState.ForceSoftwareEncoding && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.ForceSoftwareEncoding = safeMode;
+                UnityEngine.Debug.Log($"[CinematicRecorder] Safe Mode (force CPU) = {safeMode}");
+
+                // TAB requires GPU - disable it when software encoding is forced
+                if (safeMode && SessionState.EnableTemporalAccumulation)
+                {
+                    SessionState.EnableTemporalAccumulation = false;
+                    UnityEngine.Debug.Log("[CinematicRecorder] TAB disabled due to Safe Mode");
+                }
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle safeModeHelp = CinematicUIResources.Styles.Help();
+            safeModeHelp.wordWrap = true;
+            GUILayout.Label(Settings.SafeModeTooltip, safeModeHelp);
+
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle warningStyle = CinematicUIResources.Styles.Label(
+                    CinematicUIResources.Colors.INFO_ORANGE,
+                    fontSize: CinematicUIResources.Typography.INFO
+                );
+                GUILayout.Label(Settings.SafeModeRecordingWarning, warningStyle);
+            }
+
+            GUI.enabled = wasEnabled;
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
 
-            if (GUILayout.Toggle(selected == 2, Settings.EncoderCPU, HighLogic.Skin.toggle, GUILayout.Width(CinematicUIResources.Layout.Encoder.BTN_WIDTH_CPU)))
-                selected = 2;
-
-            GUILayout.EndHorizontal();
-            SessionState.SelectedEncoderTab = selected;
-            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
-
-            if (selected == 0)
-                DrawAmfSettings();
-            else if (selected == 1)
+            // Quality options only for the encoder that will actually be used
+            if (SessionState.ForceSoftwareEncoding || detected == SessionState.GpuEncoder.None)
+                DrawCpuSettings();
+            else if (detected == SessionState.GpuEncoder.Nvidia)
                 DrawNvencSettings();
             else
-                DrawCpuSettings();
+                DrawAmfSettings();
 
             GUILayout.EndVertical();
         }
@@ -475,12 +519,14 @@ namespace CinematicRecorder.UI
             {
                 GUILayout.Label(Settings.QualityLabel, HighLogic.Skin.label);
                 SessionState.NvencQualitySlider = GUILayout.HorizontalSlider(SessionState.NvencQualitySlider, 0f, 1f);
-                int crf = SessionState.CpuCrfValue;
-                string qualityDesc = crf <= 8 ? Settings.QualityNearLossless :
-                                     crf <= 14 ? Settings.QualityMaster :
-                                     crf <= 20 ? Settings.QualityHigh :
+                // Bug fix: this showed CpuCrfValue (the CPU slider's value), so the
+                // NVENC slider appeared to do nothing
+                int cq = SessionState.NvencCqValue;
+                string qualityDesc = cq <= 8 ? Settings.QualityNearLossless :
+                                     cq <= 14 ? Settings.QualityMaster :
+                                     cq <= 20 ? Settings.QualityHigh :
                                      Settings.QualityCompressed;
-                GUILayout.Label(string.Format(Settings.CRFFormat, crf, qualityDesc));
+                GUILayout.Label(string.Format(Settings.CRFFormat, cq, qualityDesc));
 
                 GUIStyle infoStyle = CinematicUIResources.Styles.Help();
                 GUILayout.Label(Settings.CQLabel, infoStyle);

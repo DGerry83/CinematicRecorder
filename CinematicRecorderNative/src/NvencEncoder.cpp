@@ -23,23 +23,22 @@ typedef NVENCSTATUS (NVENCAPI *NVENCAPICREATEINSTANCEPROC)(NV_ENCODE_API_FUNCTIO
 
 NvencEncoder::NvencEncoder()
     : m_hEncoder(nullptr), m_hNvencLib(nullptr), m_device(nullptr), m_context(nullptr),
-      m_unityDevice(nullptr), m_usingSharedDevice(false), m_bufferIndex(0),
+      m_unityDevice(nullptr), m_bufferIndex(0),
       m_encodeTextureFormat(DXGI_FORMAT_UNKNOWN), m_encodeBufferFormat(NV_ENC_BUFFER_FORMAT_UNDEFINED),
       m_bitstreamBuffer(nullptr), m_formatContext(nullptr), m_videoStream(nullptr),
       m_headerWritten(false),
       m_deferredFrames(0),
       m_frameCount(0), m_width(0), m_height(0), m_fps(0), m_initialized(false), m_isHEVC(false),
-      m_tabComputeShader(nullptr), m_casComputeShader(nullptr), m_ditherComputeShader(nullptr),
-      m_preComputeQuery(nullptr), m_postComputeQuery(nullptr),
+      m_tabComputeShader(nullptr), m_casComputeShader(nullptr),
+      m_postComputeQuery(nullptr),
       m_blueNoiseTexture(nullptr), m_blueNoiseSRV(nullptr),
-      m_casParamsBuffer(nullptr), m_ditherParamsBuffer(nullptr),
+      m_casParamsBuffer(nullptr),
       m_isTabMode(false), m_currentAccumBuffer(0), m_currentSubFrame(0), m_tabSubFrameCount(8),
       m_tabWeightBuffer(nullptr) {
     
     memset(m_encodeTextures, 0, sizeof(m_encodeTextures));
     memset(m_accumulationArray, 0, sizeof(m_accumulationArray));
     memset(m_accumulationSRV, 0, sizeof(m_accumulationSRV));
-    memset(m_sharedHandles, 0, sizeof(m_sharedHandles));
     memset(m_registeredResources, 0, sizeof(m_registeredResources));
     memset(m_mappedInputs, 0, sizeof(m_mappedInputs));
     memset(m_errorBuffer, 0, sizeof(m_errorBuffer));
@@ -146,83 +145,30 @@ bool NvencEncoder::ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Textu
     m_unityDevice->AddRef();
     LogDebug("Unity device retained");
     
-    // Try direct device usage first by attempting to create a session
+    // Direct device usage only: probe by opening a session on the Unity device.
+    // (The cross-device shared-texture fallback was removed in Phase 3 - it was racy
+    // by design (no keyed mutex), never taken on the test machine, and untestable.
+    // If this probe ever fails, init fails loudly and a proper keyed-mutex rework
+    // becomes its own scope, per NVENC_ZEROCOPY_PLAN Phase 1.)
     LogDebug("Attempting direct Unity device usage...");
-    {
-        NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params = {};
-        params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
-        params.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
-        params.device = unityDevice;
-        params.apiVersion = NVENCAPI_VERSION;
-        
-        void* testEncoder = nullptr;
-        NVENCSTATUS status = m_nvencFunctions.nvEncOpenEncodeSessionEx(&params, &testEncoder);
-        if (status == NV_ENC_SUCCESS) {
-            LogDebug("Direct Unity device usage successful");
-            m_nvencFunctions.nvEncDestroyEncoder(testEncoder);
-            
-            m_device = unityDevice;
-            m_device->AddRef();
-            m_device->GetImmediateContext(&m_context);
-            m_usingSharedDevice = false;
-            return true;
-        }
-        LogDebug("Direct device failed (%s), creating secondary device", NvencStatusToString(status));
-    }
+    NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params = {};
+    params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
+    params.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
+    params.device = unityDevice;
+    params.apiVersion = NVENCAPI_VERSION;
     
-    // Create secondary device on same adapter
-    IDXGIDevice* dxgiDevice = nullptr;
-    HRESULT hr = unityDevice->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
-    if (FAILED(hr)) {
-        SetError("Failed to get IDXGIDevice from Unity device");
+    void* testEncoder = nullptr;
+    NVENCSTATUS status = m_nvencFunctions.nvEncOpenEncodeSessionEx(&params, &testEncoder);
+    if (status != NV_ENC_SUCCESS) {
+        SetError("NVENC session probe on the render device failed: %s", NvencStatusToString(status));
         return false;
     }
+    m_nvencFunctions.nvEncDestroyEncoder(testEncoder);
     
-    IDXGIAdapter* adapter = nullptr;
-    hr = dxgiDevice->GetAdapter(&adapter);
-    dxgiDevice->Release();
-    
-    if (FAILED(hr)) {
-        SetError("Failed to get adapter from Unity device");
-        return false;
-    }
-    
-    DXGI_ADAPTER_DESC adapterDesc;
-    adapter->GetDesc(&adapterDesc);
-    LogDebug("Creating secondary device on adapter: %S", adapterDesc.Description);
-    LogDebug("Adapter info: VendorId=0x%04X, DeviceId=0x%04X", adapterDesc.VendorId, adapterDesc.DeviceId);
-    
-    D3D11_CREATE_DEVICE_FLAG createFlags = (D3D11_CREATE_DEVICE_FLAG)(
-        D3D11_CREATE_DEVICE_VIDEO_SUPPORT | 
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT
-    );
-    
-    D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
-    D3D_FEATURE_LEVEL level;
-    
-    hr = D3D11CreateDevice(
-        adapter,
-        D3D_DRIVER_TYPE_UNKNOWN,
-        nullptr,
-        createFlags,
-        featureLevels,
-        1,
-        D3D11_SDK_VERSION,
-        &m_device,
-        &level,
-        &m_context
-    );
-    
-    adapter->Release();
-    
-    if (FAILED(hr)) {
-        SetError("Failed to create video-support device (0x%08X)", hr);
-        return false;
-    }
-    
-    LogDebug("Secondary device created with VIDEO_SUPPORT, Feature Level: %d", level);
-    m_usingSharedDevice = true;
-    LogDebug("ValidateOrCreateDevice complete, usingSharedDevice=%s", m_usingSharedDevice ? "true" : "false");
+    m_device = unityDevice;
+    m_device->AddRef();
+    m_device->GetImmediateContext(&m_context);
+    LogDebug("Direct Unity device usage successful");
     return true;
 }
 
@@ -395,10 +341,6 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
     texDesc.Usage = D3D11_USAGE_DEFAULT;
     texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     
-    if (m_usingSharedDevice) {
-        texDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-    }
-    
     for (int i = 0; i < 2; i++) {
         HRESULT hr = m_device->CreateTexture2D(&texDesc, nullptr, &m_encodeTextures[i]);
         if (FAILED(hr)) {
@@ -406,16 +348,6 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
             return false;
         }
         LogDebug("Encode texture %d created", i);
-        
-        if (m_usingSharedDevice) {
-            IDXGIResource* dxgiRes = nullptr;
-            hr = m_encodeTextures[i]->QueryInterface(__uuidof(IDXGIResource), (void**)&dxgiRes);
-            if (SUCCEEDED(hr)) {
-                dxgiRes->GetSharedHandle(&m_sharedHandles[i]);
-                dxgiRes->Release();
-                LogDebug("Texture %d shared handle: %p", i, m_sharedHandles[i]);
-            }
-        }
         
         // Register with NVENC
         NV_ENC_REGISTER_RESOURCE regRes = {};
@@ -788,32 +720,7 @@ bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex
     LogDebug("Frame %lld - Processing buffer %d", frameIndex, idx);
     
     // Copy from Unity texture to our encode texture
-    if (m_usingSharedDevice && m_unityDevice && unityTexture) {
-        ID3D11Texture2D* sharedTex = nullptr;
-        HRESULT hr = m_unityDevice->OpenSharedResource(m_sharedHandles[idx], 
-                                                      __uuidof(ID3D11Texture2D), 
-                                                      (void**)&sharedTex);
-        if (SUCCEEDED(hr) && sharedTex) {
-            ID3D11DeviceContext* unityCtx = nullptr;
-            m_unityDevice->GetImmediateContext(&unityCtx);
-            if (unityCtx) {
-                unityCtx->CopyResource(sharedTex, unityTexture);
-                unityCtx->Flush();
-                unityCtx->Release();
-            }
-            sharedTex->Release();
-            
-            // GPU-GPU copy from shared to encode texture on NVENC context
-            // FIX: Copy from sharedTex (which we just copied Unity content to) to our encode texture
-            // Actually, sharedTex is the same as m_encodeTextures[idx] since we opened the shared handle
-            // So we don't need to copy here - the data is already in m_encodeTextures[idx] via the shared handle
-            // But we need to ensure the copy from Unity to sharedTex is synced, which we did with Flush()
-        } else {
-            LogDebug("Failed to open shared resource, falling back to CPU copy (slow)");
-            SetError("Shared resource open failed");
-            return false;
-        }
-    } else if (unityTexture) {
+    if (unityTexture) {
         // F3: CopyResource silently no-ops on format mismatch - verify instead.
         // Typeless/SRGB twins share the encode format's 32-bit layout and are
         // copy-compatible (Unity hands us R8G8B8A8_TYPELESS).
@@ -945,8 +852,9 @@ bool NvencEncoder::ProcessOutput(bool* wrotePacket) {
     av_packet_rescale_ts(&pkt, tb, ((AVStream*)m_videoStream)->time_base);
     
     {
-        static std::mutex writeMutex;
-        std::lock_guard<std::mutex> lock(writeMutex);
+        // F16: member mutex (was a function-static shared across encoder instances;
+        // matches the AMF module's per-context writeMutex)
+        std::lock_guard<std::mutex> lock(m_writeMutex);
         av_interleaved_write_frame((AVFormatContext*)m_formatContext, &pkt);
     }
     
@@ -982,21 +890,9 @@ bool NvencEncoder::InitializeComputeShaders() {
         LogDebug("Failed to create CAS compute shader: 0x%08X", hr);
     }
     
-    // Dither shader - NOTE: uses g_main, not g_BlueNoiseDitherCS
-    hr = m_device->CreateComputeShader(
-        g_main,
-        sizeof(g_main),
-        nullptr,
-        &m_ditherComputeShader
-    );
-    if (FAILED(hr)) {
-        LogDebug("Failed to create dither compute shader: 0x%08X", hr);
-    }
-    
-    // Create sync queries
+    // Create sync query
     D3D11_QUERY_DESC queryDesc = {};
     queryDesc.Query = D3D11_QUERY_EVENT;
-    m_device->CreateQuery(&queryDesc, &m_preComputeQuery);
     m_device->CreateQuery(&queryDesc, &m_postComputeQuery);
     
     return true;  // Non-fatal - can encode without shaders
@@ -1089,11 +985,6 @@ bool NvencEncoder::CreateConstantBuffers() {
     // CAS params (16 bytes)
     desc.ByteWidth = 16;
     if (FAILED(m_device->CreateBuffer(&desc, nullptr, &m_casParamsBuffer))) {
-        return false;
-    }
-    
-    // Dither params (16 bytes)
-    if (FAILED(m_device->CreateBuffer(&desc, nullptr, &m_ditherParamsBuffer))) {
         return false;
     }
     
@@ -1372,6 +1263,8 @@ bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
 }
 
 void NvencEncoder::Shutdown() {
+    // F16: idempotent - safe for the explicit + destructor double-call
+    if (!m_initialized && !m_hEncoder && !m_formatContext && !m_device) return;
     LogDebug("Shutting down NVENC encoder");
     
     // Cleanup compute shaders
@@ -1383,16 +1276,8 @@ void NvencEncoder::Shutdown() {
         m_casComputeShader->Release(); 
         m_casComputeShader = nullptr; 
     }
-    if (m_ditherComputeShader) { 
-        m_ditherComputeShader->Release(); 
-        m_ditherComputeShader = nullptr; 
-    }
 
-    // Cleanup queries
-    if (m_preComputeQuery) { 
-        m_preComputeQuery->Release(); 
-        m_preComputeQuery = nullptr; 
-    }
+    // Cleanup sync query
     if (m_postComputeQuery) { 
         m_postComputeQuery->Release(); 
         m_postComputeQuery = nullptr; 
@@ -1411,7 +1296,6 @@ void NvencEncoder::Shutdown() {
 
     // Cleanup constant buffers
     if (m_casParamsBuffer) { m_casParamsBuffer->Release(); m_casParamsBuffer = nullptr; }
-    if (m_ditherParamsBuffer) { m_ditherParamsBuffer->Release(); m_ditherParamsBuffer = nullptr; }
     
     // Cleanup accumulation array
     for (int i = 0; i < 2; i++) {

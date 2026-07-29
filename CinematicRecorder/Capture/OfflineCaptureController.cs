@@ -43,6 +43,13 @@ namespace CinematicRecorder.Capture
         private CommandBuffer captureBuffer;
 
         private int actualCapturedFrames = 0;
+
+        // F12: per-frame encode failure tracking. The capture loop historically ignored
+        // EncodeFrame's return, so a failing encoder produced a silently broken video.
+        private int consecutiveEncodeFailures = 0;
+        private const int MaxConsecutiveEncodeFailures = 3;
+        private bool encodeAbortRequested = false;
+        private string encodeAbortReason = null;
         private readonly AudioCaptureController _audioController;
 
         // NEW: Temporal Accumulation Blur state
@@ -88,6 +95,16 @@ namespace CinematicRecorder.Capture
         #region Public API
         public string OutputPath => outputPath;
         public AudioCaptureController AudioController => _audioController;
+        /// <summary>
+        /// The encoder path actually in use, set by SetupEncoder (zero-copy vs FFmpeg
+        /// fallback vs CPU). Used for honest reporting - the FFmpeg fallback also
+        /// produces "NVENC"/"AMF" output and must be distinguishable from zero-copy.
+        /// </summary>
+        public string ActualEncoderMode { get; private set; } = "CPU (x264)";
+        /// <summary>True when the capture was aborted by repeated encode failures (F12).</summary>
+        public bool EncodeAborted => encodeAbortRequested;
+        /// <summary>Native error that triggered the encode-failure abort, if any.</summary>
+        public string EncodeAbortReason => encodeAbortReason;
         /// <summary>
         /// Primary coroutine that manages the full capture lifecycle: initialization, capture loop, and finalization.
         /// Restores original time settings in finally block to ensure game state is preserved.
@@ -238,6 +255,14 @@ namespace CinematicRecorder.Capture
                 if (DeterministicCaptureSession.StopRequested)
                 {
                     UnityEngine.Debug.Log("[OfflineCapture] Stop requested, finishing up...");
+                    break;
+                }
+
+                // F12: encode failure abort - break into the normal finalize path so
+                // the partial file still gets its trailer
+                if (encodeAbortRequested)
+                {
+                    UnityEngine.Debug.LogWarning("[OfflineCapture] Encode failure abort, finalizing partial capture...");
                     break;
                 }
 
@@ -482,14 +507,31 @@ namespace CinematicRecorder.Capture
                 Graphics.WaitOnAsyncGraphicsFence(prevFence);
                 IntPtr nativeTexPtr = renderTextures[encodeIdx].GetNativeTexturePtr();
 
-                // Route to active zero-copy encoder
+                // Route to active zero-copy encoder (F12: honor the return value)
+                bool encoded = true;
                 if (usingNvencPath && nvencZeroCopyEncoder != null)
                 {
-                    nvencZeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                    encoded = nvencZeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
                 }
                 else if (usingZeroCopyPath && zeroCopyEncoder != null) // AMF
                 {
-                    zeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                    encoded = zeroCopyEncoder.EncodeFrame(nativeTexPtr, frameIndex - 1);
+                }
+
+                if (encoded)
+                {
+                    consecutiveEncodeFailures = 0;
+                }
+                else
+                {
+                    consecutiveEncodeFailures++;
+                    if (consecutiveEncodeFailures >= MaxConsecutiveEncodeFailures && !encodeAbortRequested)
+                    {
+                        encodeAbortRequested = true;
+                        encodeAbortReason = $"{MaxConsecutiveEncodeFailures} consecutive encode failures on the " +
+                            $"{(usingNvencPath ? "NVENC" : "AMF")} zero-copy path (see native error above)";
+                        UnityEngine.Debug.LogError($"[OfflineCapture] Aborting capture: {encodeAbortReason}");
+                    }
                 }
 
                 actualCapturedFrames++;
@@ -618,7 +660,10 @@ namespace CinematicRecorder.Capture
             }
         }
         /// <summary>
-        /// Selects and initializes the best available encoder: NVENC Zero-Copy -> AMF Zero-Copy -> Standard Hardware -> CPU.
+        /// Selects and initializes the best available encoder automatically:
+        /// NVENC zero-copy (if available) -> AMF zero-copy (if available) ->
+        /// standard FFmpeg hardware encoder -> CPU. Availability comes from the
+        /// wrappers' driver probes, so no GPU-family picker is needed.
         /// </summary>
         private void SetupEncoder()
         {
@@ -628,6 +673,7 @@ namespace CinematicRecorder.Capture
                 UnityEngine.Debug.Log("[OfflineCapture] PNG Sequence mode active - skipping video encoder initialization");
                 usingZeroCopyPath = false;
                 usingNvencPath = false;
+                ActualEncoderMode = "PNG Sequence";
                 // Do NOT initialize 'encoder' at all - we won't use it
                 return;
             }
@@ -640,14 +686,14 @@ namespace CinematicRecorder.Capture
                 return;
             }
 
-            // GPU Zero-Copy Priority: NVENC -> AMF -> CPU
-            if (TryInitNvenc())
+            // GPU zero-copy, probed in preference order (NVENC first when both present)
+            if (NvencZeroCopyEncoder.IsAvailable && TryInitNvenc())
             {
                 Debug.Log("[OfflineCapture] Using NVENC Zero-Copy path");
                 return;
             }
 
-            if (TryInitAmf())
+            if (AmfZeroCopyEncoder.IsAvailable && TryInitAmf())
             {
                 Debug.Log("[OfflineCapture] Using AMF Zero-Copy path");
                 return;
@@ -657,6 +703,11 @@ namespace CinematicRecorder.Capture
             if (encoder.Initialize(width, height, playbackFps, outputPath))
             {
                 usingZeroCopyPath = false;
+                ActualEncoderMode =
+                    encoder.ActiveEncoder == HardwareEncoder.EncoderType.NVENC ? "FFmpeg NVENC" :
+                    encoder.ActiveEncoder == HardwareEncoder.EncoderType.AMF ? "FFmpeg AMF" :
+                    encoder.ActiveEncoder == HardwareEncoder.EncoderType.QuickSync ? "FFmpeg QuickSync" :
+                    "CPU (x264)";
                 return;
             }
 
@@ -705,6 +756,7 @@ namespace CinematicRecorder.Capture
 
             usingNvencPath = true;
             usingZeroCopyPath = true;
+            ActualEncoderMode = "NVENC Zero-Copy (HEVC)";
 
             if (camera != null)
                 camera.targetTexture = null;
@@ -742,6 +794,7 @@ namespace CinematicRecorder.Capture
             }
 
             usingZeroCopyPath = true;
+            ActualEncoderMode = "AMF Zero-Copy (HEVC)";
             if (camera != null)
                 camera.targetTexture = null;
 
@@ -752,6 +805,7 @@ namespace CinematicRecorder.Capture
             if (!encoder.Initialize(width, height, playbackFps, outputPath))
                 throw new Exception("Failed to initialize CPU encoder");
             usingZeroCopyPath = false;
+            ActualEncoderMode = "CPU (x264)";
             usingNvencPath = false;
         }
         private void FinalizeEncoder()
