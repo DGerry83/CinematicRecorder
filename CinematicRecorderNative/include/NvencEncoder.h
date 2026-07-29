@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 #include <mutex>
+#include <vector>
+#include <utility>
 
 // Settings struct (matches C# layout exactly) - 56 bytes total
 struct NvencEncoderSettings {
@@ -42,10 +44,18 @@ private:
     bool ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Texture2D* textureHint);
     bool InitializeEncoder(const NvencEncoderSettings& settings);
     bool InitializeFFmpeg(const char* outputPath);
-    // F8: fetch SPS/PPS from NVENC and build avcC extradata for the matroska muxer
-    // (without extradata, avformat_write_header fails with INVALIDDATA). avStream is
-    // an AVStream*, kept opaque to avoid pulling FFmpeg headers into this header.
-    bool SetH264ExtradataFromNvenc(void* avStream);
+    // F8: fetch SPS/PPS (and VPS for HEVC) from NVENC and build avcC/hvcC extradata
+    // for the matroska muxer (without extradata, avformat_write_header fails with
+    // INVALIDDATA). avStream is an AVStream*, kept opaque to avoid pulling FFmpeg
+    // headers into this header.
+    bool SetExtradataFromNvenc(void* avStream);
+    bool BuildH264Extradata(void* avStream,
+                            const std::vector<std::pair<const uint8_t*, uint32_t>>& sps,
+                            const std::vector<std::pair<const uint8_t*, uint32_t>>& pps);
+    bool BuildHevcExtradata(void* avStream,
+                            const std::vector<std::pair<const uint8_t*, uint32_t>>& vps,
+                            const std::vector<std::pair<const uint8_t*, uint32_t>>& sps,
+                            const std::vector<std::pair<const uint8_t*, uint32_t>>& pps);
     void LogDebug(const char* fmt, ...);
     void SetError(const char* fmt, ...);
     const char* NvencStatusToString(NVENCSTATUS status);

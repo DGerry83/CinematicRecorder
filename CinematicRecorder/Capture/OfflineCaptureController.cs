@@ -1,4 +1,4 @@
-﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Audio;
 using CinematicRecorder.Core;
 using System;
 using System.Collections;
@@ -671,7 +671,8 @@ namespace CinematicRecorder.Capture
             var settings = new NvencZeroCopyEncoder.NvencEncoderSettings
             {
                 RateControlMode = SessionState.NvencRateControlMode,
-                TargetBitrateKbps = SessionState.NvencTargetBitrate,
+                // F14: SessionState stores Mbps; the native field is kbps (AMF line below converts correctly)
+                TargetBitrateKbps = SessionState.NvencTargetBitrate * 1000,
                 QpI = SessionState.NvencCqValue,
                 QpP = SessionState.NvencCqValue,  // NVENC CQP uses same QP for I/P usually, or P+2
                 QpB = SessionState.NvencCqValue + 2,

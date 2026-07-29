@@ -43,6 +43,7 @@ struct HarnessConfig {
     int fps = 30;
     int frames = 90;
     PatternPixelFormat format = PatternPixelFormat::BGRA;
+    int codec = 0;          // 0 = H264, 1 = HEVC (NvencEncoderSettings.Codec)
     std::string outPath;    // default chosen per mode: out.mkv / reference.mkv
     std::string ffmpegPath; // default: ffmpeg.exe beside this exe
     bool selftest = false;
@@ -66,6 +67,8 @@ void PrintUsage() {
         "  --frames N          frame count   (default 90)\n"
         "  --format bgra|rgba  source texture byte order (default bgra = Unity layout,\n"
         "                      exercises F3; rgba exercises the F2 ARGB registration path)\n"
+        "  --codec h264|hevc   encode codec (default h264; hevc exercises the hvcC\n"
+        "                      extradata path - matches the mod's C# default)\n"
         "  --out FILE.mkv      output file   (default out.mkv; selftest: reference.mkv)\n"
         "  --ffmpeg PATH       ffmpeg.exe    (default: ffmpeg.exe beside this exe)\n"
         "  --selftest          no NVENC: pipe the pattern to ffmpeg (libx264, fallback\n"
@@ -111,6 +114,12 @@ bool ParseArgs(int argc, char** argv, HarnessConfig& cfg) {
             if (_stricmp(v, "bgra") == 0) cfg.format = PatternPixelFormat::BGRA;
             else if (_stricmp(v, "rgba") == 0) cfg.format = PatternPixelFormat::RGBA;
             else { printf("ERROR: --format must be bgra or rgba\n"); return false; }
+        } else if (a == "--codec") {
+            const char* v = needValue("--codec");
+            if (!v) return false;
+            if (_stricmp(v, "h264") == 0) cfg.codec = 0;
+            else if (_stricmp(v, "hevc") == 0) cfg.codec = 1;
+            else { printf("ERROR: --codec must be h264 or hevc\n"); return false; }
         } else {
             printf("ERROR: unknown argument: %s\n", a.c_str());
             return false;
@@ -197,7 +206,7 @@ struct EncodeRunner {
     void* handle = nullptr;
 
     bool Init(ID3D11Device* device, ID3D11Texture2D* textureHint,
-              int w, int h, int fps, const std::string& outPath, std::string& nativeErr) {
+              int w, int h, int fps, int codec, const std::string& outPath, std::string& nativeErr) {
         NvencEncoderSettings s = {};
         s.RateControlMode = 0;   // CQP
         s.TargetBitrateKbps = 0;
@@ -205,7 +214,7 @@ struct EncodeRunner {
         s.QpP = 20;
         s.QpB = 20;
         s.QualityPreset = 1;     // P4
-        s.Codec = 0;             // H.264
+        s.Codec = codec;         // 0 = H264, 1 = HEVC
         s.GopSize = 30;
         // EnableTAB / EnableCAS / EnableDither / TABSubFrameCount / CASSharpness
         // remain zeroed (F17: ignored by init anyway).
@@ -259,9 +268,10 @@ int main(int argc, char** argv) {
 
     printf("NVENC zero-copy test harness\n");
     printf("MODE: %s\n", cfg.selftest ? "SELFTEST (no NVENC)" : "ENCODE (native NVENC path)");
-    printf("CONFIG: %dx%d @ %d fps, frames=%d, format=%s, out=%s\n",
+    printf("CONFIG: %dx%d @ %d fps, frames=%d, format=%s, codec=%s, out=%s\n",
            cfg.width, cfg.height, cfg.fps, cfg.frames,
-           cfg.format == PatternPixelFormat::BGRA ? "bgra" : "rgba", cfg.outPath.c_str());
+           cfg.format == PatternPixelFormat::BGRA ? "bgra" : "rgba",
+           cfg.codec == 1 ? "hevc" : "h264", cfg.outPath.c_str());
     printf("FFMPEG: %s\n", cfg.ffmpegPath.c_str());
 
     if (GetFileAttributesA(cfg.ffmpegPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
@@ -305,7 +315,7 @@ int main(int argc, char** argv) {
 
     EncodeRunner runner;
     std::string nativeErr;
-    if (!runner.Init(d3d.device, d3d.source, cfg.width, cfg.height, cfg.fps, cfg.outPath, nativeErr)) {
+    if (!runner.Init(d3d.device, d3d.source, cfg.width, cfg.height, cfg.fps, cfg.codec, cfg.outPath, nativeErr)) {
         printf("[ENCODE] CR_InitNvencEncoder failed after %llu ms\n", GetTickCount64() - t0);
         printf("NATIVE ERROR: %s\n", nativeErr.c_str());
         return EXIT_ENCODER_FAIL;

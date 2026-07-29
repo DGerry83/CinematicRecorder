@@ -312,16 +312,21 @@ bool NvencEncoder::InitializeEncoder(const NvencEncoderSettings& settings) {
         encodeConfig.rcParams.constQP.qpInterB = settings.QpB;
         LogDebug("CQP Settings: I=%d, P=%d, B=%d", settings.QpI, settings.QpP, settings.QpB);
     } else {
+        // F14: honest VBR - previously maxBitRate == averageBitRate (effectively CBR)
+        // and vbvBufferSize was one frame of average rate. Now: 2x peak headroom and
+        // one second of peak rate in the VBV buffer.
         encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
         encodeConfig.rcParams.averageBitRate = settings.TargetBitrateKbps * 1000;
-        encodeConfig.rcParams.maxBitRate = settings.TargetBitrateKbps * 1000;
-        encodeConfig.rcParams.vbvBufferSize = (settings.TargetBitrateKbps * 1000) / m_fps;
-        LogDebug("VBR Settings: %d kbps", settings.TargetBitrateKbps);
+        encodeConfig.rcParams.maxBitRate = settings.TargetBitrateKbps * 2000;
+        encodeConfig.rcParams.vbvBufferSize = settings.TargetBitrateKbps * 2000;
+        LogDebug("VBR Settings: %d kbps avg, %d kbps peak", settings.TargetBitrateKbps,
+                 settings.TargetBitrateKbps * 2);
     }
     
     // Codec specific settings - NOTE: These structs don't have version fields
     if (m_isHEVC) {
         encodeConfig.encodeCodecConfig.hevcConfig.idrPeriod = settings.GopSize;
+        encodeConfig.encodeCodecConfig.hevcConfig.repeatSPSPPS = 1;
         encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = 1;
     } else {
         encodeConfig.encodeCodecConfig.h264Config.idrPeriod = settings.GopSize;
@@ -495,15 +500,14 @@ bool NvencEncoder::InitializeFFmpeg(const char* outputPath) {
         LogDebug("Output file opened");
     }
     
-    // F8: the matroska muxer requires H264 extradata (avcC CodecPrivate) - without
-    // it avformat_write_header fails with INVALIDDATA (probe-verified 2026-07-28).
-    if (!m_isHEVC) {
-        LogDebug("Fetching SPS/PPS extradata from NVENC...");
-        if (!SetH264ExtradataFromNvenc(stream)) {
-            return false; // SetError already called
-        }
-        LogDebug("Extradata set (%d bytes)", par->extradata_size);
+    // F8: the matroska muxer requires extradata (avcC for H264, hvcC for HEVC) in
+    // CodecPrivate - without it avformat_write_header fails with INVALIDDATA
+    // (probe-verified 2026-07-28).
+    LogDebug("Fetching sequence-header extradata from NVENC...");
+    if (!SetExtradataFromNvenc(stream)) {
+        return false; // SetError already called
     }
+    LogDebug("Extradata set (%d bytes)", par->extradata_size);
     
     LogDebug("Writing format header...");
     if (avformat_write_header(ctx, nullptr) < 0) {
@@ -516,10 +520,11 @@ bool NvencEncoder::InitializeFFmpeg(const char* outputPath) {
     return true;
 }
 
-// F8: pull SPS/PPS out-of-band from NVENC (Annex-B) and repackage as avcC extradata,
-// which is what the matroska muxer expects in CodecPrivate for AV_CODEC_ID_H264.
+// F8: pull sequence headers out-of-band from NVENC (Annex-B) and repackage as
+// extradata in the format the matroska muxer expects in CodecPrivate:
+// avcC for H264 (SPS/PPS), hvcC for HEVC (VPS/SPS/PPS arrays).
 // Mirrors the AMF path's "extradata before header" ordering (CinematicRecorderNative.cpp:807-837).
-bool NvencEncoder::SetH264ExtradataFromNvenc(void* avStream) {
+bool NvencEncoder::SetExtradataFromNvenc(void* avStream) {
     AVStream* stream = (AVStream*)avStream;
     
     uint8_t payload[1024];
@@ -546,17 +551,36 @@ bool NvencEncoder::SetH264ExtradataFromNvenc(void* avStream) {
         }
     }
     
-    // Split into NALs, keep SPS (type 7) and PPS (type 8)
-    std::vector<std::pair<const uint8_t*, uint32_t>> sps, pps;
+    // Split into NALs by type. H264: 1-byte header, type = b & 0x1F (SPS=7, PPS=8).
+    // HEVC: 2-byte header, type = (b >> 1) & 0x3F (VPS=32, SPS=33, PPS=34).
+    std::vector<std::pair<const uint8_t*, uint32_t>> vps, sps, pps;
     for (size_t k = 0; k < sc.size(); k++) {
         uint32_t start = sc[k] + 3;
         uint32_t end = (k + 1 < sc.size()) ? sc[k + 1] : size;
         while (end > start && payload[end - 1] == 0) end--; // trailing zeros belong to next prefix
         if (end <= start) continue;
-        uint8_t nalType = payload[start] & 0x1F;
-        if (nalType == 7) sps.push_back({ payload + start, end - start });
-        else if (nalType == 8) pps.push_back({ payload + start, end - start });
+        if (m_isHEVC) {
+            uint8_t nalType = (payload[start] >> 1) & 0x3F;
+            if (nalType == 32) vps.push_back({ payload + start, end - start });
+            else if (nalType == 33) sps.push_back({ payload + start, end - start });
+            else if (nalType == 34) pps.push_back({ payload + start, end - start });
+        } else {
+            uint8_t nalType = payload[start] & 0x1F;
+            if (nalType == 7) sps.push_back({ payload + start, end - start });
+            else if (nalType == 8) pps.push_back({ payload + start, end - start });
+        }
     }
+    
+    if (m_isHEVC)
+        return BuildHevcExtradata(stream, vps, sps, pps);
+    return BuildH264Extradata(stream, sps, pps);
+}
+
+// H264: avcC - version, profile/compat/level from SPS, 4-byte NAL lengths, SPS/PPS lists.
+bool NvencEncoder::BuildH264Extradata(void* avStream,
+                                      const std::vector<std::pair<const uint8_t*, uint32_t>>& sps,
+                                      const std::vector<std::pair<const uint8_t*, uint32_t>>& pps) {
+    AVStream* stream = (AVStream*)avStream;
     
     if (sps.empty() || pps.empty() || sps[0].second < 4) {
         SetError("nvEncGetSequenceParams returned no usable SPS/PPS (%zu SPS, %zu PPS)",
@@ -564,7 +588,6 @@ bool NvencEncoder::SetH264ExtradataFromNvenc(void* avStream) {
         return false;
     }
     
-    // Build avcC: version, profile/compat/level from SPS, 4-byte NAL lengths, SPS/PPS lists
     size_t total = 7;
     for (auto& n : sps) total += 2 + n.second;
     total += 1;
@@ -598,6 +621,71 @@ bool NvencEncoder::SetH264ExtradataFromNvenc(void* avStream) {
     }
     
     stream->codecpar->extradata = avcc;
+    stream->codecpar->extradata_size = (int)total;
+    return true;
+}
+
+// HEVC: hvcC (HEVCDecoderConfigurationRecord, ISO/IEC 14496-15) - 23-byte header
+// with the 12 general profile_tier_level bytes lifted from the SPS, then one
+// array each for VPS/SPS/PPS with 4-byte... (2-byte per spec) NAL lengths.
+bool NvencEncoder::BuildHevcExtradata(void* avStream,
+                                      const std::vector<std::pair<const uint8_t*, uint32_t>>& vps,
+                                      const std::vector<std::pair<const uint8_t*, uint32_t>>& sps,
+                                      const std::vector<std::pair<const uint8_t*, uint32_t>>& pps) {
+    AVStream* stream = (AVStream*)avStream;
+    
+    // SPS layout: 2-byte NAL header, 1 byte (vps id + max sub layers + nesting),
+    // then 12 bytes of general profile_tier_level - need at least 15 bytes.
+    if (vps.empty() || sps.empty() || pps.empty() || sps[0].second < 15) {
+        SetError("nvEncGetSequenceParams returned no usable VPS/SPS/PPS (%zu/%zu/%zu)",
+                 vps.size(), sps.size(), pps.size());
+        return false;
+    }
+    
+    size_t total = 23;
+    total += 3 + 2 * vps.size();
+    for (auto& n : vps) total += n.second;
+    total += 3 + 2 * sps.size();
+    for (auto& n : sps) total += n.second;
+    total += 3 + 2 * pps.size();
+    for (auto& n : pps) total += n.second;
+    
+    uint8_t* hvcc = (uint8_t*)av_mallocz(total + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (!hvcc) {
+        SetError("av_mallocz failed for extradata");
+        return false;
+    }
+    
+    uint8_t* p = hvcc;
+    *p++ = 1;                        // configurationVersion
+    memcpy(p, sps[0].first + 3, 12); // general profile_tier_level (12 bytes)
+    p += 12;
+    *p++ = 0xF0;                     // 4 reserved + min_spatial_segmentation_idc hi (0 = unknown)
+    *p++ = 0xF0;                     // 4 reserved + min_spatial_segmentation_idc lo
+    *p++ = 0xFC;                     // 6 reserved + parallelismType (0)
+    *p++ = 0xFC | 1;                 // 6 reserved + chromaFormat (1 = 4:2:0)
+    *p++ = 0xF8;                     // 5 reserved + bitDepthLumaMinus8 (0)
+    *p++ = 0xF8;                     // 5 reserved + bitDepthChromaMinus8 (0)
+    *p++ = 0; *p++ = 0;              // avgFrameRate (0 = unspecified)
+    *p++ = 0x0F;                     // constantFrameRate=0, numTemporalLayers=1, temporalIdNested=1, lengthSizeMinusOne=3
+    *p++ = 3;                        // numOfArrays (VPS, SPS, PPS)
+    
+    const struct { const std::vector<std::pair<const uint8_t*, uint32_t>>* nals; uint8_t type; } arrays[] = {
+        { &vps, 32 }, { &sps, 33 }, { &pps, 34 }
+    };
+    for (auto& a : arrays) {
+        *p++ = (uint8_t)(0x80 | a.type); // array_completeness=1 + NAL_unit_type
+        *p++ = (uint8_t)(a.nals->size() >> 8);
+        *p++ = (uint8_t)(a.nals->size() & 0xFF);
+        for (auto& n : *a.nals) {
+            *p++ = (uint8_t)(n.second >> 8);
+            *p++ = (uint8_t)(n.second & 0xFF);
+            memcpy(p, n.first, n.second);
+            p += n.second;
+        }
+    }
+    
+    stream->codecpar->extradata = hvcc;
     stream->codecpar->extradata_size = (int)total;
     return true;
 }
@@ -763,25 +851,70 @@ bool NvencEncoder::ProcessOutput(bool* wrotePacket) {
     pkt.duration = 1;
     pkt.stream_index = ((AVStream*)m_videoStream)->index;
     
-    // Keyframe detection
+    // Keyframe detection: walk ALL NALUs in the access unit - SPS/PPS may precede
+    // the IDR slice, so the first start code is not authoritative. H264 IDR = type 5
+    // (b & 0x1F); HEVC IDR = types 19/20/21 ((b >> 1) & 0x3F, 2-byte NAL header).
     if (pkt.size > 4) {
         uint8_t* data = pkt.data;
         int offset = 0;
-        while (offset < pkt.size - 4) {
+        while (offset < pkt.size - 4 && !(pkt.flags & AV_PKT_FLAG_KEY)) {
             if (data[offset] == 0 && data[offset+1] == 0 && 
                 ((data[offset+2] == 1) || (data[offset+2] == 0 && data[offset+3] == 1))) {
                 int start = (data[offset+2] == 1) ? offset+3 : offset+4;
-                uint8_t nalType = data[start] & (m_isHEVC ? 0x7E : 0x1F);
+                if (start >= pkt.size) break;
                 if (m_isHEVC) {
+                    uint8_t nalType = (data[start] >> 1) & 0x3F;
                     if (nalType == 19 || nalType == 20 || nalType == 21)
                         pkt.flags |= AV_PKT_FLAG_KEY;
                 } else {
+                    uint8_t nalType = data[start] & 0x1F;
                     if (nalType == 5)
                         pkt.flags |= AV_PKT_FLAG_KEY;
                 }
-                break;
             }
             offset++;
+        }
+    }
+    
+    // Matroska + hvcC expects length-prefixed NAL units, but NVENC emits Annex-B;
+    // convert by replacing each start code with a 4-byte big-endian NAL length
+    // (matches lengthSizeMinusOne=3 in our hvcC). The H264 path relies on the
+    // muxer's automatic Annex-B->avcC conversion, hardware-verified in Phase 1 -
+    // do not disturb it.
+    std::vector<uint8_t> lpBuffer;
+    if (m_isHEVC && pkt.size > 4) {
+        uint8_t* data = pkt.data;
+        int n = pkt.size;
+        std::vector<std::pair<int,int>> spans; // NAL [start,end) within data
+        int i = 0;
+        while (i < n - 3) {
+            bool sc4 = data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1;
+            bool sc3 = !sc4 && data[i] == 0 && data[i+1] == 0 && data[i+2] == 1;
+            if (sc3 || sc4) {
+                int start = sc3 ? i + 3 : i + 4;
+                if (!spans.empty() && spans.back().second < 0) spans.back().second = i;
+                spans.push_back({ start, -1 });
+                i = start;
+            } else {
+                i++;
+            }
+        }
+        if (!spans.empty() && spans.back().second < 0) spans.back().second = n;
+        
+        if (!spans.empty()) {
+            for (auto& s : spans)
+                while (s.second > s.first && data[s.second - 1] == 0) s.second--; // trim trailing zeros
+            for (auto& s : spans) {
+                uint32_t len = (uint32_t)(s.second - s.first);
+                if (len == 0) continue;
+                lpBuffer.push_back((uint8_t)(len >> 24));
+                lpBuffer.push_back((uint8_t)(len >> 16));
+                lpBuffer.push_back((uint8_t)(len >> 8));
+                lpBuffer.push_back((uint8_t)(len & 0xFF));
+                lpBuffer.insert(lpBuffer.end(), data + s.first, data + s.second);
+            }
+            pkt.data = lpBuffer.data();
+            pkt.size = (int)lpBuffer.size();
         }
     }
     
