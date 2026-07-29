@@ -43,6 +43,7 @@ struct HarnessConfig {
     int fps = 30;
     int frames = 90;
     PatternPixelFormat format = PatternPixelFormat::BGRA;
+    bool typeless = false;  // create source/staging as R8G8B8A8_TYPELESS (mimics Unity RT)
     int codec = 0;          // 0 = H264, 1 = HEVC (NvencEncoderSettings.Codec)
     std::string outPath;    // default chosen per mode: out.mkv / reference.mkv
     std::string ffmpegPath; // default: ffmpeg.exe beside this exe
@@ -65,8 +66,10 @@ void PrintUsage() {
         "  --height N          frame height  (default 1080)\n"
         "  --fps N             frame rate    (default 30)\n"
         "  --frames N          frame count   (default 90)\n"
-        "  --format bgra|rgba  source texture byte order (default bgra = Unity layout,\n"
-        "                      exercises F3; rgba exercises the F2 ARGB registration path)\n"
+        "  --format bgra|rgba|typeless\n"
+        "                      source texture byte order (default bgra = Unity layout,\n"
+        "                      exercises F3; rgba exercises the F2 ARGB registration path;\n"
+        "                      typeless = R8G8B8A8_TYPELESS, mimics a real Unity RT)\n"
         "  --codec h264|hevc   encode codec (default h264; hevc exercises the hvcC\n"
         "                      extradata path - matches the mod's C# default)\n"
         "  --out FILE.mkv      output file   (default out.mkv; selftest: reference.mkv)\n"
@@ -111,9 +114,10 @@ bool ParseArgs(int argc, char** argv, HarnessConfig& cfg) {
         } else if (a == "--format") {
             const char* v = needValue("--format");
             if (!v) return false;
-            if (_stricmp(v, "bgra") == 0) cfg.format = PatternPixelFormat::BGRA;
-            else if (_stricmp(v, "rgba") == 0) cfg.format = PatternPixelFormat::RGBA;
-            else { printf("ERROR: --format must be bgra or rgba\n"); return false; }
+            if (_stricmp(v, "bgra") == 0) { cfg.format = PatternPixelFormat::BGRA; cfg.typeless = false; }
+            else if (_stricmp(v, "rgba") == 0) { cfg.format = PatternPixelFormat::RGBA; cfg.typeless = false; }
+            else if (_stricmp(v, "typeless") == 0) { cfg.format = PatternPixelFormat::RGBA; cfg.typeless = true; }
+            else { printf("ERROR: --format must be bgra, rgba or typeless\n"); return false; }
         } else if (a == "--codec") {
             const char* v = needValue("--codec");
             if (!v) return false;
@@ -155,7 +159,7 @@ struct D3D11Context {
         device = nullptr;
     }
 
-    bool Create(int w, int h, bool rgba, std::string& err) {
+    bool Create(int w, int h, bool rgba, bool typeless, std::string& err) {
         D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0 };
         HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
                                        D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 1,
@@ -166,7 +170,8 @@ struct D3D11Context {
             err = b;
             return false;
         }
-        DXGI_FORMAT fmt = rgba ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+        DXGI_FORMAT fmt = rgba ? (typeless ? DXGI_FORMAT_R8G8B8A8_TYPELESS : DXGI_FORMAT_R8G8B8A8_UNORM)
+                               : DXGI_FORMAT_B8G8R8A8_UNORM;
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = w;
         td.Height = h;
@@ -270,7 +275,7 @@ int main(int argc, char** argv) {
     printf("MODE: %s\n", cfg.selftest ? "SELFTEST (no NVENC)" : "ENCODE (native NVENC path)");
     printf("CONFIG: %dx%d @ %d fps, frames=%d, format=%s, codec=%s, out=%s\n",
            cfg.width, cfg.height, cfg.fps, cfg.frames,
-           cfg.format == PatternPixelFormat::BGRA ? "bgra" : "rgba",
+           cfg.typeless ? "typeless(r8g8b8a8)" : (cfg.format == PatternPixelFormat::BGRA ? "bgra" : "rgba"),
            cfg.codec == 1 ? "hevc" : "h264", cfg.outPath.c_str());
     printf("FFMPEG: %s\n", cfg.ffmpegPath.c_str());
 
@@ -306,12 +311,13 @@ int main(int argc, char** argv) {
     unsigned long long t0 = GetTickCount64();
     D3D11Context d3d;
     std::string err;
-    if (!d3d.Create(cfg.width, cfg.height, cfg.format == PatternPixelFormat::RGBA, err)) {
+    if (!d3d.Create(cfg.width, cfg.height, cfg.format == PatternPixelFormat::RGBA, cfg.typeless, err)) {
         printf("HARNESS ERROR: %s\n", err.c_str());
         return EXIT_VERIFY_FAIL;
     }
     printf("[ENCODE] D3D11 device + %s source texture created\n",
-           cfg.format == PatternPixelFormat::BGRA ? "B8G8R8A8_UNORM" : "R8G8B8A8_UNORM");
+           cfg.typeless ? "R8G8B8A8_TYPELESS" :
+           (cfg.format == PatternPixelFormat::BGRA ? "B8G8R8A8_UNORM" : "R8G8B8A8_UNORM"));
 
     EncodeRunner runner;
     std::string nativeErr;

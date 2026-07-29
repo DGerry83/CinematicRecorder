@@ -715,9 +715,15 @@ bool NvencEncoder::Initialize(ID3D11Device* unityDevice, ID3D11Texture2D* textur
     LogDebug("Phase 2 complete: Device ready");
     
     // F2/F3: determine the source texture format up front. Encode textures are created
-    // in this exact format so CopyResource is legal by construction, and the matching
-    // NVENC buffer format is declared (B8G8R8A8 -> ARGB, R8G8B8A8 -> ABGR). An
-    // unexpected format fails init loudly instead of silently no-op copying later.
+    // in the matching typed UNORM format so CopyResource is legal by construction, and
+    // the matching NVENC buffer format is declared (B8G8R8A8 -> ARGB, R8G8B8A8 -> ABGR).
+    // An unexpected format fails init loudly instead of silently no-op copying later.
+    //
+    // Unity render textures are often TYPELESS (smoke test, 2026-07-29: format 27 =
+    // R8G8B8A8_TYPELESS) or SRGB - same 32-bit RGBA memory layout as their UNORM
+    // twins, so the whole family is accepted; our encode textures are always created
+    // as the typed UNORM twin (typeless->typed copies of the same size are
+    // CopyResource-compatible, and NVENC registration gets a plain typed texture).
     if (!textureHint) {
         SetError("Source texture hint is null; cannot determine encode format");
         return false;
@@ -725,16 +731,23 @@ bool NvencEncoder::Initialize(ID3D11Device* unityDevice, ID3D11Texture2D* textur
     D3D11_TEXTURE2D_DESC srcDesc = {};
     textureHint->GetDesc(&srcDesc);
     LogDebug("Source texture: format=%d, %ux%u", (int)srcDesc.Format, srcDesc.Width, srcDesc.Height);
-    if (srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
-        m_encodeTextureFormat = srcDesc.Format;
-        m_encodeBufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
-    } else if (srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM) {
-        m_encodeTextureFormat = srcDesc.Format;
-        m_encodeBufferFormat = NV_ENC_BUFFER_FORMAT_ABGR;
-    } else {
-        SetError("Unsupported source texture format %d (expected B8G8R8A8_UNORM or R8G8B8A8_UNORM)",
-                 (int)srcDesc.Format);
-        return false;
+    switch (srcDesc.Format) {
+        case DXGI_FORMAT_B8G8R8A8_UNORM:
+        case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+            m_encodeTextureFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            m_encodeBufferFormat = NV_ENC_BUFFER_FORMAT_ARGB;
+            break;
+        case DXGI_FORMAT_R8G8B8A8_UNORM:
+        case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+            m_encodeTextureFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+            m_encodeBufferFormat = NV_ENC_BUFFER_FORMAT_ABGR;
+            break;
+        default:
+            SetError("Unsupported source texture format %d (expected an R8G8B8A8/B8G8R8A8 variant)",
+                     (int)srcDesc.Format);
+            return false;
     }
     LogDebug("Encode format selected: DXGI=%d, NVENC=%s", (int)m_encodeTextureFormat,
              m_encodeBufferFormat == NV_ENC_BUFFER_FORMAT_ARGB ? "ARGB" : "ABGR");
@@ -802,11 +815,21 @@ bool NvencEncoder::EncodeFrame(ID3D11Texture2D* unityTexture, int64_t frameIndex
         }
     } else if (unityTexture) {
         // F3: CopyResource silently no-ops on format mismatch - verify instead.
+        // Typeless/SRGB twins share the encode format's 32-bit layout and are
+        // copy-compatible (Unity hands us R8G8B8A8_TYPELESS).
         D3D11_TEXTURE2D_DESC frameDesc = {};
         unityTexture->GetDesc(&frameDesc);
-        if (frameDesc.Format != m_encodeTextureFormat) {
-            SetError("Frame texture format %d does not match encode format %d; refusing blind CopyResource",
-                     (int)frameDesc.Format, (int)m_encodeTextureFormat);
+        DXGI_FORMAT f = frameDesc.Format;
+        bool sameFamily =
+            (m_encodeTextureFormat == DXGI_FORMAT_B8G8R8A8_UNORM &&
+             (f == DXGI_FORMAT_B8G8R8A8_UNORM || f == DXGI_FORMAT_B8G8R8A8_TYPELESS ||
+              f == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)) ||
+            (m_encodeTextureFormat == DXGI_FORMAT_R8G8B8A8_UNORM &&
+             (f == DXGI_FORMAT_R8G8B8A8_UNORM || f == DXGI_FORMAT_R8G8B8A8_TYPELESS ||
+              f == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB));
+        if (!sameFamily) {
+            SetError("Frame texture format %d incompatible with encode format %d; refusing blind CopyResource",
+                     (int)f, (int)m_encodeTextureFormat);
             return false;
         }
         m_context->CopyResource(m_encodeTextures[idx], unityTexture);

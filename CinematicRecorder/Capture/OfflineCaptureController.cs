@@ -550,7 +550,13 @@ namespace CinematicRecorder.Capture
                 int lastIdx = (actualCapturedFrames - 1) % 2;
                 Graphics.WaitOnAsyncGraphicsFence(prevFence);
                 IntPtr lastTexPtr = renderTextures[lastIdx].GetNativeTexturePtr();
-                zeroCopyEncoder.EncodeFrame(lastTexPtr, actualCapturedFrames - 1);
+                // Use the encoder that is actually active - zeroCopyEncoder is the AMF
+                // field and is null on the NVENC path (NRE killed finalization and left
+                // the mkv without its trailer; smoke test 2026-07-29).
+                if (usingNvencPath && nvencZeroCopyEncoder != null)
+                    nvencZeroCopyEncoder.EncodeFrame(lastTexPtr, actualCapturedFrames - 1);
+                else if (zeroCopyEncoder != null)
+                    zeroCopyEncoder.EncodeFrame(lastTexPtr, actualCapturedFrames - 1);
             }
 
             UnityEngine.Debug.Log($"[OfflineCapture] Deterministic capture complete. Captured {actualCapturedFrames} frames " +
