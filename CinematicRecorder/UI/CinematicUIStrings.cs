@@ -101,7 +101,7 @@ namespace CinematicRecorder.UI
             public const string EffectiveShutterFormat = "Effective Shutter: {0}°";
             public const string EffectiveShutter180 = "180°";
             public const string SubFrameCountLabel = "Sub-frames: {0}";
-            public const string TabAMFOnlyWarning = "Temporal Accumulation requires AMD encoder (NVENC support coming soon).";
+            public const string TabGpuRequiredWarning = "Temporal Accumulation requires a GPU encoder (AMD or NVIDIA).";
 
             // PNG Sequence Strings
             public const string PngSequenceToggle = " PNG Sequence";
@@ -171,7 +171,7 @@ namespace CinematicRecorder.UI
             public const string EffectiveShutterFormat = "Effective Shutter: {0}°";
             public const string EffectiveShutter180 = "180°";
             public const string SubFrameCountLabel = "Sub-frames: {0}";
-            public const string TabAMFOnlyWarning = "Temporal Accumulation requires AMD encoder (NVENC support coming soon).";
+            public const string TabGpuRequiredWarning = "Temporal Accumulation requires a GPU encoder (AMD or NVIDIA).";
             public const string GradientProtectionToggle = " Gradient Protection";
             public const string GradientProtectionTooltip = "Reduces color banding in dark areas. Only available with AMD encoder.";
             public const string AMFOnlyWarning = "Advanced options require AMD encoder.";

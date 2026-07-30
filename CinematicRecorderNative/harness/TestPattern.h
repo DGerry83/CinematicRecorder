@@ -43,6 +43,9 @@ struct TestPatternSpec {
     static int BoxSize(int w) { int s = w / 60; return s < 8 ? 8 : s; }
     static int BoxSpeed(int w) { int s = w / 120; return s < 1 ? 1 : s; }
     static int BoxX(int frame, int w) { return (frame * BoxSpeed(w)) % w; }
+    // Fractional frame position for TAB sub-frames: linear travel without the
+    // modulo wrap, so a sub-frame sweep across one frame step is continuous.
+    static int BoxX(double framePos, int w) { return (int)(framePos * BoxSpeed(w)); }
     static int BoxY(int w, int h) { return h / 2 - BoxSize(w) / 2; }
 
     // Orientation probe points (fractions of width/height).
@@ -57,5 +60,9 @@ public:
     // Fills `buffer` (BufferSize bytes) with frame `frameIndex` of the pattern.
     static void Generate(int frameIndex, int width, int height,
                          PatternPixelFormat format, uint8_t* buffer);
+    // Same pattern with the moving box at fractional frame position
+    // `framePos` (TAB sub-frames: box interpolated across one frame step).
+    static void GenerateSubFrame(double framePos, int width, int height,
+                                 PatternPixelFormat format, uint8_t* buffer);
     static size_t BufferSize(int w, int h) { return (size_t)w * (size_t)h * 4; }
 };

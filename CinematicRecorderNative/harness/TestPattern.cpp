@@ -1,10 +1,10 @@
 #include "TestPattern.h"
 
-// Renders: 7 vertical color bars, the top-left orientation marker (white block
-// + black notch), and the moving gray box. Draw order: bars -> marker -> notch
-// -> box (box on top; it never overlaps marker/notch at y = h/2).
-void PatternGenerator::Generate(int frameIndex, int width, int height,
-                                PatternPixelFormat format, uint8_t* buffer) {
+namespace {
+
+// Shared renderer: bars -> marker -> notch -> box (box on top; it never
+// overlaps marker/notch at y = h/2). boxX selects the moving-box column.
+void Render(int boxX, int width, int height, PatternPixelFormat format, uint8_t* buffer) {
     const int markerW = (int)(width * TestPatternSpec::MARKER_W);
     const int markerH = (int)(height * TestPatternSpec::MARKER_H);
     const int notchX0 = (int)(width * TestPatternSpec::NOTCH_X0);
@@ -12,7 +12,6 @@ void PatternGenerator::Generate(int frameIndex, int width, int height,
     const int notchY0 = (int)(height * TestPatternSpec::NOTCH_Y0);
     const int notchY1 = (int)(height * TestPatternSpec::NOTCH_Y1);
     const int boxSize = TestPatternSpec::BoxSize(width);
-    const int boxX = TestPatternSpec::BoxX(frameIndex, width);
     const int boxY = TestPatternSpec::BoxY(width, height);
 
     for (int y = 0; y < height; y++) {
@@ -36,4 +35,20 @@ void PatternGenerator::Generate(int frameIndex, int width, int height,
             p[3] = 255;
         }
     }
+}
+
+} // namespace
+
+// Renders: 7 vertical color bars, the top-left orientation marker (white block
+// + black notch), and the moving gray box at its integer-frame position.
+void PatternGenerator::Generate(int frameIndex, int width, int height,
+                                PatternPixelFormat format, uint8_t* buffer) {
+    Render(TestPatternSpec::BoxX(frameIndex, width), width, height, format, buffer);
+}
+
+// Renders the same pattern with the box at fractional frame position `framePos`
+// (TAB sub-frame k/N of output frame i generates with framePos = i + k/N).
+void PatternGenerator::GenerateSubFrame(double framePos, int width, int height,
+                                        PatternPixelFormat format, uint8_t* buffer) {
+    Render(TestPatternSpec::BoxX(framePos, width), width, height, format, buffer);
 }

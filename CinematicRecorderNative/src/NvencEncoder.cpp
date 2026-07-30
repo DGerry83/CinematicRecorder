@@ -905,7 +905,7 @@ bool NvencEncoder::CreateIntermediateTextures(int width, int height) {
         desc.Height = height;
         desc.MipLevels = 1;
         desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.Format = m_encodeTextureFormat; // F2/F3: match the source format exactly
         desc.SampleDesc.Count = 1;
         desc.Usage = D3D11_USAGE_DEFAULT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -918,7 +918,7 @@ bool NvencEncoder::CreateIntermediateTextures(int width, int height) {
         
         // Create SRV
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.Format = m_encodeTextureFormat;
         srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
         
@@ -927,7 +927,7 @@ bool NvencEncoder::CreateIntermediateTextures(int width, int height) {
         
         // Create UAV
         D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-        uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        uavDesc.Format = m_encodeTextureFormat;
         uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
         uavDesc.Texture2D.MipSlice = 0;
         
@@ -1114,7 +1114,7 @@ bool NvencEncoder::CreateAccumulationArray(int width, int height) {
         desc.Height = height;
         desc.MipLevels = 1;
         desc.ArraySize = 8;  // 8 slices for sub-frames
-        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.Format = m_encodeTextureFormat; // F2/F3: match the source format exactly
         desc.SampleDesc.Count = 1;
         desc.Usage = D3D11_USAGE_DEFAULT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -1126,7 +1126,7 @@ bool NvencEncoder::CreateAccumulationArray(int width, int height) {
         }
         
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.Format = m_encodeTextureFormat;
         srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
         srvDesc.Texture2DArray.MipLevels = 1;
         srvDesc.Texture2DArray.ArraySize = 8;
@@ -1156,6 +1156,10 @@ bool NvencEncoder::CreateAccumulationArray(int width, int height) {
 bool NvencEncoder::SubmitSubFrame(ID3D11Texture2D* unityTexture, int sliceIndex) {
     if (!m_initialized || !unityTexture) return false;
     if (sliceIndex < 0 || sliceIndex >= 8) return false;
+    if (!m_accumulationArray[m_currentAccumBuffer]) {
+        SetError("TAB accumulation array not available (creation failed or device lost)");
+        return false;
+    }
     
     // Copy to specific slice of accumulation array
     UINT subResource = D3D11CalcSubresource(0, sliceIndex, 1);
@@ -1174,12 +1178,25 @@ bool NvencEncoder::SubmitSubFrame(ID3D11Texture2D* unityTexture, int sliceIndex)
 
 void NvencEncoder::SetTabMode(bool enabled, int subFrameCount) {
     m_isTabMode = enabled;
+    // I4: the accumulation array and the TAB shader are hardcoded to 8 slices;
+    // clamp so CR_NvencSetTabMode cannot over-index either.
+    if (subFrameCount < 1) subFrameCount = 1;
+    if (subFrameCount > 8) subFrameCount = 8;
     m_tabSubFrameCount = subFrameCount;
     m_currentAccumBuffer = 0;
     m_currentSubFrame = 0;
 }
 
 bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
+    // I3: all TAB resources are non-fatal creations - fail loudly if any are
+    // missing instead of dereferencing null.
+    if (!m_tabWeightBuffer || !m_tabComputeShader ||
+        !m_accumulationArray[m_currentAccumBuffer] || !m_accumulationSRV[m_currentAccumBuffer] ||
+        !m_intermediateUAV[0] || !m_intermediateSRV[0]) {
+        SetError("TAB resources not available (creation failed or device lost)");
+        return false;
+    }
+
     int idx = m_bufferIndex;
     m_bufferIndex = 1 - idx;
     
@@ -1223,6 +1240,10 @@ bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
     // Step 2: Run CAS if enabled
     int outputIdx = 0;
     if (sharpness > 0.0f && m_casComputeShader) {
+        if (!m_casParamsBuffer) {
+            SetError("CAS params buffer not available (creation failed or device lost)");
+            return false;
+        }
         // Update CAS params
         if (SUCCEEDED(m_context->Map(m_casParamsBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
             struct CASParams {

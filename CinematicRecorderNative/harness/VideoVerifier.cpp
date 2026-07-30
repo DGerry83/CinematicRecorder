@@ -309,6 +309,16 @@ CheckResult CheckOrientation(const std::vector<FramePixels>& frames, const std::
     return c;
 }
 
+// Gray-pixel predicate shared by MOTION and TAB_SMEAR: near BOX_GRAY luma and
+// achromatic (immune to 4:2:0 chroma bleed and to R/B swap).
+bool IsBoxGray(const uint8_t* p) {
+    int r = p[0], g = p[1], b = p[2];
+    return abs(r - TestPatternSpec::BOX_GRAY) <= 40 &&
+           abs(g - TestPatternSpec::BOX_GRAY) <= 40 &&
+           abs(b - TestPatternSpec::BOX_GRAY) <= 40 &&
+           (std::max)({ abs(r - g), abs(g - b), abs(r - b) }) <= 32;
+}
+
 CheckResult CheckMotion(const std::vector<FramePixels>& frames, const std::vector<int>& indices, int expW) {
     CheckResult c;
     c.name = "MOTION";
@@ -334,11 +344,7 @@ CheckResult CheckMotion(const std::vector<FramePixels>& frames, const std::vecto
         for (int y = y0; y < y1; y++)
             for (int x = 0; x < f.width; x++) {
                 const uint8_t* p = &f.rgba[((size_t)y * (size_t)f.width + (size_t)x) * 4];
-                int r = p[0], g = p[1], b = p[2];
-                if (abs(r - TestPatternSpec::BOX_GRAY) <= 40 &&
-                    abs(g - TestPatternSpec::BOX_GRAY) <= 40 &&
-                    abs(b - TestPatternSpec::BOX_GRAY) <= 40 &&
-                    (std::max)({ abs(r - g), abs(g - b), abs(r - b) }) <= 32) {
+                if (IsBoxGray(p)) {
                     sumX += x;
                     count++;
                 }
@@ -365,6 +371,71 @@ CheckResult CheckMotion(const std::vector<FramePixels>& frames, const std::vecto
         c.evidence.push_back("centroidX strictly increasing left->right: frame ordering intact");
     else
         c.evidence.push_back("expected gray-box centroidX strictly increasing across sampled frames");
+    AppendFrameStats(c, frames, indices);
+    return c;
+}
+
+// --tab only: TAB averages the sub-frame box positions into a horizontal
+// smear. Two measurements on the center row of the motion band:
+//  - grayRun: longest contiguous achromatic-gray run (IsBoxGray). Only the
+//    core where ALL sub-frame boxes overlap stays pure gray-128: at 8
+//    sub-frames/step 16 that core is boxSize - 7*step/8 (~18px @1920), so
+//    this is a diagnostic, NOT the pass criterion (an earlier revision
+//    wrongly demanded grayRun > boxSize, which fails a correct smear).
+//  - devRun: longest contiguous run deviating from the expected background
+//    bar color. A working accumulation blends gray into the bars across the
+//    union of all sub-frame boxes: boxSize + travel (46px @1920/8). A single
+//    slice reaching the output shows exactly one box (boxSize, 32px).
+// Pass: devRun > boxSize + BoxSpeed/2 (40 @1920) - proves blending AND smear.
+CheckResult CheckTabSmear(const std::vector<FramePixels>& frames, const std::vector<int>& indices, int expW) {
+    CheckResult c;
+    c.name = "TAB_SMEAR";
+    c.pass = true;
+    char buf[256];
+    const int boxSize = TestPatternSpec::BoxSize(expW);
+    const int travel = TestPatternSpec::BoxSpeed(expW); // one frame step (16px @1920)
+    const int devTol = 10; // per-channel; a 1-of-8 blend deviates ~14 after range compression
+    const int passWidth = boxSize + travel / 2;
+    snprintf(buf, sizeof buf,
+             "expected devRun > %d px (box=%d + travel/2=%d; full smear = box+travel = %d)",
+             passWidth, boxSize, travel / 2, boxSize + travel);
+    c.evidence.push_back(buf);
+    for (size_t k = 0; k < frames.size(); k++) {
+        const FramePixels& f = frames[k];
+        if (!f.Valid()) {
+            snprintf(buf, sizeof buf, "frame %d: ABSENT - smear not measurable", indices[k]);
+            c.evidence.push_back(buf);
+            c.pass = false;
+            continue;
+        }
+        int y0 = (int)(f.height * TestPatternSpec::MOTION_BAND_Y0);
+        int y1 = (int)(f.height * TestPatternSpec::MOTION_BAND_Y1);
+        int y = (y0 + y1) / 2;
+        // Longest contiguous runs on the center row of the motion band:
+        // grayRun matches IsBoxGray, devRun matches deviation from the bar
+        // color the generator painted at that x (background outside the box).
+        int grayBest = 0, grayRun = 0, devBest = 0, devRun = 0;
+        for (int x = 0; x < f.width; x++) {
+            const uint8_t* p = &f.rgba[((size_t)y * (size_t)f.width + (size_t)x) * 4];
+            if (IsBoxGray(p)) { grayRun++; if (grayRun > grayBest) grayBest = grayRun; }
+            else grayRun = 0;
+            int bar = (int)((long long)x * TestPatternSpec::BAR_COUNT / f.width);
+            if (bar >= TestPatternSpec::BAR_COUNT) bar = TestPatternSpec::BAR_COUNT - 1;
+            const uint8_t* e = TestPatternSpec::BARS[bar];
+            int dev = (std::max)({ abs(p[0] - e[0]), abs(p[1] - e[1]), abs(p[2] - e[2]) });
+            if (dev > devTol) { devRun++; if (devRun > devBest) devBest = devRun; }
+            else devRun = 0;
+        }
+        bool ok = devBest > passWidth;
+        if (!ok) c.pass = false;
+        snprintf(buf, sizeof buf, "frame %d: grayRun=%d devRun=%d at y=%d (box=%d, need devRun>%d) %s",
+                 indices[k], grayBest, devBest, y, boxSize, passWidth, ok ? "OK" : "FAIL");
+        c.evidence.push_back(buf);
+    }
+    if (c.pass)
+        c.evidence.push_back("deviation wider than one box: temporal accumulation smear confirmed");
+    else
+        c.evidence.push_back("expected deviation-from-background run wider than boxSize + travel/2");
     AppendFrameStats(c, frames, indices);
     return c;
 }
@@ -493,7 +564,7 @@ bool BuildReferenceClip(const std::string& ffmpegPath, const std::string& workDi
 
 bool RunVerification(const std::string& ffmpegPath, const std::string& workDir,
                      const std::string& mkvPath, int width, int height, int frameCount,
-                     VerifyReport& report, std::string& err) {
+                     VerifyReport& report, std::string& err, bool tabSmear) {
     // Sample frames 0, N/2, N-1 (deduplicated, ascending).
     std::vector<int> indices;
     indices.push_back(0);
@@ -517,5 +588,7 @@ bool RunVerification(const std::string& ffmpegPath, const std::string& workDir,
     report.checks.push_back(CheckColor(frames, indices));
     report.checks.push_back(CheckOrientation(frames, indices));
     report.checks.push_back(CheckMotion(frames, indices, width));
+    if (tabSmear)
+        report.checks.push_back(CheckTabSmear(frames, indices, width));
     return true;
 }

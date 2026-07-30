@@ -253,9 +253,10 @@ namespace CinematicRecorder.UI
 
         private void DrawTemporalAccumulationSection()
         {
-            // TAB is AMD-only for now (NVENC wiring is Phase 4) and requires the GPU path
-            bool isAmd = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd;
-            bool canUseTab = isAmd && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding;
+            // TAB requires the GPU zero-copy path; supported on both AMF (AMD) and NVENC (Nvidia)
+            bool hasGpuEncoder = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd
+                              || SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Nvidia;
+            bool canUseTab = hasGpuEncoder && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding;
 
             bool wasEnabled = GUI.enabled;
             if (!canUseTab || DeterministicCaptureSession.IsRunning)
@@ -277,12 +278,12 @@ namespace CinematicRecorder.UI
             );
 
             GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            if (!isAmd && SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Nvidia)
+            if (SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.None)
             {
-                // NVIDIA machine: explain why TAB is missing
+                // No GPU encoder detected: explain why TAB is unavailable
                 GUIStyle warningStyle = CinematicUIResources.Styles.Info();
                 warningStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.TabAMFOnlyWarning, warningStyle);
+                GUILayout.Label(AdvancedSettings.TabGpuRequiredWarning, warningStyle);
             }
             else
             {

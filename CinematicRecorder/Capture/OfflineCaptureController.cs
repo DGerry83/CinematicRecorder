@@ -205,9 +205,18 @@ namespace CinematicRecorder.Capture
 
                 if (usingNvencPath && nvencZeroCopyEncoder != null)
                 {
-                    // NVENC path - deferred for later implementation
-                    _isTabEnabled = false;
-                    Debug.LogWarning("[OfflineCapture] TAB requested but NVENC not yet implemented, disabling TAB");
+                    // NVENC path: no sigma parameter (native uses uniform weights) and no separate
+                    // SetTabSharpening call - CAS sharpening is threaded at finalize time instead.
+                    bool success = nvencZeroCopyEncoder.SetTabMode(true, _tabSubFrameCount);
+                    if (!success)
+                    {
+                        _isTabEnabled = false;
+                        Debug.LogError("[OfflineCapture] Failed to enable TAB on NVENC encoder");
+                    }
+                    else
+                    {
+                        Debug.Log($"[OfflineCapture] Temporal Accumulation Blur enabled on NVENC ({_tabSubFrameCount} sub-frames)");
+                    }
                 }
                 else if (usingZeroCopyPath && zeroCopyEncoder != null)
                 {
@@ -447,7 +456,9 @@ namespace CinematicRecorder.Capture
             // Submit to accumulation array
             if (usingNvencPath && nvencZeroCopyEncoder != null)
             {
-                Debug.LogWarning($"[OfflineCapture] NVENC not implemented, skipping sub-frame {subFrameIndex}");
+                bool success = nvencZeroCopyEncoder.SubmitSubFrame(nativeTexPtr, subFrameIndex);
+                if (!success)
+                    Debug.LogError($"[OfflineCapture] FAILED to submit NVENC sub-frame {subFrameIndex}");
             }
             else if (usingZeroCopyPath && zeroCopyEncoder != null)
             {
@@ -470,8 +481,9 @@ namespace CinematicRecorder.Capture
         {
             if (usingNvencPath && nvencZeroCopyEncoder != null)
             {
-                // NVENC not implemented yet
-                return false;
+                // CAS sharpening is threaded inline via the sharpness parameter (no separate native call)
+                return nvencZeroCopyEncoder.FinalizeTemporalFrame(outputFrameIndex,
+                    SessionState.TabEnableSharpening ? SessionState.TabSharpeningStrength : 0f);
             }
             else if (usingZeroCopyPath && zeroCopyEncoder != null)
             {
@@ -736,6 +748,8 @@ namespace CinematicRecorder.Capture
                 QualityPreset = SessionState.NvencPreset, // 0,1,2 maps to P1,P4,P7
                 Codec = 1, // HEVC primary
                 GopSize = playbackFps * 2,
+                // F17: RESERVED - ignored by init. TAB activates via SetTabMode after init;
+                // CAS sharpness is threaded via the FinalizeTemporalFrame sharpness parameter.
                 EnableTAB = 0,
                 EnableCAS = 0,
                 EnableDither = 0,

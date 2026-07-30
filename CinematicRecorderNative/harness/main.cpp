@@ -26,6 +26,9 @@ extern "C" {
                               int width, int height, int fps, const char* outputPath,
                               const NvencEncoderSettings* settings);
     int CR_EncodeNvencFrame(void* encoderHandle, ID3D11Texture2D* texture, long long frameIndex);
+    int CR_NvencSetTabMode(void* encoderHandle, int enabled, int subFrameCount);
+    int CR_NvencSubmitSubFrame(void* encoderHandle, ID3D11Texture2D* texture, int sliceIndex);
+    int CR_NvencFinalizeTemporalFrame(void* encoderHandle, long long frameIndex, float sharpness);
     int CR_ShutdownNvencEncoder(void* encoderHandle);
     const char* CR_GetLastError(); // provided by HarnessShim.cpp
 }
@@ -48,6 +51,8 @@ struct HarnessConfig {
     std::string outPath;    // default chosen per mode: out.mkv / reference.mkv
     std::string ffmpegPath; // default: ffmpeg.exe beside this exe
     bool selftest = false;
+    bool tab = false;       // temporal accumulation: N sub-frames per output frame
+    int subframes = 8;      // sub-frames per output frame in --tab mode (1..8)
 };
 
 std::string ExeDir() {
@@ -76,6 +81,10 @@ void PrintUsage() {
         "  --ffmpeg PATH       ffmpeg.exe    (default: ffmpeg.exe beside this exe)\n"
         "  --selftest          no NVENC: pipe the pattern to ffmpeg (libx264, fallback\n"
         "                      rawvideo) and verify with the identical check chain\n"
+        "  --tab               temporal accumulation blur: submit --subframes sub-frames\n"
+        "                      per output frame and finalize via the TAB shader; adds the\n"
+        "                      TAB_SMEAR verification check\n"
+        "  --subframes N       sub-frames per output frame in --tab mode (1..8, default 8)\n"
         "Exit codes: 0 = PASS, 1 = verify FAIL, 2 = encoder fail, 3 = usage\n");
 }
 
@@ -97,6 +106,14 @@ bool ParseArgs(int argc, char** argv, HarnessConfig& cfg) {
         };
         if (a == "--selftest") {
             cfg.selftest = true;
+        } else if (a == "--tab") {
+            cfg.tab = true;
+        } else if (a == "--subframes") {
+            const char* v = needValue("--subframes"); if (!v || !ParseInt(v, cfg.subframes)) return false;
+            if (cfg.subframes < 1 || cfg.subframes > 8) {
+                printf("ERROR: --subframes must be 1..8\n");
+                return false;
+            }
         } else if (a == "--help" || a == "-h") {
             return false;
         } else if (a == "--width") {
@@ -328,8 +345,44 @@ int main(int argc, char** argv) {
     }
     printf("[ENCODE] CR_InitNvencEncoder OK\n");
 
+    if (cfg.tab) {
+        if (CR_NvencSetTabMode(runner.handle, 1, cfg.subframes) != 0) {
+            printf("[ENCODE] CR_NvencSetTabMode(subframes=%d) failed\n", cfg.subframes);
+            printf("NATIVE ERROR: %s\n", CR_GetLastError());
+            runner.ShutdownGuarded(30000);
+            return EXIT_ENCODER_FAIL;
+        }
+        printf("[ENCODE] TAB mode enabled: %d sub-frames per output frame\n", cfg.subframes);
+    }
+
     std::vector<uint8_t> frame(PatternGenerator::BufferSize(cfg.width, cfg.height));
     for (int i = 0; i < cfg.frames; i++) {
+        if (cfg.tab) {
+            // Submit N sub-frames with the box interpolated across one frame
+            // step (sub-frame k at position of frame i + k/N), then finalize.
+            for (int k = 0; k < cfg.subframes; k++) {
+                PatternGenerator::GenerateSubFrame(i + (double)k / cfg.subframes,
+                                                   cfg.width, cfg.height, cfg.format, frame.data());
+                if (!d3d.Upload(frame.data(), cfg.width, cfg.height, err)) {
+                    printf("HARNESS ERROR: %s\n", err.c_str());
+                    runner.ShutdownGuarded(30000);
+                    return EXIT_VERIFY_FAIL;
+                }
+                if (CR_NvencSubmitSubFrame(runner.handle, d3d.source, k) != 0) {
+                    printf("[ENCODE] CR_NvencSubmitSubFrame failed at frame %d sub-frame %d\n", i, k);
+                    printf("NATIVE ERROR: %s\n", CR_GetLastError());
+                    runner.ShutdownGuarded(30000);
+                    return EXIT_ENCODER_FAIL;
+                }
+            }
+            if (CR_NvencFinalizeTemporalFrame(runner.handle, i, 0.0f) != 0) {
+                printf("[ENCODE] CR_NvencFinalizeTemporalFrame failed at frame %d\n", i);
+                printf("NATIVE ERROR: %s\n", CR_GetLastError());
+                runner.ShutdownGuarded(30000);
+                return EXIT_ENCODER_FAIL;
+            }
+            continue;
+        }
         PatternGenerator::Generate(i, cfg.width, cfg.height, cfg.format, frame.data());
         if (!d3d.Upload(frame.data(), cfg.width, cfg.height, err)) {
             printf("HARNESS ERROR: %s\n", err.c_str());
@@ -355,7 +408,7 @@ int main(int argc, char** argv) {
 
     VerifyReport report;
     if (!RunVerification(cfg.ffmpegPath, workDir, cfg.outPath, cfg.width, cfg.height,
-                         cfg.frames, report, err)) {
+                         cfg.frames, report, err, cfg.tab)) {
         printf("HARNESS ERROR: verification could not run: %s\n", err.c_str());
         return EXIT_VERIFY_FAIL;
     }

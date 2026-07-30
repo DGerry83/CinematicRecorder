@@ -43,8 +43,12 @@ bool BuildReferenceClip(const std::string& ffmpegPath, const std::string& workDi
 // Probes stream info (ffmpeg -i, stderr captured), extracts frames
 // {0, N/2, N-1} via the select filter (-vsync 0, positionally numbered BMPs
 // mapped back to sample indices in ascending order), parses the BMPs, and runs
-// all four checks. Returns false only on harness-infra failure (err set);
-// otherwise the report is filled (individual checks may still FAIL).
+// all four checks. With tabSmear=true (--tab runs) a fifth check, TAB_SMEAR,
+// verifies the accumulated box smear: the contiguous region deviating from
+// the background bars must exceed boxSize + travel/2 (the full smear is
+// boxSize + travel). Returns
+// false only on harness-infra failure (err set); otherwise the report is
+// filled (individual checks may still FAIL).
 bool RunVerification(const std::string& ffmpegPath, const std::string& workDir,
                      const std::string& mkvPath, int width, int height, int frameCount,
-                     VerifyReport& report, std::string& err);
+                     VerifyReport& report, std::string& err, bool tabSmear = false);
