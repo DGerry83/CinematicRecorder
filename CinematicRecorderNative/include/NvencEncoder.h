@@ -73,6 +73,9 @@ private:
     ID3D11Device* m_device;
     ID3D11DeviceContext* m_context;
     ID3D11Device* m_unityDevice;
+    void* m_multithread;             // ID3D11Multithread*, stored as void* to avoid SDK header dependency
+    BOOL m_prevMultithreadProtected;
+    bool m_multithreadProtectionActive;
     
     // Texture resources
     ID3D11Texture2D* m_encodeTextures[2];
@@ -107,14 +110,14 @@ private:
     std::mutex m_encodeMutex;
     std::mutex m_writeMutex; // serializes av_interleaved_write_frame (F16: was a
                              // function-static shared across encoder instances)
+    std::mutex m_tabMutex;   // serializes TAB SubmitSubFrame/FinalizeTemporalFrame
     
     // Compute shaders (created from embedded bytecode)
     ID3D11ComputeShader* m_tabComputeShader;
     ID3D11ComputeShader* m_casComputeShader;
 
-    // GPU Synchronization
-    ID3D11Query* m_postComputeQuery;
-    
+    // GPU Synchronization: fresh event query per sync (see HardSyncGPU in .cpp)
+
     // Intermediate textures for shader pipeline (ping-pong)
     ID3D11Texture2D* m_intermediateTextures[2];
     ID3D11ShaderResourceView* m_intermediateSRV[2];
@@ -132,6 +135,9 @@ private:
     int m_currentAccumBuffer;
     int m_currentSubFrame;
     int m_tabSubFrameCount;
+    int m_tabFinalizeCount;        // output frames completed (rate-limits TAB breadcrumbs)
+    bool m_tabFirstSliceReceived;  // true once slice 0 of the first TAB batch is received
+    int m_syncDiagCount;           // rate-limits HardSyncGPU resolution-latency logs
 
     // Accumulation array (8-slice texture array for sub-frames)
     ID3D11Texture2D* m_accumulationArray[2];
@@ -146,7 +152,7 @@ private:
     bool CreateConstantBuffers();
     
     // GPU Synchronization
-    void HardSyncGPU(ID3D11Query* query, const char* stageName);
+    bool HardSyncGPU(const char* stageName, DWORD timeoutMs = 5000);
     
     // Preprocessing encode paths
     bool EncodeFrameWithCAS(ID3D11Texture2D* unityTexture, int64_t frameIndex, float sharpness);

@@ -89,7 +89,7 @@ static void InitLogFile()
     }
 }
 
-static void LogToFile(const char* fmt, ...)
+static void LogToFileV(const char* fmt, va_list args)
 {
     InitLogFile();
     
@@ -103,12 +103,25 @@ static void LogToFile(const char* fmt, ...)
     
     // Message
     char buffer[1024];
-    va_list args;
-    va_start(args, fmt);
     vsnprintf(buffer, sizeof(buffer), fmt, args);
-    va_end(args);
     
     g_logFile << buffer << std::endl << std::flush;
+}
+
+void CRNativeLog(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    LogToFileV(fmt, args);
+    va_end(args);
+}
+
+static void LogToFile(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    LogToFileV(fmt, args);
+    va_end(args);
 }
 
 #pragma comment(lib, "d3d11.lib")

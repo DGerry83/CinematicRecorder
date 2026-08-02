@@ -69,6 +69,9 @@ int CR_ShutdownEncoder(CREncoderHandle encoder);
 __declspec(dllexport)
 const char* CR_GetLastError();
 
+// Shared native file logger (defined in CinematicRecorderNative.cpp; harness provides its own shim)
+void CRNativeLog(const char* fmt, ...);
+
 // NEW: Temporal Accumulation Blur API
 
 // Configure TAB mode. Must be called after CR_InitEncoder/FromTexture but before first frame.

@@ -1,4 +1,5 @@
 #include "NvencEncoder.h"
+#include "CinematicRecorderNative.h"
 #include "TemporalAccumulation.h"
 #include "CASSharpen.h"
 #include "../shaders/BlueNoiseDitherBytecode.h"
@@ -18,23 +19,35 @@ extern "C" {
 #include <dxgi1_2.h>
 #pragma comment(lib, "dxgi.lib")
 
+// Minimal local definition of ID3D11Multithread so we don't depend on d3d11_1.h,
+// which is absent from some installed Windows SDKs. Layout matches the SDK interface:
+// Enter, Leave, SetMultithreadProtected, GetMultithreadProtected (documented order).
+static const IID IID_ID3D11Multithread = { 0x9B7E4E00, 0x342C, 0x4106, { 0xA1, 0x9F, 0x4F, 0x27, 0x04, 0xF6, 0x89, 0xF0 } };
+struct ID3D11MultithreadLocal : public IUnknown {
+    virtual void STDMETHODCALLTYPE Enter(void) = 0;
+    virtual void STDMETHODCALLTYPE Leave(void) = 0;
+    virtual BOOL STDMETHODCALLTYPE SetMultithreadProtected(BOOL bProtected) = 0;
+    virtual BOOL STDMETHODCALLTYPE GetMultithreadProtected(void) = 0;
+};
+
 // Typedef for the create instance function pointer (not defined in header)
 typedef NVENCSTATUS (NVENCAPI *NVENCAPICREATEINSTANCEPROC)(NV_ENCODE_API_FUNCTION_LIST *);
 
 NvencEncoder::NvencEncoder()
     : m_hEncoder(nullptr), m_hNvencLib(nullptr), m_device(nullptr), m_context(nullptr),
-      m_unityDevice(nullptr), m_bufferIndex(0),
+      m_unityDevice(nullptr), m_multithread(nullptr), m_prevMultithreadProtected(FALSE),
+      m_multithreadProtectionActive(false), m_bufferIndex(0),
       m_encodeTextureFormat(DXGI_FORMAT_UNKNOWN), m_encodeBufferFormat(NV_ENC_BUFFER_FORMAT_UNDEFINED),
       m_bitstreamBuffer(nullptr), m_formatContext(nullptr), m_videoStream(nullptr),
       m_headerWritten(false),
       m_deferredFrames(0),
       m_frameCount(0), m_width(0), m_height(0), m_fps(0), m_initialized(false), m_isHEVC(false),
       m_tabComputeShader(nullptr), m_casComputeShader(nullptr),
-      m_postComputeQuery(nullptr),
       m_blueNoiseTexture(nullptr), m_blueNoiseSRV(nullptr),
       m_casParamsBuffer(nullptr),
       m_isTabMode(false), m_currentAccumBuffer(0), m_currentSubFrame(0), m_tabSubFrameCount(8),
-      m_tabWeightBuffer(nullptr) {
+      m_tabWeightBuffer(nullptr), m_tabFinalizeCount(0), m_tabFirstSliceReceived(false),
+      m_syncDiagCount(0) {
     
     memset(m_encodeTextures, 0, sizeof(m_encodeTextures));
     memset(m_accumulationArray, 0, sizeof(m_accumulationArray));
@@ -61,6 +74,7 @@ void NvencEncoder::LogDebug(const char* fmt, ...) {
     char fullMsg[2300];
     snprintf(fullMsg, sizeof(fullMsg), "[NVENC][DEBUG] %s\n", m_debugBuffer);
     OutputDebugStringA(fullMsg);
+    CRNativeLog("[NVENC][DEBUG] %s", m_debugBuffer);
 }
 
 void NvencEncoder::SetError(const char* fmt, ...) {
@@ -169,6 +183,21 @@ bool NvencEncoder::ValidateOrCreateDevice(ID3D11Device* unityDevice, ID3D11Textu
     m_device->AddRef();
     m_device->GetImmediateContext(&m_context);
     LogDebug("Direct Unity device usage successful");
+    
+    // Enable D3D11 multithread protection on Unity's immediate context so concurrent
+    // access from Unity render thread, our main thread, and NVENC's worker is
+    // serialized by the runtime. Restore original state in Shutdown.
+    ID3D11MultithreadLocal* mt = nullptr;
+    if (m_context && SUCCEEDED(m_context->QueryInterface(IID_ID3D11Multithread, (void**)&mt))) {
+        m_multithread = mt;
+        m_prevMultithreadProtected = mt->GetMultithreadProtected();
+        mt->SetMultithreadProtected(TRUE);
+        m_multithreadProtectionActive = true;
+        LogDebug("D3D11 multithread protection enabled (was %s)", m_prevMultithreadProtected ? "TRUE" : "FALSE");
+    } else {
+        LogDebug("D3D11Multithread not available, proceeding without runtime protection");
+    }
+    
     return true;
 }
 
@@ -890,11 +919,6 @@ bool NvencEncoder::InitializeComputeShaders() {
         LogDebug("Failed to create CAS compute shader: 0x%08X", hr);
     }
     
-    // Create sync query
-    D3D11_QUERY_DESC queryDesc = {};
-    queryDesc.Query = D3D11_QUERY_EVENT;
-    m_device->CreateQuery(&queryDesc, &m_postComputeQuery);
-    
     return true;  // Non-fatal - can encode without shaders
 }
 
@@ -991,19 +1015,46 @@ bool NvencEncoder::CreateConstantBuffers() {
     return true;
 }
 
-void NvencEncoder::HardSyncGPU(ID3D11Query* query, const char* stageName) {
-    if (!query) return;
-    
+bool NvencEncoder::HardSyncGPU(const char* stageName, DWORD timeoutMs) {
+    // Fresh event query per sync: the wait semantics are "all GPU work issued so
+    // far", which a new query preserves exactly, and per-use creation sidesteps
+    // event-query re-issue behavior that wedged the DONOTFLUSH poll on driver
+    // 595.97 (harness-verified: a re-issued query never resolved; fresh did).
+    D3D11_QUERY_DESC queryDesc = {};
+    queryDesc.Query = D3D11_QUERY_EVENT;
+    ID3D11Query* query = nullptr;
+    if (FAILED(m_device->CreateQuery(&queryDesc, &query)) || !query) {
+        LogDebug("[NVENC] Failed to create sync query for %s", stageName);
+        return false;
+    }
     m_context->End(query);
-    
+    // Explicitly submit the command buffer: the DONOTFLUSH poll below never
+    // flushes, and without a submission trigger the End() can sit in an
+    // unsubmitted buffer indefinitely.
+    m_context->Flush();
+
     DWORD startTime = GetTickCount();
-    while (S_FALSE == m_context->GetData(query, nullptr, 0, 0)) {
+    bool ok = true;
+    while (S_FALSE == m_context->GetData(query, nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH)) {
         Sleep(1);
-        if (GetTickCount() - startTime > 5000) {
+        if (GetTickCount() - startTime > timeoutMs) {
             LogDebug("[NVENC] GPU sync timeout in %s", stageName);
+            ok = false;
             break;
         }
     }
+    // Diagnostic (H-A vs H-B): resolution latency tells apart "event queries are
+    // just slow in this quiet harness context" (H-A: harness-measured ~4.1s per
+    // query on driver 595.97) from "queries stop resolving after EncodeNVENC"
+    // (H-B: refuted — post-encode probe resolved at the same latency). Rate-limited
+    // to the first 40 syncs so KSP captures (expected µs-latency) aren't log-spammed;
+    // timeouts always log above.
+    if (ok && m_syncDiagCount < 40) {
+        m_syncDiagCount++;
+        LogDebug("[NVENC] GPU sync %s resolved in %lu ms", stageName, (unsigned long)(GetTickCount() - startTime));
+    }
+    query->Release();
+    return ok;
 }
 
 bool NvencEncoder::EncodeNVENC(int idx, int64_t frameIndex) {
@@ -1087,7 +1138,11 @@ bool NvencEncoder::EncodeFrameWithCAS(ID3D11Texture2D* unityTexture, int64_t fra
     m_context->Dispatch(dispatchX, dispatchY, 1);
     
     // Hard sync
-    HardSyncGPU(m_postComputeQuery, "CAS");
+    if (!HardSyncGPU("CAS")) {
+        SetError("CAS GPU sync timeout");
+        LogDebug("EncodeFrameWithCAS frame %lld CAS GPU sync timeout", frameIndex);
+        return false;
+    }
     
     // Unbind (MANDATORY - prevents D3D11 resource hazards)
     ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
@@ -1161,7 +1216,44 @@ bool NvencEncoder::SubmitSubFrame(ID3D11Texture2D* unityTexture, int sliceIndex)
         return false;
     }
     
-    // Copy to specific slice of accumulation array
+    // CRITICAL: acquire TAB mutex FIRST (mirrors AMF path)
+    std::lock_guard<std::mutex> lock(m_tabMutex);
+    
+    // Breadcrumb: first-slice received once ever
+    if (sliceIndex == 0 && !m_tabFirstSliceReceived) {
+        m_tabFirstSliceReceived = true;
+        LogDebug("TAB first sub-frame slice 0 received");
+    }
+    
+    // Frame-over-frame throttle: wait until previous frame's compute is done
+    // before overwriting this accumulation buffer. Skip on the very first frame
+    // (no prior compute exists to wait for).
+    if (sliceIndex == 0 && m_tabFinalizeCount > 0) {
+        if (!HardSyncGPU("TAB submit throttle", 5000)) {
+            SetError("TAB submit throttle GPU sync timeout");
+            return false;
+        }
+        if (m_tabFinalizeCount < 3) {
+            LogDebug("SubmitSubFrame slice 0 frame-over-frame throttle complete");
+        }
+    }
+    
+    // Validate sub-frame order (prevents gaps in accumulation)
+    if (sliceIndex != m_currentSubFrame) {
+        SetError("Out-of-order sub-frame submission. Expected %d, got %d", m_currentSubFrame, sliceIndex);
+        return false;
+    }
+    
+    // Validate dimensions
+    D3D11_TEXTURE2D_DESC srcDesc;
+    unityTexture->GetDesc(&srcDesc);
+    if (srcDesc.Width != (UINT)m_width || srcDesc.Height != (UINT)m_height) {
+        SetError("Sub-frame dimension mismatch: expected %dx%d, got %ux%u",
+                 m_width, m_height, srcDesc.Width, srcDesc.Height);
+        return false;
+    }
+    
+    // Copy to specific slice of current accumulation buffer
     UINT subResource = D3D11CalcSubresource(0, sliceIndex, 1);
     m_context->CopySubresourceRegion(
         m_accumulationArray[m_currentAccumBuffer],
@@ -1171,8 +1263,13 @@ bool NvencEncoder::SubmitSubFrame(ID3D11Texture2D* unityTexture, int sliceIndex)
         0,
         nullptr
     );
-    m_context->Flush();
     
+    // Only flush on last sub-frame to reduce driver overhead
+    if (sliceIndex == m_tabSubFrameCount - 1) {
+        m_context->Flush();
+    }
+    
+    m_currentSubFrame++;
     return true;
 }
 
@@ -1197,8 +1294,33 @@ bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
         return false;
     }
 
+    // CRITICAL: acquire TAB mutex FIRST (mirrors AMF path)
+    std::lock_guard<std::mutex> lock(m_tabMutex);
+
     int idx = m_bufferIndex;
     m_bufferIndex = 1 - idx;
+    
+    if (m_tabFinalizeCount < 3) {
+        LogDebug("FinalizeTemporalFrame entry frame %lld", frameIndex);
+    }
+    
+    // Validate sub-frame count and reset immediately so a failure can't poison the next frame
+    int submittedSubFrames = m_currentSubFrame;
+    m_currentSubFrame = 0;
+    if (submittedSubFrames != m_tabSubFrameCount) {
+        SetError("Finalize called with %d/%d sub-frames", submittedSubFrames, m_tabSubFrameCount);
+        return false;
+    }
+    
+    // HARD SYNC: ensure all sub-frame copies are complete before compute reads the array
+    if (!HardSyncGPU("TAB pre-dispatch", 5000)) {
+        SetError("TAB pre-dispatch GPU sync timeout");
+        LogDebug("FinalizeTemporalFrame frame %lld TAB pre-dispatch sync timeout", frameIndex);
+        return false;
+    }
+    if (m_tabFinalizeCount < 3) {
+        LogDebug("FinalizeTemporalFrame frame %lld post-pre-dispatch-sync", frameIndex);
+    }
     
     // Step 1: Run TAB shader to average accumulated sub-frames
     // Update weight buffer with Gaussian weights
@@ -1226,8 +1348,19 @@ bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
     UINT dispatchY = (m_height + 15) / 16;
     m_context->Dispatch(dispatchX, dispatchY, 1);
     
+    if (m_tabFinalizeCount < 3) {
+        LogDebug("FinalizeTemporalFrame frame %lld post-TAB-dispatch", frameIndex);
+    }
+    
     // Hard sync
-    HardSyncGPU(m_postComputeQuery, "TAB");
+    if (!HardSyncGPU("TAB")) {
+        SetError("TAB GPU sync timeout");
+        LogDebug("FinalizeTemporalFrame frame %lld TAB GPU sync timeout", frameIndex);
+        return false;
+    }
+    if (m_tabFinalizeCount < 3) {
+        LogDebug("FinalizeTemporalFrame frame %lld post-TAB-sync", frameIndex);
+    }
     
     // Unbind TAB resources
     ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
@@ -1261,7 +1394,18 @@ bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
         m_context->CSSetUnorderedAccessViews(0, 1, &m_intermediateUAV[1], nullptr);
         
         m_context->Dispatch(dispatchX, dispatchY, 1);
-        HardSyncGPU(m_postComputeQuery, "CAS");
+        if (m_tabFinalizeCount < 3) {
+            LogDebug("FinalizeTemporalFrame frame %lld post-CAS-dispatch", frameIndex);
+        }
+        
+        if (!HardSyncGPU("CAS")) {
+            SetError("CAS GPU sync timeout");
+            LogDebug("FinalizeTemporalFrame frame %lld CAS GPU sync timeout", frameIndex);
+            return false;
+        }
+        if (m_tabFinalizeCount < 3) {
+            LogDebug("FinalizeTemporalFrame frame %lld post-CAS-sync", frameIndex);
+        }
         
         // Unbind CAS resources
         m_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
@@ -1279,8 +1423,33 @@ bool NvencEncoder::FinalizeTemporalFrame(int64_t frameIndex, float sharpness) {
     m_context->CopyResource(m_encodeTextures[idx], m_intermediateTextures[outputIdx]);
     m_context->Flush();
     
+    if (m_tabFinalizeCount < 3) {
+        LogDebug("FinalizeTemporalFrame frame %lld post-copy-to-encode-texture", frameIndex);
+    }
+    
     // Step 4: NVENC encode
-    return EncodeNVENC(idx, frameIndex);
+    bool encodeOk = EncodeNVENC(idx, frameIndex);
+    if (!encodeOk || m_tabFinalizeCount < 3) {
+        LogDebug("FinalizeTemporalFrame frame %lld EncodeNVENC %s", frameIndex, encodeOk ? "success" : "failed");
+    }
+    // DIAGNOSTIC (H-B probe): does an event query issued immediately after
+    // EncodeNVENC still resolve? Non-fatal, first 3 frames only — a stall here
+    // pinpoints the encode as what poisons subsequent syncs on this queue.
+    if (encodeOk && m_tabFinalizeCount < 3) {
+        if (!HardSyncGPU("post-encode probe", 5000)) {
+            LogDebug("FinalizeTemporalFrame frame %lld post-encode probe sync timeout (H-B signature)", frameIndex);
+        }
+    }
+    if (encodeOk) {
+        // CRITICAL: toggle accumulation buffer for next frame (prevents resource hazards)
+        m_currentAccumBuffer = 1 - m_currentAccumBuffer;
+        
+        m_tabFinalizeCount++;
+        if (m_tabFinalizeCount == 3) {
+            LogDebug("breadcrumb logging off, TAB steady-state");
+        }
+    }
+    return encodeOk;
 }
 
 void NvencEncoder::Shutdown() {
@@ -1288,20 +1457,25 @@ void NvencEncoder::Shutdown() {
     if (!m_initialized && !m_hEncoder && !m_formatContext && !m_device) return;
     LogDebug("Shutting down NVENC encoder");
     
+    // Restore D3D11 multithread protection to its original state if we changed it.
+    // Do this early while m_context is still valid.
+    if (m_multithreadProtectionActive && m_multithread) {
+        ID3D11MultithreadLocal* mt = static_cast<ID3D11MultithreadLocal*>(m_multithread);
+        LogDebug("D3D11 multithread protection restoring to %s", m_prevMultithreadProtected ? "TRUE" : "FALSE");
+        mt->SetMultithreadProtected(m_prevMultithreadProtected);
+        mt->Release();
+        m_multithread = nullptr;
+        m_multithreadProtectionActive = false;
+    }
+    
     // Cleanup compute shaders
     if (m_tabComputeShader) { 
         m_tabComputeShader->Release(); 
         m_tabComputeShader = nullptr; 
     }
-    if (m_casComputeShader) { 
-        m_casComputeShader->Release(); 
-        m_casComputeShader = nullptr; 
-    }
-
-    // Cleanup sync query
-    if (m_postComputeQuery) { 
-        m_postComputeQuery->Release(); 
-        m_postComputeQuery = nullptr; 
+    if (m_casComputeShader) {
+        m_casComputeShader->Release();
+        m_casComputeShader = nullptr;
     }
 
     // Cleanup intermediate textures
@@ -1501,7 +1675,11 @@ __declspec(dllexport) int CR_NvencSubmitSubFrame(
         return -1;
     }
     NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
-    return encoder->SubmitSubFrame(texture, sliceIndex) ? 0 : -1;
+    if (!encoder->SubmitSubFrame(texture, sliceIndex)) {
+        strcpy_s(g_errorBuffer, sizeof(g_errorBuffer), encoder->GetError());
+        return -1;
+    }
+    return 0;
 }
 
 __declspec(dllexport) int CR_NvencFinalizeTemporalFrame(
@@ -1514,7 +1692,11 @@ __declspec(dllexport) int CR_NvencFinalizeTemporalFrame(
         return -1;
     }
     NvencEncoder* encoder = static_cast<NvencEncoder*>(encoderHandle);
-    return encoder->FinalizeTemporalFrame(frameIndex, sharpness) ? 0 : -1;
+    if (!encoder->FinalizeTemporalFrame(frameIndex, sharpness)) {
+        strcpy_s(g_errorBuffer, sizeof(g_errorBuffer), encoder->GetError());
+        return -1;
+    }
+    return 0;
 }
 
 __declspec(dllexport) int CR_NvencSetTabMode(
