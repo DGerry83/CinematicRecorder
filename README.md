@@ -154,6 +154,10 @@ cd NativePlugin
 build_release.bat
 ```
 
+## Acknowledgements
+
+- [@Halbann](https://github.com/Halbann) — repository reorganisation to standard KSP modding layout (KSPBuildTools-based build, SDK-style csproj, split C#/native projects) and build process improvements.
+
 ## License
 
 Cinematic Recorder is licensed under the **GNU General Public License v3.0**.

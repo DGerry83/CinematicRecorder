@@ -30,4 +30,9 @@ jobs:
         with:
           files: "CinematicRecorder-${{ github.ref_name }}.zip"
           generate_release_notes: true
+          # Prepended to the auto-generated notes.
+          body: |
+            ### Acknowledgements
+
+            Huge thanks to [@Halbann](https://github.com/Halbann), who reorganised this repository to follow KSP modding standards — KSPBuildTools-based build, SDK-style csproj, and the split C#/native projects — and smoothed out the build process.
           prerelease: ${{ contains(github.ref_name, '-') }}
