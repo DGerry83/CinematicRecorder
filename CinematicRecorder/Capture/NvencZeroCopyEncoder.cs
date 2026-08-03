@@ -1,0 +1,441 @@
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using UnityEngine;
+
+namespace CinematicRecorder.Capture
+{
+    public unsafe class NvencZeroCopyEncoder : IDisposable
+    {
+        #region Fields
+        private IntPtr _encoderHandle;
+        private bool _isInitialized;
+        private bool _isDisposed;
+        private const string PluginName = "CinematicRecorderNative";
+        private static bool _nativeDllAvailable;
+        private static IntPtr _nativeLibraryHandle; // Keep native plugin DLL loaded
+        private static IntPtr _nvencLibraryHandle; // Keep NVENC driver DLL loaded
+        #endregion
+
+        #region Availability
+        /// <summary>
+        /// True when the NVENC zero-copy path can run on this machine: native plugin DLL
+        /// loaded, init export found, and the NVIDIA driver DLL (nvEncodeAPI64.dll) present.
+        /// Computed by the static constructor's probes; used for GPU auto-detection.
+        /// </summary>
+        public static bool IsAvailable => _nativeDllAvailable;
+        #endregion
+
+        #region Static Initialization
+        static NvencZeroCopyEncoder()
+        {
+            _nativeDllAvailable = false;
+            try
+            {
+                string assemblyPath = Path.GetDirectoryName(typeof(NvencZeroCopyEncoder).Assembly.Location);
+                if (assemblyPath != null)
+                {
+                    string pluginDataPath = Path.GetFullPath(Path.Combine(assemblyPath, "..", "PluginData"));
+                    string ffmpegPath = Path.Combine(pluginDataPath, "FFMpeg");
+                    string dllPath = Path.Combine(pluginDataPath, "CinematicRecorderNative.dll");
+
+                    Debug.Log($"[NvencZeroCopyEncoder] Loading from: {dllPath}");
+
+                    if (!Directory.Exists(ffmpegPath))
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] FFmpeg folder not found: {ffmpegPath}");
+                        return;
+                    }
+
+                    if (!File.Exists(dllPath))
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] Native DLL not found: {dllPath}");
+                        return;
+                    }
+
+                    SetDllDirectory(ffmpegPath);
+
+                    // Verify the specific export exists before loading
+                    IntPtr hModule = LoadLibraryW(dllPath);
+                    if (hModule == IntPtr.Zero)
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        // Error 126 = missing dependency (expected on non-NVIDIA systems)
+                        // Error 193 = wrong architecture (corrupted install)
+                        // Other errors = likely corrupted
+                        if (error != 126)
+                        {
+                            Debug.LogError($"[NvencZeroCopyEncoder] LoadLibrary failed: error {error}");
+                        }
+                        // Silently return for error 126 (driver dependency missing)
+                        return;
+                    }
+
+                    IntPtr procAddr = GetProcAddress(hModule, "CR_InitNvencEncoderFromTexture");
+                    if (procAddr == IntPtr.Zero)
+                    {
+                        Debug.LogError($"[NvencZeroCopyEncoder] Export 'CR_InitNvencEncoderFromTexture' not found in DLL!");
+                        FreeLibrary(hModule);
+                        return;
+                    }
+
+                    Debug.Log($"[NvencZeroCopyEncoder] Export found at 0x{procAddr.ToInt64():X}");
+                    
+                    // Keep native plugin DLL loaded (required for P/Invoke to find it)
+                    _nativeLibraryHandle = hModule;
+
+                    // Pre-load NVENC driver DLL to ensure it's available for P/Invoke
+                    // This matches the AMF pattern where dependencies are verified before use
+                    _nvencLibraryHandle = LoadLibraryW("nvEncodeAPI64.dll");
+                    if (_nvencLibraryHandle == IntPtr.Zero)
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        Debug.Log($"[NvencZeroCopyEncoder] nvEncodeAPI64.dll not available (error {error}) - expected on non-NVIDIA systems");
+                        return;
+                    }
+                    Debug.Log("[NvencZeroCopyEncoder] nvEncodeAPI64.dll pre-loaded successfully");
+                    
+                    _nativeDllAvailable = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Static init error: {ex}");
+            }
+        }
+        #endregion
+        #region Structs
+        /// <summary>
+        /// NVENC encoder settings struct.
+        /// Total Size: 56 bytes (matches native struct)
+        /// Generated by StructToolset - DO NOT EDIT MANUALLY
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential, Pack = 16)]
+        public struct NvencEncoderSettings
+        {
+            public int RateControlMode;  // 0=CQP, 1=VBR, 2=CBR
+            public int TargetBitrateKbps;  // Target bitrate in kbps for VBR/CBR
+            public int QpI;  // QP for I-frames (0-51)
+            public int QpP;  // QP for P-frames (0-51)
+            public int QpB;  // QP for B-frames (0-51)
+            public int QualityPreset;  // 0=P1(Speed), 1=P4(Balanced), 2=P7(Quality)
+            public int Codec;  // 0=H264, 1=HEVC
+            public int GopSize;  // Group of Pictures size (keyframe interval)
+            public int EnableTAB;  // Enable Temporal Accumulation Buffer (0=off, 1=on)
+            public int EnableCAS;  // Enable Contrast Adaptive Sharpening (0=off, 1=on)
+            public int EnableDither;  // Enable Blue Noise Dithering (0=off, 1=on)
+            public int TABSubFrameCount;  // Number of sub-frames for TAB (typically 8)
+            public float CASSharpness;  // Sharpening strength (0.0 to 0.5)
+            public int _padding;  // Padding to align to 8-byte boundary
+        }
+        #endregion
+        #region Native Imports
+        [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr LoadLibraryW(string lpFileName);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool FreeLibrary(IntPtr hModule);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr CR_GetLastError();
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        private static extern IntPtr CR_InitNvencEncoderFromTexture(
+            IntPtr d3d11Texture,
+            int width,
+            int height,
+            int fps,
+            [MarshalAs(UnmanagedType.LPStr)] string outputPath,
+            ref NvencEncoderSettings settings);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_EncodeNvencFrame(
+            IntPtr encoder,
+            IntPtr d3d11Texture,
+            long frameIndex);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_ShutdownNvencEncoder(IntPtr encoder);
+
+        // TAB/CAS API imports
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_NvencSubmitSubFrame(
+            IntPtr encoder,
+            IntPtr d3d11Texture,
+            int sliceIndex);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_NvencFinalizeTemporalFrame(
+            IntPtr encoder,
+            long frameIndex,
+            float sharpness);
+
+        [DllImport(PluginName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int CR_NvencSetTabMode(
+            IntPtr encoder,
+            int enabled,
+            int subFrameCount);
+        #endregion
+        #region Public API
+        public bool IsInitialized => _isInitialized;
+        /// <summary>
+        /// Initializes NVENC hardware encoder from a D3D11 texture for zero-copy GPU encoding.
+        /// </summary>
+        public bool Initialize(
+            int width,
+            int height,
+            int fps,
+            string outputPath,
+            IntPtr d3d11TexturePtr,
+            NvencEncoderSettings settings)
+        {
+            if (_isInitialized)
+                return true;
+
+            if (d3d11TexturePtr == IntPtr.Zero)
+            {
+                Debug.LogError("[NvencZeroCopyEncoder] D3D11 texture pointer is null");
+                return false;
+            }
+
+            // Check if native DLL was loaded successfully during static init
+            if (!_nativeDllAvailable)
+            {
+                // Silent fail - static init already logged the specific error
+                return false;
+            }
+
+            Debug.Log($"[NvencZeroCopyEncoder] Initializing: {width}x{height}@{fps}, " +
+                $"RC={settings.RateControlMode}, QP={settings.QpI}, Preset={settings.QualityPreset}");
+
+            try
+            {
+                _encoderHandle = CR_InitNvencEncoderFromTexture(
+                    d3d11TexturePtr,
+                    width,
+                    height,
+                    fps,
+                    outputPath,
+                    ref settings);
+
+                if (_encoderHandle == IntPtr.Zero)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? "Unknown native error";
+                    Debug.LogError($"[NvencZeroCopyEncoder] Native init returned null: {err}");
+                    return false;
+                }
+
+                _isInitialized = true;
+                Debug.Log($"[NvencZeroCopyEncoder] Initialized successfully");
+                return true;
+            }
+            catch (SEHException ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Native code crashed (SEH): {ex.Message}");
+                return false;
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Export not found: {ex.Message}");
+                return false;
+            }
+            catch (DllNotFoundException ex)
+            {
+                // Driver dependency missing - expected on non-NVIDIA systems
+                Debug.LogWarning($"[NvencZeroCopyEncoder] NVENC driver dependency not found: {ex.Message}");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Exception: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+        /// <summary>
+        /// Encodes a frame using the configured NVENC encoder.
+        /// </summary>
+        public bool EncodeFrame(IntPtr d3d11TexturePtr, long frameIndex)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+                return false;
+
+            if (d3d11TexturePtr == IntPtr.Zero)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] EncodeFrame called with null texture");
+                return false;
+            }
+
+            try
+            {
+                int result = CR_EncodeNvencFrame(_encoderHandle, d3d11TexturePtr, frameIndex);
+
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[NvencZeroCopyEncoder] Encode failed for frame {frameIndex}: {err}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (SEHException ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Encode crashed (SEH): {ex.Message}");
+                return false;
+            }
+        }
+
+        public void Shutdown()
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+                return;
+
+            try
+            {
+                int result = CR_ShutdownNvencEncoder(_encoderHandle);
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogWarning($"[NvencZeroCopyEncoder] Shutdown warning: {err}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] Shutdown exception: {ex.Message}");
+            }
+
+            _encoderHandle = IntPtr.Zero;
+            _isInitialized = false;
+            Debug.Log("[NvencZeroCopyEncoder] Shutdown complete");
+        }
+
+        /// <summary>
+        /// Enables or disables Temporal Accumulation Buffer mode.
+        /// Must be called after Initialize but before encoding.
+        /// </summary>
+        public bool SetTabMode(bool enabled, int subFrameCount = 8)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+            {
+                Debug.LogError("[NvencZeroCopyEncoder] Cannot set TAB mode - encoder not initialized");
+                return false;
+            }
+
+            try
+            {
+                int result = CR_NvencSetTabMode(_encoderHandle, enabled ? 1 : 0, subFrameCount);
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[NvencZeroCopyEncoder] Failed to set TAB mode: {err}");
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] SetTabMode exception: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Submits a sub-frame for temporal accumulation.
+        /// Call this (SubFrameCount) times per output frame before calling FinalizeTemporalFrame.
+        /// </summary>
+        public bool SubmitSubFrame(IntPtr d3d11TexturePtr, int sliceIndex)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+                return false;
+
+            if (d3d11TexturePtr == IntPtr.Zero)
+            {
+                Debug.LogError("[NvencZeroCopyEncoder] SubmitSubFrame called with null texture");
+                return false;
+            }
+
+            try
+            {
+                int result = CR_NvencSubmitSubFrame(_encoderHandle, d3d11TexturePtr, sliceIndex);
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[NvencZeroCopyEncoder] SubmitSubFrame failed for index {sliceIndex}: {err}");
+                    return false;
+                }
+                return true;
+            }
+            catch (SEHException ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] SubmitSubFrame crashed (SEH): {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Finalizes accumulated sub-frames and encodes the result.
+        /// Runs TAB shader (averages sub-frames) and optionally CAS sharpening, then encodes.
+        /// </summary>
+        public bool FinalizeTemporalFrame(long frameIndex, float sharpness = 0.0f)
+        {
+            if (!_isInitialized || _encoderHandle == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                int result = CR_NvencFinalizeTemporalFrame(_encoderHandle, frameIndex, sharpness);
+                if (result != 0)
+                {
+                    string err = Marshal.PtrToStringAnsi(CR_GetLastError()) ?? $"Error code {result}";
+                    Debug.LogError($"[NvencZeroCopyEncoder] FinalizeTemporalFrame failed for frame {frameIndex}: {err}");
+                    return false;
+                }
+                return true;
+            }
+            catch (SEHException ex)
+            {
+                Debug.LogError($"[NvencZeroCopyEncoder] FinalizeTemporalFrame crashed (SEH): {ex.Message}");
+                return false;
+            }
+        }
+
+        #endregion
+        #region IDisposable
+        public void Dispose()
+        {
+            if (_isDisposed)
+                return;
+
+            _isDisposed = true;
+            Shutdown();
+        }
+        #endregion
+        #region Static Helpers
+        /// <summary>
+        /// Checks if NVENC is available on this system by attempting to load the NVENC DLL.
+        /// </summary>
+        public static bool IsNvencAvailable()
+        {
+            try
+            {
+                IntPtr hModule = LoadLibraryW("nvEncodeAPI64.dll");
+                if (hModule == IntPtr.Zero)
+                    return false;
+
+                FreeLibrary(hModule);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        #endregion
+    }
+}
