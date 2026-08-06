@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
+using CinematicRecorder.Capture;
 
 namespace CinematicRecorder.Integration
 {
@@ -140,7 +141,7 @@ namespace CinematicRecorder.Integration
                 HullCamBridge.RestoreMain();
             }
 
-            if (FlightCamera.fetch != null)
+            if (FlightCamera.fetch != null && !CaptureCameraResolver.IsIvaMode())
             {
                 FlightCamera.fetch.SetFoV(60f);
             }

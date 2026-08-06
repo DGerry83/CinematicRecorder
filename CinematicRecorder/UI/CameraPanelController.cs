@@ -1,4 +1,5 @@
-﻿using CinematicRecorder.Core;
+﻿using CinematicRecorder.Capture;
+using CinematicRecorder.Core;
 using CinematicRecorder.Integration;
 using static CinematicRecorder.UI.CinematicUIStrings;
 using System;
@@ -641,6 +642,18 @@ namespace CinematicRecorder.UI
         {
             GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
             GUILayout.BeginVertical(GUI.skin.box);
+
+            if (CaptureCameraResolver.IsIvaMode())
+            {
+                GUIStyle noticeStyle = CinematicUIResources.Styles.Label(
+                    CinematicUIResources.Colors.INFO_ORANGE,
+                    alignment: TextAnchor.MiddleCenter
+                );
+                GUILayout.Label(CameraController.IvaZoomDisabledNotice, noticeStyle);
+                GUILayout.EndVertical();
+                return;
+            }
+
             GUILayout.BeginHorizontal();
 
             GUIStyle modeStyle = new GUIStyle(HighLogic.Skin.toggle);
@@ -1161,6 +1174,8 @@ namespace CinematicRecorder.UI
         }
         private void ApplyNativeAutoZoom(CameraSlot slot)
         {
+            if (CaptureCameraResolver.IsIvaMode()) return;
+
             Vessel currentVessel = _cachedVessel;
             if (currentVessel == null || FlightCamera.fetch == null) return;
 

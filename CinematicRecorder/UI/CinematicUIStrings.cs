@@ -275,6 +275,7 @@ namespace CinematicRecorder.UI
             public const string OverwriteYes = "Overwrite";
             public const string OverwriteNo = "Create New";
             public const string ConfirmOverwriteTitle = "Confirm Overwrite";
+            public const string IvaZoomDisabledNotice = "Camera controls are disabled while in IVA";
         }
 
         public static class Report

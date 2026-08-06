@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
+using CinematicRecorder.Capture;
 using CinematicRecorder.Integration;
 
 namespace CinematicRecorder.Core
@@ -66,6 +67,8 @@ namespace CinematicRecorder.Core
 
         private void ProcessActiveStrategy(float physicsDeltaTime)
         {
+            if (CaptureCameraResolver.IsIvaMode()) return;
+
             float currentFOV = CurrentFoV;
             float targetFOV = _activeStrategy.GetTargetFOV(currentFOV, physicsDeltaTime);
 
@@ -101,6 +104,8 @@ namespace CinematicRecorder.Core
 
         public void ApplyConsistentFraming()
         {
+            if (CaptureCameraResolver.IsIvaMode()) return;
+
             Vessel vessel = FlightGlobals.ActiveVessel;
             if (vessel == null || FlightCamera.fetch == null) return;
 

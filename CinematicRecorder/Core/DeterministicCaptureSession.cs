@@ -177,9 +177,16 @@ namespace CinematicRecorder.Core
             realWorldTimer = new Stopwatch();
             realWorldTimer.Start();
 
-            Camera cam = Camera.main;
+            Camera cam = CaptureCameraResolver.ResolveForCurrentMode();
             if (cam == null)
                 throw new Exception("No camera available for capture");
+
+            if (CaptureCameraResolver.IsInternalCamera(cam))
+            {
+                UnityEngine.Debug.Log(
+                    $"[DeterministicCaptureSession] IVA capture camera diagnostic: name={cam.name}, " +
+                    $"depth={cam.depth}, clearFlags={cam.clearFlags}, cullingMask={cam.cullingMask}");
+            }
 
             int width = Screen.width;
             int height = Screen.height;
@@ -251,7 +258,11 @@ namespace CinematicRecorder.Core
 
             ActiveZoomController = runner.AddComponent<DeterministicZoomController>();
 
-            TakeControlOfActivePathingCamera(playbackFps);
+            if (!CaptureCameraResolver.IsIvaMode())
+                TakeControlOfActivePathingCamera(playbackFps);
+
+            captureRunner.Controller = controller;
+
             OnRecordingStarted?.Invoke();
 
             captureRunner.StartCoroutine(RunAndCleanup(controller, runner));

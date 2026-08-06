@@ -15,7 +15,8 @@ namespace CinematicRecorder.Capture
     public sealed class OfflineCaptureController
     {
         #region Fields
-        private readonly Camera camera;
+        private Camera camera;
+        private Camera _pendingCamera;
         private readonly int width;
         private readonly int height;
         private readonly int playbackFps;
@@ -105,6 +106,24 @@ namespace CinematicRecorder.Capture
         public bool EncodeAborted => encodeAbortRequested;
         /// <summary>Native error that triggered the encode-failure abort, if any.</summary>
         public string EncodeAbortReason => encodeAbortReason;
+        /// <summary>
+        /// Requests that the capture command buffer be moved to a different camera.
+        /// The actual swap is deferred to the next capture-loop frame boundary.
+        /// </summary>
+        /// <param name="newCamera">The camera to capture from.</param>
+        public void RequestCameraRetarget(Camera newCamera)
+        {
+            if (newCamera == null)
+                return;
+
+            if (newCamera == _pendingCamera)
+                return;
+
+            if (newCamera == camera && _pendingCamera == null)
+                return;
+
+            _pendingCamera = newCamera;
+        }
         /// <summary>
         /// Primary coroutine that manages the full capture lifecycle: initialization, capture loop, and finalization.
         /// Restores original time settings in finally block to ensure game state is preserved.
@@ -260,6 +279,8 @@ namespace CinematicRecorder.Capture
             // While-loop supports both unlimited and limited modes
             while (true)
             {
+                ApplyPendingCameraRetarget();
+
                 // Check stop request first (works for both modes)
                 if (DeterministicCaptureSession.StopRequested)
                 {
@@ -583,6 +604,44 @@ namespace CinematicRecorder.Capture
             actualCapturedFrames++;
             yield break;
         }
+        /// <summary>
+        /// Applies a pending camera retarget at a capture-loop frame boundary. Removes the command
+        /// buffer from the previous camera and attaches it to the new one.
+        /// </summary>
+        private void ApplyPendingCameraRetarget()
+        {
+            Camera newCamera = _pendingCamera;
+            _pendingCamera = null;
+
+            if (newCamera == null || newCamera == camera)
+                return;
+
+            if (captureBuffer != null)
+            {
+                if (camera != null)
+                    camera.RemoveCommandBuffer(CameraEvent.AfterImageEffects, captureBuffer);
+
+                if (newCamera != null)
+                    newCamera.AddCommandBuffer(CameraEvent.AfterImageEffects, captureBuffer);
+            }
+
+            if (newCamera != null)
+                newCamera.targetTexture = null;
+
+            Camera oldCamera = camera;
+            camera = newCamera;
+
+            UnityEngine.Debug.Log(
+                $"[OfflineCaptureController] Capture camera retargeted from {(oldCamera != null ? oldCamera.name : "null")} to {newCamera.name}");
+
+            if (CaptureCameraResolver.IsInternalCamera(newCamera))
+            {
+                UnityEngine.Debug.Log(
+                    $"[OfflineCaptureController] IVA capture camera diagnostic: name={newCamera.name}, " +
+                    $"depth={newCamera.depth}, clearFlags={newCamera.clearFlags}, cullingMask={newCamera.cullingMask}");
+            }
+        }
+
         /// <summary>
         /// Encodes the final pending frame from the zero-copy double buffer and logs capture statistics.
         /// MODIFIED: Handles TAB mode where finalization is done in the loop.
