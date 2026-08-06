@@ -125,6 +125,19 @@ namespace CinematicRecorder.Capture
             _pendingCamera = newCamera;
         }
         /// <summary>
+        /// Moves the capture command buffer to a different camera immediately.
+        /// Only safe to call from Unity's Update phase (pre-render): the previous frame's
+        /// readback/encode has completed by then and the swap takes effect for the render
+        /// of the current frame, so camera transitions appear in the capture with no lag.
+        /// Event-driven retargets must use <see cref="RequestCameraRetarget"/> instead.
+        /// </summary>
+        /// <param name="newCamera">The camera to capture from.</param>
+        public void RetargetCameraImmediate(Camera newCamera)
+        {
+            _pendingCamera = null;
+            ApplyCameraRetarget(newCamera);
+        }
+        /// <summary>
         /// Primary coroutine that manages the full capture lifecycle: initialization, capture loop, and finalization.
         /// Restores original time settings in finally block to ensure game state is preserved.
         /// </summary>
@@ -613,6 +626,15 @@ namespace CinematicRecorder.Capture
             Camera newCamera = _pendingCamera;
             _pendingCamera = null;
 
+            ApplyCameraRetarget(newCamera);
+        }
+        /// <summary>
+        /// Performs the command-buffer swap to <paramref name="newCamera"/>: removes the buffer
+        /// from the previous camera and attaches it to the new one. No-op for null or unchanged
+        /// targets. Safe from Update (pre-render) and from the capture-loop frame boundary.
+        /// </summary>
+        private void ApplyCameraRetarget(Camera newCamera)
+        {
             if (newCamera == null || newCamera == camera)
                 return;
 

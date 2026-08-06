@@ -6,7 +6,10 @@ namespace CinematicRecorder.Capture
     /// <summary>
     /// MonoBehaviour host for capture coroutines. Lives for exactly one session, watches for KSP
     /// camera-mode changes, and forwards retarget requests to the capture controller.
+    /// Runs late in the script execution order so camera changes made by other mods in their
+    /// own Update (e.g. Through The Eyes toggling first-person) are detected in the same frame.
     /// </summary>
+    [DefaultExecutionOrder(1000)]
     public sealed class CaptureRunner : MonoBehaviour
     {
         /// <summary>
@@ -14,15 +17,7 @@ namespace CinematicRecorder.Capture
         /// </summary>
         public OfflineCaptureController Controller { get; set; }
 
-        /// <summary>
-        /// Interval (unscaled seconds) between compositing-chain re-resolutions. Mods like
-        /// Through The Eyes enable/disable the InternalCamera pass without firing
-        /// OnCameraChange, so event subscription alone misses those transitions.
-        /// </summary>
-        private const float ResolveIntervalSeconds = 0.5f;
-
         private bool _subscribed;
-        private float _nextResolveTime;
 
         private void Start()
         {
@@ -53,14 +48,10 @@ namespace CinematicRecorder.Capture
             if (CameraManager.Instance == null)
                 return;
 
-            if (Time.unscaledTime < _nextResolveTime)
-                return;
-
-            _nextResolveTime = Time.unscaledTime + ResolveIntervalSeconds;
-
-            // No-op when the resolved camera is unchanged; the controller applies any
-            // real swap at the next capture-loop frame boundary.
-            Controller.RequestCameraRetarget(CaptureCameraResolver.ResolveForCurrentMode());
+            // Re-resolve every frame: mods like Through The Eyes enable/disable the
+            // InternalCamera pass without firing OnCameraChange. Applied immediately
+            // (pre-render) so the swap affects this frame's render; no-op when unchanged.
+            Controller.RetargetCameraImmediate(CaptureCameraResolver.ResolveForCurrentMode());
         }
 
         private void OnCameraChanged(CameraManager.CameraMode mode)
