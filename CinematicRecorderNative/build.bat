@@ -4,7 +4,9 @@ setlocal
 if not exist build mkdir build
 if not exist build\intermediate mkdir build\intermediate
 
-call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+REM MSVC environment: override with CR_VSVCVARS if your VS install differs.
+if not defined CR_VSVCVARS set "CR_VSVCVARS=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+call "%CR_VSVCVARS%"
 if errorlevel 1 exit /b 1
 
 cl ^

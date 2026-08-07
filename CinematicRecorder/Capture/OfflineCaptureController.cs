@@ -754,9 +754,10 @@ namespace CinematicRecorder.Capture
         }
         /// <summary>
         /// Selects and initializes the best available encoder automatically:
-        /// NVENC zero-copy (if available) -> AMF zero-copy (if available) ->
-        /// standard FFmpeg hardware encoder -> CPU. Availability comes from the
-        /// wrappers' driver probes, so no GPU-family picker is needed.
+        /// zero-copy for the detected GPU vendor first, the other vendor's zero-copy
+        /// second, standard FFmpeg hardware encoder third, CPU last. Vendor detection
+        /// (DXGI) decides the order; the wrappers' driver probes gate each attempt.
+        /// Detection failure keeps the historical NVENC-first order.
         /// </summary>
         private void SetupEncoder()
         {
@@ -779,8 +780,13 @@ namespace CinematicRecorder.Capture
                 return;
             }
 
-            // GPU zero-copy, probed in preference order (NVENC first when both present)
-            if (NvencZeroCopyEncoder.IsAvailable && TryInitNvenc())
+            // GPU zero-copy. DXGI vendor detection picks which vendor's encoder to
+            // try first; the wrappers' IsAvailable probes still gate each attempt,
+            // and Unknown/failed detection keeps the historical NVENC-first order.
+            var gpuVendor = HardwareDetector.PrimaryGpuVendor;
+            bool amdPreferred = gpuVendor == HardwareDetector.GpuVendor.AMD;
+
+            if (!amdPreferred && NvencZeroCopyEncoder.IsAvailable && TryInitNvenc())
             {
                 Debug.Log("[OfflineCapture] Using NVENC Zero-Copy path");
                 return;
@@ -789,6 +795,12 @@ namespace CinematicRecorder.Capture
             if (AmfZeroCopyEncoder.IsAvailable && TryInitAmf())
             {
                 Debug.Log("[OfflineCapture] Using AMF Zero-Copy path");
+                return;
+            }
+
+            if (amdPreferred && NvencZeroCopyEncoder.IsAvailable && TryInitNvenc())
+            {
+                Debug.Log("[OfflineCapture] Using NVENC Zero-Copy path");
                 return;
             }
 

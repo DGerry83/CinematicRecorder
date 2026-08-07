@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  No-op targets imported by CinematicRecorderNative.vcxproj only when evaluated
+  by MSBuild Core (`dotnet build`). The .NET SDK ships no C++ targets, so the
+  native project cannot build under the CLI; these empty targets let the slnx
+  solution build skip it cleanly. The real build is the batch scripts
+  (build.bat / build_release.bat / build_harness.bat).
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="Build" />
+  <Target Name="Rebuild" />
+  <Target Name="Clean" />
+  <Target Name="Restore" />
+</Project>

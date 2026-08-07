@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IDE wrapper project for the native plugin. This is a Makefile-type (NMake)
+  project: it does NOT build via MSBuild/cl. The batch scripts remain the source
+  of truth:
+    Debug   -> build.bat          (debug native DLL)
+    Release -> build_release.bat  (release DLL + deploy via dll_copy_config.txt)
+    Harness -> build_harness.bat  (NVENC test harness into build\harness\)
+  Sources are included for browsing/IntelliSense only.
+
+  The C++ imports are gated on MSBuildRuntimeType != 'Core': under
+  `dotnet build CinematicRecorder.slnx` (MSBuild Core, no C++ targets installed)
+  this project degrades to the empty targets in DotnetCliNoop.targets so the CLI
+  solution build succeeds. Visual Studio (MSBuild Full) sees the normal Makefile
+  project below.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Harness|x64">
+      <Configuration>Harness</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{61B74007-A005-4188-8746-5BD89E169580}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <RootNamespace>CinematicRecorderNative</RootNamespace>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" Condition="'$(MSBuildRuntimeType)' != 'Core'" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" Condition="'$(MSBuildRuntimeType)' != 'Core'" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets" Condition="'$(MSBuildRuntimeType)' != 'Core'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <NMakeBuildCommandLine>cd /d $(ProjectDir) &amp;&amp; build.bat</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cd /d $(ProjectDir) &amp;&amp; if exist build rmdir /s /q build &amp;&amp; build.bat</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>cd /d $(ProjectDir) &amp;&amp; if exist build rmdir /s /q build</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)build\CinematicRecorderNative.dll</NMakeOutput>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <NMakeBuildCommandLine>cd /d $(ProjectDir) &amp;&amp; build_release.bat</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cd /d $(ProjectDir) &amp;&amp; if exist build rmdir /s /q build &amp;&amp; build_release.bat</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>cd /d $(ProjectDir) &amp;&amp; if exist build rmdir /s /q build</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)build\CinematicRecorderNative.dll</NMakeOutput>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Harness'">
+    <NMakeBuildCommandLine>cd /d $(ProjectDir) &amp;&amp; build_harness.bat</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cd /d $(ProjectDir) &amp;&amp; if exist build rmdir /s /q build &amp;&amp; build_harness.bat</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>cd /d $(ProjectDir) &amp;&amp; if exist build rmdir /s /q build</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)build\harness\NvencHarness.exe</NMakeOutput>
+  </PropertyGroup>
+  <PropertyGroup>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(ProjectDir)nvenc;$(ProjectDir)amf;$(ProjectDir)amf\public\include;$(ProjectDir)amf\public\common;$(ProjectDir)ffmpeg\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <NMakePreprocessorDefinitions>WIN32;_WINDOWS;_USRDLL;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="src\*.cpp" />
+    <ClCompile Include="harness\*.cpp" />
+    <ClInclude Include="include\*.h" />
+    <ClInclude Include="include\**\*.h" />
+    <ClInclude Include="src\*.h" />
+    <ClInclude Include="harness\*.h" />
+    <ClInclude Include="shaders\*.h" />
+    <None Include="shaders\*.hlsl" />
+    <None Include="shaders\*.bat" />
+    <None Include="*.bat" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" Condition="'$(MSBuildRuntimeType)' != 'Core'" />
+  <ImportGroup Label="ExtensionTargets" />
+  <!-- Empty Build/Rebuild/Clean so the dotnet CLI solution build has targets to call. -->
+  <Import Project="$(MSBuildThisFileDirectory)DotnetCliNoop.targets" Condition="'$(MSBuildRuntimeType)' == 'Core'" />
+</Project>
