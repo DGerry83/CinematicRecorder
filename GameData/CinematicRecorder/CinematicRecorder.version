@@ -2,7 +2,7 @@
   "NAME": "CinematicRecorder",
   "URL": "https://github.com/DGerry83/CinematicRecorder",
   "DOWNLOAD": "https://github.com/DGerry83/CinematicRecorder/releases",
-  "VERSION": "0.2.0.0",
+  "VERSION": "0.2.1.0",
   "KSP_VERSION": "1.12",
   "KSP_VERSION_MIN": "1.8",
   "KSP_VERSION_MAX": "1.12"
