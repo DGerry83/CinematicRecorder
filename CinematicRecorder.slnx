@@ -1,3 +1,11 @@
 <Solution>
   <Project Path="CinematicRecorder/CinematicRecorder.csproj" Id="2335b44f-a948-49ec-9e86-ca47c5fa4b39" />
+  <!-- Native IDE wrapper (Makefile project; batch scripts are the real build).
+       Build="false" keeps it out of `dotnet build CinematicRecorder.slnx` (the .NET
+       SDK has no C++ targets) and out of VS solution builds; build it in VS via
+       right-click -> Build on the project, or run the batch scripts directly. -->
+  <Project Path="CinematicRecorderNative/CinematicRecorderNative.vcxproj" Id="61b74007-a005-4188-8746-5bd89e169580">
+    <Configuration Solution="Debug|Any CPU" Project="Debug|x64" Build="false" />
+    <Configuration Solution="Release|Any CPU" Project="Release|x64" Build="false" />
+  </Project>
 </Solution>

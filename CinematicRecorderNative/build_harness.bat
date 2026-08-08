@@ -16,7 +16,9 @@ pushd "%SCRIPT_DIR%"
 if not exist build\harness mkdir build\harness
 if not exist build\intermediate-harness mkdir build\intermediate-harness
 
-call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+REM MSVC environment: override with CR_VSVCVARS if your VS install differs.
+if not defined CR_VSVCVARS set "CR_VSVCVARS=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+call "%CR_VSVCVARS%"
 if errorlevel 1 exit /b 1
 
 REM Same cl flags / include dirs / libs as build_release.bat (minus /LD and the
