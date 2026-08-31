@@ -98,7 +98,6 @@ GameData/
 
 ### Dependencies
 - **Harmony 2** (CKAN identifier `Harmony2`) — **required**, not bundled.
-- **ModuleManager** — optional; only applies the bundled KerbPro tracking-camera patch, which itself requires HullCamVDS and TrackingLights.
 - **HullCamVDS** — optional; enables hull-camera integration.
 
 **Note:** FFmpeg shared libraries (avcodec, avformat, avutil, swresample, swscale) are redistributed with this release in accordance with the LGPL/GPL licenses. Source code for FFmpeg is available from [ffmpeg.org](https://ffmpeg.org/download.html).
@@ -109,7 +108,7 @@ GameData/
 
 This release bundles a modified fork of [Camera Tools Continued](https://github.com/BrettRyland/CameraTools) by **BrettRyland and contributors** (GPLv3). The fork, [CR_CameraTools](https://github.com/DGerry83/CR_CameraTools), adds a small integration API used by Cinematic Recorder and otherwise changes as little of the original code as possible. See `NOTICE.txt` and `GPLv3.txt` in the `GameData/CameraTools/` folder; complete corresponding source is at the fork link above.
 
-**CameraTools support is transitional.** A built-in camera controller will replace CameraTools in a future release of Cinematic Recorder, and this bundled copy will be removed. Existing camera presets will be imported by the new system.
+**CameraTools support is transitional.** A built-in camera controller will replace CameraTools in a future release of Cinematic Recorder, and this bundled copy will be removed.
 
 Camera paths are authored with the Camera Tools UI in flight, then assigned to recorder slots via Cinematic Recorder's Camera Panel.
 
@@ -131,16 +130,16 @@ The current UI is functional but minimal—it exists primarily to validate that 
 - **No audio above 30 simulation FPS:** slow-motion captures are silent.
 - **UI prototype:** layout, settings organization, and workflow will change.
 
-**Capture-core bugs** (crashes, corrupted output, audio desync, encoder failures) are the highest priority — please report them. **CameraTools camera-behaviour bugs** (camera panel operations, pathing quirks) are also welcome — they feed the design of the built-in camera controller — but expect them to be fixed *by the replacement* rather than patched.
+**Capture-core bugs** (crashes, corrupted output, audio desync, encoder failures) are the highest priority, please report them. **CameraTools camera-behaviour bugs** (camera panel operations, pathing quirks) are also welcome but expect them to be fixed *by the replacement* rather than patched.
 
 ---
 
 ## How to Use
 
-1. **Enter Flight Mode** – The recorder only works during active flight (map view supported).
-2. **Click the Toolbar Icon** – Look for the film reel icon in the Application Launcher (bottom-right toolbar).
+1. **Enter Flight Mode** – The recorder only works during active flight
+2. **Click the Toolbar Icon** – Look for the film camera icon in the Application Launcher
 3. **Configure Settings**:
-   - **Simulation FPS**: How many physics steps per second to simulate (higher = smoother slow-mo, longer recording time)
+   - **Capture FPS**: How many physics steps per second to simulate (higher = smoother slow-mo, longer recording time)
    - **Playback FPS**: Frame rate of the output video
    - **Duration**: Seconds of game time to capture
    - **Force Software Encoding**: Emergency fallback if hardware encoding fails (see below)
@@ -157,7 +156,7 @@ This mod uses zero-copy GPU encoding where possible, falling back to standard me
 *AMD RX 400 series and newer (VCE 2.0+), or NVENC-capable NVIDIA GPUs*
 
 - **What it does**: Frame data stays on the GPU from Unity → AMD AMF or NVIDIA NVENC encoder → disk. Never touches system RAM.
-- **Performance**: Minimal overhead, captures at near real-time speeds even at 4K.
+- **Performance**: Minimal overhead, uses GPU resources in a CPU-constrained environment
 - **File Format**: HEVC (H.265) by default—approximately **75% smaller files** than H.264 (~230 MB/min vs ~970 MB/min at 4K/60fps).
 - **Fallback**: If HEVC isn't available on your hardware, automatically falls back to H.264 hardware encoding.
 
