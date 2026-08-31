@@ -8,7 +8,7 @@
 		<PlatformTarget>x64</PlatformTarget>
 		<Deterministic>true</Deterministic>
 		<LangVersion>latest</LangVersion>
-		<Version>0.2.1</Version>
+		<Version>0.2.2</Version>
 		<Copyright>Copyright © DGerry 2026, GPL 3.0</Copyright>
 	</PropertyGroup>
 	<!-- General -->
@@ -25,6 +25,9 @@
 	<ItemGroup>
 		<KSPVersionFile Include="$(MSBuildProjectDirectory)/CinematicRecorder.version">
 			<Destination>$(KSPBT_ModRoot)/CinematicRecorder.version</Destination>
+			<!-- Only tested/supported on KSP 1.12.x -->
+			<KSP_Version_Min>1.12</KSP_Version_Min>
+			<KSP_Version_Max>1.12</KSP_Version_Max>
 		</KSPVersionFile>
 	</ItemGroup>
 	<!-- Mod Dependencies -->
