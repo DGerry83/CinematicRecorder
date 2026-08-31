@@ -109,8 +109,8 @@ namespace CinematicRecorder.Core
         #endregion
 
         #region Ramp Configuration
-        public static float RampDurationDefault { get; set; } = 0.5f;  // 0.1 to 3.0 seconds
-        public static float RampExponent { get; set; } = 2.0f;         // 0.3 (rush start) to 3.0 (rush end)
+        public static float RampDurationDefault { get; set; } = 0.5f;  // playback seconds (0.1 to 3.0)
+        public static float RampExponent { get; set; } = 2.0f;         // 0.05 (rush start) to 3.0 (rush end)
         public const float RampExponentMin = 0.05f;
         public const float RampExponentMax = 3.0f;
         #endregion

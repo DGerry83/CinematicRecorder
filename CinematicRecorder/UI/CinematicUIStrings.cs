@@ -131,7 +131,7 @@ namespace CinematicRecorder.UI
             public const string SpeedRampsExpand = "▼ Speed Ramps";
             public const string SpeedRampsCollapse = "▲ Speed Ramps";
             public const string DurationFormat = "Duration: {0:F2}s";
-            public const string DurationHelper = "Wall-clock time for speed transitions";
+            public const string DurationHelper = "Playback time for speed transitions (seconds of finished video)";
             public const string BiasFormat = "Bias: {0:F2}";
             public const string LingerSlow = "Linger Slow";
             public const string LingerNormal = "Linger Normal";

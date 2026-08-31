@@ -416,24 +416,20 @@ namespace CinematicRecorder.Core
         {
             if (!IsTransitioning) return;
 
-            rampElapsed += Time.unscaledDeltaTime;
+            rampElapsed += 1f / PlaybackFPS;
             float t = Mathf.Clamp01(rampElapsed / rampDuration);
 
-            // Map aggressive UI range (0.3-4.0) to gentler actual range (0.8-2.0)
-            // This gives control without being too extreme
-            float uiExponent = SessionState.RampExponent;
-            float range = SessionState.RampExponentMax - SessionState.RampExponentMin;
-            float actualExponent = Mathf.Lerp(0.8f, 2.0f, (uiExponent - SessionState.RampExponentMin) / range);
+            float exponent = SessionState.RampExponent;
 
             if (CurrentTransitionDirection == TransitionDirection.Slowing)
             {
-                // Power curve but softer: spend moderate time at normal speed
-                t = Mathf.Pow(t, actualExponent);
+                // Power curve: spend moderate time at normal speed
+                t = Mathf.Pow(t, exponent);
             }
             else // Resuming
             {
                 // Mirror: invert the exponent so we "rewind" through the curve
-                float resumeExp = 1.0f / actualExponent;
+                float resumeExp = 1.0f / exponent;
                 t = Mathf.Pow(t, resumeExp);
             }
 
