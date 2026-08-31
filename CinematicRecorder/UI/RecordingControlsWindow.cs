@@ -29,6 +29,9 @@ namespace CinematicRecorder.UI
         private enum SpeedMode { Normal, Slow, SuperSlow, KrakenTime }
         private SpeedMode currentSpeedMode = SpeedMode.Normal;
 
+        // 0.2.3: hide the Adv Camera entry point; panel code remains intact for re-enable after 0.2.3.
+        internal const bool ShowAdvancedCameraPanel = false;
+
         private AdvancedCameraOptionsWindow advancedOptionsWindow;
 
         private CameraPanelController cameraPanel;
@@ -153,23 +156,26 @@ namespace CinematicRecorder.UI
             GUILayout.FlexibleSpace();
 
             // Advanced Camera Settings toggle button - now controls separate window
-            GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_WIDTH));
-            GUIStyle advStyle = CinematicUIResources.Styles.Button();
-
-            bool advancedVisible = advancedOptionsWindow != null && advancedOptionsWindow.IsVisible;
-            if (advancedVisible)
+            if (ShowAdvancedCameraPanel)
             {
-                advStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-                advStyle.fontStyle = FontStyle.Bold;
-            }
+                GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_WIDTH));
+                GUIStyle advStyle = CinematicUIResources.Styles.Button();
 
-            string arrow = advancedVisible ? Common.arrowL : Common.arrowR;
-            string buttonText = arrow + Recording.AdvancedCameraButton;
-            if (GUILayout.Button(buttonText, advStyle, GUILayout.Height(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_HEIGHT)))
-            {
-                ToggleAdvancedOptionsWindow();
+                bool advancedVisible = advancedOptionsWindow != null && advancedOptionsWindow.IsVisible;
+                if (advancedVisible)
+                {
+                    advStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
+                    advStyle.fontStyle = FontStyle.Bold;
+                }
+
+                string arrow = advancedVisible ? Common.arrowL : Common.arrowR;
+                string buttonText = arrow + Recording.AdvancedCameraButton;
+                if (GUILayout.Button(buttonText, advStyle, GUILayout.Height(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_HEIGHT)))
+                {
+                    ToggleAdvancedOptionsWindow();
+                }
+                GUILayout.EndVertical();
             }
-            GUILayout.EndVertical();
 
             GUILayout.EndHorizontal();
         }

@@ -18,6 +18,11 @@ namespace CinematicRecorder.Core
         public static bool ForceSoftwareEncoding { get; set; } = false;
         public static bool PngSequence { get; set; } = false;
         public static bool EnableAudioCapture { get; set; } = false;
+
+        /// <summary>
+        /// Include the UI layer in recordings; honored at capture start (no mid-recording switching).
+        /// </summary>
+        public static bool CaptureUiLayer { get; set; } = false;
         #endregion
 
         #region Encoder Selection

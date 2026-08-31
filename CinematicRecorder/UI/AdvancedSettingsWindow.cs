@@ -154,6 +154,8 @@ namespace CinematicRecorder.UI
         {
             DrawAudioCaptureToggle();
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
+            DrawCaptureUiLayerToggle();
+            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawPngSequenceToggle();
         }
 
@@ -201,6 +203,48 @@ namespace CinematicRecorder.UI
             GUIStyle helpStyle = CinematicUIResources.Styles.Help();
             helpStyle.wordWrap = true;
             GUILayout.Label(AdvancedSettings.AudioCaptureTooltip, helpStyle);
+
+            GUI.enabled = wasEnabled;
+        }
+
+        private void DrawCaptureUiLayerToggle()
+        {
+            bool wasEnabled = GUI.enabled;
+            if (SessionState.EnableTemporalAccumulation || DeterministicCaptureSession.IsRunning)
+                GUI.enabled = false;
+
+            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (SessionState.CaptureUiLayer)
+            {
+                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
+                toggleStyle.fontStyle = FontStyle.Bold;
+            }
+
+            bool newValue = GUILayout.Toggle(
+                SessionState.CaptureUiLayer,
+                AdvancedSettings.CaptureUiToggle,
+                toggleStyle
+            );
+
+            if (newValue != SessionState.CaptureUiLayer && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.CaptureUiLayer = newValue;
+                UnityEngine.Debug.Log($"[CinematicRecorder] CaptureUiLayer = {newValue}");
+            }
+
+            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
+            helpStyle.wordWrap = true;
+            GUILayout.Label(AdvancedSettings.CaptureUiTooltip, helpStyle);
+
+            if (SessionState.EnableTemporalAccumulation)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle conflictStyle = CinematicUIResources.Styles.Help();
+                conflictStyle.wordWrap = true;
+                GUILayout.Label(AdvancedSettings.CaptureUiTabConflict, conflictStyle);
+            }
 
             GUI.enabled = wasEnabled;
         }
@@ -256,7 +300,7 @@ namespace CinematicRecorder.UI
             // TAB requires the GPU zero-copy path; supported on both AMF (AMD) and NVENC (Nvidia)
             bool hasGpuEncoder = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd
                               || SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Nvidia;
-            bool canUseTab = hasGpuEncoder && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding;
+            bool canUseTab = hasGpuEncoder && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding && !SessionState.CaptureUiLayer;
 
             bool wasEnabled = GUI.enabled;
             if (!canUseTab || DeterministicCaptureSession.IsRunning)
@@ -290,6 +334,14 @@ namespace CinematicRecorder.UI
                 GUIStyle helpStyle = CinematicUIResources.Styles.Help();
                 helpStyle.wordWrap = true;
                 GUILayout.Label(AdvancedSettings.TemporalAccumulationTooltip, helpStyle);
+            }
+
+            if (SessionState.CaptureUiLayer)
+            {
+                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
+                GUIStyle conflictStyle = CinematicUIResources.Styles.Help();
+                conflictStyle.wordWrap = true;
+                GUILayout.Label(AdvancedSettings.CaptureUiTabConflict, conflictStyle);
             }
 
             // TAB only sticks when actually usable

@@ -61,6 +61,9 @@ namespace CinematicRecorder.Capture
         // NEW: Jitter state for TAB mode only (Halton sequence sub-pixel sampling)
         private Vector2[] _haltonOffsets = new Vector2[8];          // Raw offsets for debug logging and future shader use
         private bool _projectionJitterEnabled;                      // True only during TAB sub-frame loop
+
+        // NEW: UI-inclusive capture snapshot (read once at capture start)
+        private bool _captureUiLayer;
         #endregion
 
         #region Constructor
@@ -215,6 +218,20 @@ namespace CinematicRecorder.Capture
             if (usingZeroCopyPath && !SessionState.PngSequence)
             {
                 SetupTemporalAccumulation();
+            }
+
+            // NEW: Snapshot UI-capture setting at capture start. TAB + UI capture is forbidden by
+            // the UI, but guard against any path that reaches here with both enabled.
+            _captureUiLayer = SessionState.CaptureUiLayer;
+            if (_captureUiLayer && _isTabEnabled)
+            {
+                UnityEngine.Debug.LogError("[OfflineCapture] UI layer capture cannot be combined with Temporal Accumulation Blur; falling back to normal capture.");
+                _captureUiLayer = false;
+            }
+
+            if (_captureUiLayer)
+            {
+                UnityEngine.Debug.Log("[OfflineCapture] UI layer capture enabled");
             }
 
             if (_audioController != null)
@@ -543,9 +560,17 @@ namespace CinematicRecorder.Capture
             int encodeIdx = (frameIndex + 1) % 2;
 
             captureBuffer.Clear();
-            captureBuffer.Blit(BuiltinRenderTextureType.CurrentActive, renderTextures[renderIdx]);
+            if (!_captureUiLayer)
+            {
+                captureBuffer.Blit(BuiltinRenderTextureType.CurrentActive, renderTextures[renderIdx]);
+            }
 
             yield return new WaitForEndOfFrame();
+
+            if (_captureUiLayer)
+            {
+                ScreenCapture.CaptureScreenshotIntoRenderTexture(renderTextures[renderIdx]);
+            }
 
             // Encode previous frame
             if (frameIndex > 0)
@@ -583,14 +608,33 @@ namespace CinematicRecorder.Capture
                 actualCapturedFrames++;
             }
 
-            prevFence = captureBuffer.CreateAsyncGraphicsFence();
+            if (_captureUiLayer)
+            {
+                prevFence = Graphics.CreateAsyncGraphicsFence();
+            }
+            else
+            {
+                prevFence = captureBuffer.CreateAsyncGraphicsFence();
+            }
         }
         /// <summary>
         /// Standard CPU readback path using Texture2D.ReadPixels. Slower but universally compatible.
         /// </summary>
         private IEnumerator CaptureFrameStandard()
         {
+            // When capturing the UI layer, disable the camera-attached blit so the
+            // screenshot source is the composited backbuffer instead.
+            if (_captureUiLayer)
+            {
+                captureBuffer.Clear();
+            }
+
             yield return new WaitForEndOfFrame();
+
+            if (_captureUiLayer)
+            {
+                ScreenCapture.CaptureScreenshotIntoRenderTexture(renderTextures[0]);
+            }
 
             RenderTexture.active = renderTextures[0];
             readbackTexture.ReadPixels(new Rect(0, 0, width, height), 0, 0);

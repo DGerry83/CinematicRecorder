@@ -107,13 +107,14 @@ namespace CinematicRecorder.UI
 
             string arrow = advancedVisible ? Common.arrowL : Common.arrowR;
             string buttonText = arrow + Settings.AdvancedButton;
-            if (GUILayout.Button(buttonText, advStyle, GUILayout.Height(CinematicUIResources.Layout.Settings.ADVANCED_TOGGLE_HEIGHT)))
+            // #007: hover tooltip explains the section (audio capture, TAB, CAS)
+            if (GUILayout.Button(new GUIContent(buttonText, Settings.AdvancedButtonTooltip), advStyle, GUILayout.Height(CinematicUIResources.Layout.Settings.ADVANCED_TOGGLE_HEIGHT)))
             {
                 ToggleAdvancedSettingsWindow();
             }
             GUILayout.EndVertical();
             GUILayout.EndHorizontal();
-            
+
             GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Layout.Settings.MAIN_PANEL_WIDTH - CinematicUIResources.Spacing.NORMAL * 2));
 
             DrawCaptureTimingSection();
@@ -124,8 +125,38 @@ namespace CinematicRecorder.UI
             GUILayout.Space(CinematicUIResources.Spacing.LARGE);
             DrawRecordButton();
             GUILayout.EndVertical();
-            
+
+            DrawHoverTooltip();
             GUI.DragWindow();
+        }
+
+        /// <summary>
+        /// Renders GUI.tooltip as a small overlay box at the mouse position.
+        /// IMGUI does not draw tooltips automatically inside GUILayout.Window;
+        /// drawn last so it floats above the layout and occupies no layout space.
+        /// </summary>
+        private void DrawHoverTooltip()
+        {
+            if (Event.current.type != EventType.Repaint) return;
+
+            string tooltip = GUI.tooltip;
+            if (string.IsNullOrEmpty(tooltip)) return;
+
+            GUIStyle tipStyle = new GUIStyle(HighLogic.Skin.box)
+            {
+                wordWrap = true,
+                alignment = TextAnchor.UpperLeft
+            };
+
+            const float width = 180f;
+            GUIContent content = new GUIContent(tooltip);
+            float height = tipStyle.CalcHeight(content, width);
+
+            Vector2 pos = Event.current.mousePosition + new Vector2(12f, 8f);
+            float x = Mathf.Clamp(pos.x, 4f, windowRect.width - width - 4f);
+            float y = Mathf.Clamp(pos.y, 4f, windowRect.height - height - 4f);
+
+            GUI.Box(new Rect(x, y, width, height), content, tipStyle);
         }
 
         private void ToggleAdvancedSettingsWindow()
@@ -328,7 +359,7 @@ namespace CinematicRecorder.UI
             if (GUILayout.Button(Settings.DurationDecrement, GUILayout.Width(CinematicUIResources.Layout.Duration.BTN_WIDTH)))
                 SessionState.DurationSeconds = Mathf.Max(0f, SessionState.DurationSeconds - CinematicUIResources.Layout.Duration.STEP);
 
-            string displayText = SessionState.DurationSeconds <= 0 ? "∞" : SessionState.DurationSeconds.ToString("0.0");
+            string displayText = SessionState.DurationSeconds <= 0 ? Settings.DurationUnlimitedButton : SessionState.DurationSeconds.ToString("0.0");
             string text = GUILayout.TextField(displayText, GUILayout.Width(CinematicUIResources.Layout.Duration.FIELD_WIDTH));
 
             if (float.TryParse(text, out float parsed))
@@ -340,6 +371,9 @@ namespace CinematicRecorder.UI
                 if (DeterministicCaptureSession.IsRunning)
                     DeterministicCaptureSession.ExtendDuration(CinematicUIResources.Layout.Duration.STEP);
             }
+
+            if (GUILayout.Button(Settings.DurationUnlimitedButton, GUILayout.Width(CinematicUIResources.Layout.Duration.BTN_WIDTH)))
+                SessionState.DurationSeconds = 0f;
 
             GUILayout.EndHorizontal();
         }

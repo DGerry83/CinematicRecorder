@@ -24,12 +24,14 @@ namespace CinematicRecorder.UI
             // Window Chrome & Navigation
             public const string WindowTitle = "Cinematic Recorder";
             public const string AdvancedButton = "Advanced";
+            public const string AdvancedButtonTooltip = "Audio capture, motion blur (TAB), and sharpening (CAS).";
             public const string HideEncoding = "▲ Hide Encoding";
             public const string ShowEncoding = "▼ Show Encoding";
             public const string StartRecording = "● Start Recording";
             public const string StopRecording = "■ Stop Recording";
             public const string DurationDecrement = "-5s";
             public const string DurationIncrement = "+5s";
+            public const string DurationUnlimitedButton = "∞";
 
             // Recording Status & Timing
             public const string RecordingStatus = "● RECORDING";
@@ -163,7 +165,10 @@ namespace CinematicRecorder.UI
             public const string AudioCaptureTooltip = "Records synchronized WAV audio alongside video. Does not work above 30fps capture rates.";
             public const string PngSequenceToggle = " PNG Sequence Mode";
             public const string PngSequenceTooltip = "Outputs individual PNG frames. Forces software encoding and disables hardware acceleration.";
-            
+            public const string CaptureUiToggle = " Capture UI Layer";
+            public const string CaptureUiTooltip = "Includes the game UI layer in the recorded video. Applies at capture start; cannot be changed while recording.";
+            public const string CaptureUiTabConflict = "UI capture and Temporal Accumulation Blur are incompatible.";
+
             // Rendering tab
             public const string TemporalAccumulationToggle = " Temporal Accumulation Blur";
             public const string TemporalAccumulationTooltip = "Simulates motion blur by accumulating multiple sub-frames per output frame. Only available with GPU encoding.";
