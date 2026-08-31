@@ -45,12 +45,11 @@ If you can simulate it, you can record it — smoothly.
 - **KSP must run in D3D11 mode** (default). OpenGL and Vulkan are not supported.
 
 ### Hardware
-- **Zero-Copy Mode**: Requires AMD GPU with Video Coding Engine (VCE) 2.0 or newer:
+- **Zero-Copy Mode (AMD)**: Requires an AMD GPU with Video Coding Engine (VCE) 2.0 or newer:
   - RX 400 series, RX 500 series, Vega, RX 5000/6000/7000 series
   - Ryzen APUs (2000 series and newer)
+- **Zero-Copy Mode (NVIDIA)**: Requires an NVENC-capable NVIDIA GPU (verified on RTX 3050).
 - **Fallback Mode**: Works on any GPU (AMD, NVIDIA, Intel) but significantly slower.
-  - I only have an AMD GPU so I can only debug the AMD path and the CPU path - if there are problems with Nvidia I can try my best to fix them but without an nvidia GPU it is not easy.
-  - Zero-copy is currently not implemented for NVIDIA GPUs due to lack of hardware access for development and testing. Contributions or testers are welcome.
 
 
 
@@ -61,30 +60,58 @@ If you can simulate it, you can record it — smoothly.
 Standard KSP mod installation:
 
 1. Download the latest release from the [Releases](../../releases) page
-2. Extract the `CinematicRecorder` folder into your `Kerbal Space Program/GameData/` directory
+2. Extract the zip and copy the contents of its `GameData/` folder into your `Kerbal Space Program/GameData/` directory
 3. Ensure you have the following folder structure:
 ```
 GameData/
-└── CinematicRecorder/
-    ├── CinematicRecorder.dll
-    ├── FFmpeg.AutoGen.dll
-    ├── Icons/
-    │   └── CinematicIcon.png
-    └── PluginData/
-        ├── CinematicRecorderNative.dll
-        └── FFmpeg/
-            ├── avcodec-59.dll
-            ├── avdevice-59.dll
-            ├── avfilter-8.dll
-            ├── avformat-59.dll
-            ├── avutil-57.dll
-            ├── postproc-56.dll
-            ├── swresample-4.dll
-            └── swscale-6.dll
+├── CinematicRecorder/
+│   ├── CinematicRecorder.version
+│   ├── Readme.txt / License.txt
+│   ├── Icons/
+│   │   └── CinematicIcon.png
+│   ├── Patches/
+│   │   └── CinematicKerbPro.cfg
+│   ├── Plugins/
+│   │   ├── CinematicRecorder.dll
+│   │   └── FFmpeg.AutoGen.dll
+│   └── PluginData/
+│       ├── CinematicRecorderNative.dll
+│       └── FFmpeg/
+│           ├── avcodec-59.dll
+│           ├── avdevice-59.dll
+│           ├── avfilter-8.dll
+│           ├── avformat-59.dll
+│           ├── avutil-57.dll
+│           ├── ffmpeg.exe
+│           ├── postproc-56.dll
+│           ├── swresample-4.dll
+│           └── swscale-6.dll
+└── CameraTools/                # bundled fork — see "Bundled Camera Tools" below
+    ├── Plugins/
+    │   └── CameraTools.dll
+    ├── NOTICE.txt / GPLv3.txt / License.txt / Changelog.txt
+    ├── CameraTools.version
+    ├── Localization/
+    ├── Sounds/
+    └── Textures/
 ```
 
+### Dependencies
+- **Harmony 2** (CKAN identifier `Harmony2`) — **required**, not bundled.
+- **ModuleManager** — optional; only applies the bundled KerbPro tracking-camera patch, which itself requires HullCamVDS and TrackingLights.
+- **HullCamVDS** — optional; enables hull-camera integration.
 
 **Note:** FFmpeg shared libraries (avcodec, avformat, avutil, swresample, swscale) are redistributed with this release in accordance with the LGPL/GPL licenses. Source code for FFmpeg is available from [ffmpeg.org](https://ffmpeg.org/download.html).
+
+---
+
+## Bundled Camera Tools (transitional)
+
+This release bundles a modified fork of [Camera Tools Continued](https://github.com/BrettRyland/CameraTools) by **BrettRyland and contributors** (GPLv3). The fork, [CR_CameraTools](https://github.com/DGerry83/CR_CameraTools), adds a small integration API used by Cinematic Recorder and otherwise changes as little of the original code as possible. See `NOTICE.txt` and `GPLv3.txt` in the `GameData/CameraTools/` folder; complete corresponding source is at the fork link above.
+
+**CameraTools support is transitional.** A built-in camera controller will replace CameraTools in a future release of Cinematic Recorder, and this bundled copy will be removed. Existing camera presets will be imported by the new system.
+
+Camera paths are authored with the Camera Tools UI in flight, then assigned to recorder slots via Cinematic Recorder's Camera Panel.
 
 ---
 
@@ -93,6 +120,18 @@ GameData/
 **The current user interface is a prototype.** It provides basic functionality for testing the underlying capture systems, but it **will change significantly** in future updates. Expect breaking changes to the workflow, settings organization, and visual design.
 
 The current UI is functional but minimal—it exists primarily to validate that the recording pipeline works.  Functionality here will change and improve now that the foundation is done.
+
+---
+
+## Known Issues & Bug Reports
+
+**This is a pre-release — expect bugs.** Please check the list below before reporting, then file on [GitHub Issues](https://github.com/DGerry83/CinematicRecorder/issues) with your `KSP.log` and repro steps.
+
+- **Stationary camera drift (CameraTools):** assigning a stationary camera to a Camera Panel slot in orbit, then returning to it, produces wildly drifting positions; afterwards pathing positions and CameraTools FOV control can misbehave. Avoid reusing orbital stationary slots.
+- **No audio above 30 simulation FPS:** slow-motion captures are silent.
+- **UI prototype:** layout, settings organization, and workflow will change.
+
+**Capture-core bugs** (crashes, corrupted output, audio desync, encoder failures) are the highest priority — please report them. **CameraTools camera-behaviour bugs** (camera panel operations, pathing quirks) are also welcome — they feed the design of the built-in camera controller — but expect them to be fixed *by the replacement* rather than patched.
 
 ---
 
@@ -112,12 +151,12 @@ The current UI is functional but minimal—it exists primarily to validate that 
 
 ## Technical Overview & Capture Modes
 
-This mod uses zero-copy GPU encoding where possible, falling back to standard methods if your hardware doesn't support the current implementation (AMD only...)
+This mod uses zero-copy GPU encoding where possible, falling back to standard methods if your hardware doesn't support the current implementation.
 
 ### Mode 1: Zero-Copy Hardware (Preferred)
-*AMD RX 400 series and newer (VCE 2.0+)*
+*AMD RX 400 series and newer (VCE 2.0+), or NVENC-capable NVIDIA GPUs*
 
-- **What it does**: Frame data stays on the GPU from Unity → AMD AMF encoder → disk. Never touches system RAM.
+- **What it does**: Frame data stays on the GPU from Unity → AMD AMF or NVIDIA NVENC encoder → disk. Never touches system RAM.
 - **Performance**: Minimal overhead, captures at near real-time speeds even at 4K.
 - **File Format**: HEVC (H.265) by default—approximately **75% smaller files** than H.264 (~230 MB/min vs ~970 MB/min at 4K/60fps).
 - **Fallback**: If HEVC isn't available on your hardware, automatically falls back to H.264 hardware encoding.
@@ -134,6 +173,7 @@ This mod uses zero-copy GPU encoding where possible, falling back to standard me
 
 ### Dependencies
 - **AMD drivers**: Adrenalin 2020 Edition or newer recommended for HEVC stability.
+- **NVIDIA drivers**: Any recent driver with NVENC support.
 - **FFmpeg Libraries**: Included in the release (`PluginData/FFmpeg/`). These are LGPL/GPL licensed shared libraries required for the fallback encoding path.
 
 ---
@@ -144,14 +184,17 @@ This repository contains the C# Kerbal Space Program plugin and the C++ native e
 
 **Requirements:**
 - Visual Studio 2022 (Desktop C++ workload)
-- AMD AMF SDK (headers only, clone from [GPUOpen](https://github.com/GPUOpen-LibrariesAndSDKs/AMF) into `NativePlugin/amf/`)
-- FFmpeg development libraries (Windows x64 shared build)
-- .NET Framework 4.7.2 (for KSP 1.12.x compatibility)
+- AMD AMF SDK (headers only, clone from [GPUOpen](https://github.com/GPUOpen-LibrariesAndSDKs/AMF) into `CinematicRecorderNative/amf/`)
+- NVIDIA Video Codec SDK (`nvEncodeAPI.h` into `CinematicRecorderNative/nvenc/`)
+- FFmpeg development libraries (Windows x64 shared build, into `CinematicRecorderNative/ffmpeg/`)
+- .NET Framework 4.8
 
 **Quick Build:**
 ```batch
-cd NativePlugin
+cd CinematicRecorderNative
 build_release.bat
+cd ..
+dotnet build CinematicRecorder.slnx
 ```
 
 ## Acknowledgements
@@ -164,6 +207,9 @@ Cinematic Recorder is licensed under the **GNU General Public License v3.0**.
 
 This project redistributes FFmpeg binaries and links against FFmpeg at runtime.
 As such, it is distributed under GPLv3 to ensure full compliance.
+
+The bundled Camera Tools fork is likewise GPLv3 (original by BrettRyland and
+contributors); see `GameData/CameraTools/NOTICE.txt` and `GPLv3.txt`.
 
 You are free to use, modify, and redistribute this software under the terms
 of the GPLv3. See the [LICENSE](LICENSE) file for full details.

@@ -1,0 +1,26 @@
+Camera Tools (Continued) — NOTICE
+==================================
+
+Original work:  Camera Tools Continued
+Author:         BrettRyland and contributors
+Source:         https://github.com/BrettRyland/CameraTools
+Forum thread:   https://forum.kerbalspaceprogram.com/index.php?/topic/201063-camera-tools-continued-v1150/
+
+This copy is a MODIFIED FORK maintained for use with Cinematic Recorder:
+https://github.com/DGerry83/CR_CameraTools
+
+Modifications: adds an integration API surface (CinematicRecorderIntegration)
+used by Cinematic Recorder. The fork aims to change as little of the original
+code as possible; the API expands the original rather than altering its core.
+
+License: GNU General Public License v3.0. The full license text is in
+GPLv3.txt in this folder, and the complete corresponding source code for
+this modified version is available at the fork URL above.
+
+----------------------------------------------------------------------
+TRANSITIONAL COMPONENT: CameraTools support in Cinematic Recorder is
+temporary. A built-in camera controller will replace CameraTools in a
+future Cinematic Recorder release, at which point this bundled copy will
+no longer be needed or shipped. Existing camera presets will be imported
+by the new system.
+----------------------------------------------------------------------

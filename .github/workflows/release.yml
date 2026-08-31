@@ -32,6 +32,25 @@ jobs:
           generate_release_notes: true
           # Prepended to the auto-generated notes.
           body: |
+            > **PRE-RELEASE — expect bugs.** This build is for early adopters and testers. It is not feature-complete and the workflow/UI will change.
+
+            ### Known issues
+
+            - **Stationary camera drift (CameraTools):** assigning a stationary camera to a Camera Panel slot in orbit, then returning to it, produces wildly drifting positions; afterwards pathing positions and CameraTools FOV control can misbehave. Avoid reusing orbital stationary slots.
+            - **No audio above 30 simulation FPS** (slow-motion captures are silent).
+            - The UI is a functional prototype and will change significantly.
+
+            ### Reporting bugs
+
+            Please check the known-issues list first, then report on [GitHub Issues](https://github.com/DGerry83/CinematicRecorder/issues) with your KSP log and repro steps.
+
+            - **Capture core bugs** (crashes, corrupted output, audio desync, encoder failures): highest priority — please report.
+            - **CameraTools camera behaviour bugs** (camera panel operations, pathing quirks): still worth reporting — they feed the design of the built-in camera controller that will replace CameraTools — but expect them to be fixed *by the replacement* rather than patched.
+
+            ### Bundled CameraTools
+
+            This release bundles a modified fork of [Camera Tools Continued](https://github.com/BrettRyland/CameraTools) by BrettRyland and contributors (GPLv3): [CR_CameraTools](https://github.com/DGerry83/CR_CameraTools). See `GameData/CameraTools/NOTICE.txt` and `GPLv3.txt` in the zip. **CameraTools support is transitional** — a built-in camera controller will replace it in a future release, and existing camera presets will be imported.
+
             ### Acknowledgements
 
             Huge thanks to [@Halbann](https://github.com/Halbann), who reorganised this repository to follow KSP modding standards — KSPBuildTools-based build, SDK-style csproj, and the split C#/native projects — and smoothed out the build process.
