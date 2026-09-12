@@ -13,6 +13,9 @@ namespace CinematicRecorder.UI
             public const string arrowUp = "▲";
             public const string arrowDn = "▼";
             public const string DeleteConfirm = "Delete preset '{0}'?";
+
+            // Dependency notice (logged by the DearImGui-KSP host at startup)
+            public const string DearImGuiKspUnavailableLog = "[CinematicRecorder] DearImGui-KSP not available (not installed or self-disabled); CinematicRecorder UI disabled.";
         }
         public static class ScreenMessages
         {
@@ -146,10 +149,6 @@ namespace CinematicRecorder.UI
             public const string CaptureRateFormat = "Capture Rate: {0:F1} FPS";
             public const string CaptureRatePercentFormat = "Capture Rate: {0:F1} FPS ({1:F0}%)";
             public const string EstimatedRemainingFormat = "Est. Remaining: {0:mm\\:ss}";
-
-            // Advanced Camera Settings Panel
-            public const string AdvancedCameraButton = "Adv. Camera";
-            public const string AdvancedCameraHeader = "Advanced Camera Settings";
         }
 
         public static class AdvancedSettings
@@ -185,35 +184,6 @@ namespace CinematicRecorder.UI
             public const string SharpeningToggle = " Sharpening";
             public const string SharpeningTooltip = "Applies contrast-adaptive sharpening to counteract TAB softness.";
             public const string SharpeningStrengthLabel = "Sharpness: {0:F0}%";
-        }
-
-        public static class AdvancedCameraOptions
-        {
-            // Window Title
-            public const string WindowTitle = "Advanced Camera";
-
-            // Camera Path Playback Timing
-            public const string PathPlaybackTimingToggle = " Use playback timing";
-            public const string PathPlaybackTimingTooltip = "Keeps path timing constant during slow-mo";
-
-            // Camera Shake Section
-            public const string ShakeHeader = "Camera Shake";
-            public const string ShakeToggle = " Shake";
-            public const string VelocityShakeToggle = " Velocity Shake";
-            public const string ShakeIntensityLabel = "Intensity: {0:F1}";
-            public const string ShakeTooltip = "Standard positional camera shake";
-            public const string VelocityShakeTooltip = "Velocity-based directional shake (requires velocity data)";
-            public const string IntensityTooltip = "Shake amplitude multiplier (0 = off, 10 = maximum)";
-
-            // HullCam Overlay Section  
-            public const string OverlayHeader = "HullCam Overlay";
-            public const string OverlaySelectorLabel = "Overlay:";
-            public const string OverlayPlaceholder = "None Available";
-            public const string OverlayTooltip = "Requires HullCam API extension to enumerate overlays";
-
-            // Serialization Info
-            public const string SettingsPersisted = "Settings will persist with preset";
-            public const string NoCameraToolsSlot = "Select a CameraTools slot to configure options";
         }
 
         public static class CameraController

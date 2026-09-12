@@ -37,6 +37,10 @@
 			<CKANIdentifier>Harmony2</CKANIdentifier>
 			<GenerateDependencyAttribute>false</GenerateDependencyAttribute>
 		</ModReference>
+		<ModReference Include="DearImGuiKSP">
+			<DLLPath>GameData/DearImGuiKSP/Plugins/DearImGuiKSP.dll</DLLPath>
+			<GenerateDependencyAttribute>false</GenerateDependencyAttribute>
+		</ModReference>
 	</ItemGroup>
 	<!-- Packages -->
 	<ItemGroup>

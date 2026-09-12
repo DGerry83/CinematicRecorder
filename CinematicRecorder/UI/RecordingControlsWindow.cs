@@ -1,4 +1,4 @@
-﻿using CinematicRecorder.Core;
+using CinematicRecorder.Core;
 using CinematicRecorder.Integration;
 using System;
 using UnityEngine;
@@ -29,11 +29,6 @@ namespace CinematicRecorder.UI
         private enum SpeedMode { Normal, Slow, SuperSlow, KrakenTime }
         private SpeedMode currentSpeedMode = SpeedMode.Normal;
 
-        // 0.2.3: hide the Adv Camera entry point; panel code remains intact for re-enable after 0.2.3.
-        internal const bool ShowAdvancedCameraPanel = false;
-
-        private AdvancedCameraOptionsWindow advancedOptionsWindow;
-
         private CameraPanelController cameraPanel;
         #endregion
         #region Unity Lifecycle
@@ -50,11 +45,6 @@ namespace CinematicRecorder.UI
             UnsubscribeFromEvents();
             cameraPanel?.Shutdown();
             CameraToolsAPIManager.Shutdown();
-
-            if (advancedOptionsWindow != null)
-            {
-                Destroy(advancedOptionsWindow);
-            }
         }
         void OnGUI()
         {
@@ -155,49 +145,7 @@ namespace CinematicRecorder.UI
 
             GUILayout.FlexibleSpace();
 
-            // Advanced Camera Settings toggle button - now controls separate window
-            if (ShowAdvancedCameraPanel)
-            {
-                GUILayout.BeginVertical(GUILayout.Width(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_WIDTH));
-                GUIStyle advStyle = CinematicUIResources.Styles.Button();
-
-                bool advancedVisible = advancedOptionsWindow != null && advancedOptionsWindow.IsVisible;
-                if (advancedVisible)
-                {
-                    advStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-                    advStyle.fontStyle = FontStyle.Bold;
-                }
-
-                string arrow = advancedVisible ? Common.arrowL : Common.arrowR;
-                string buttonText = arrow + Recording.AdvancedCameraButton;
-                if (GUILayout.Button(buttonText, advStyle, GUILayout.Height(CinematicUIResources.Windows.Recording.ADVANCED_TOGGLE_HEIGHT)))
-                {
-                    ToggleAdvancedOptionsWindow();
-                }
-                GUILayout.EndVertical();
-            }
-
             GUILayout.EndHorizontal();
-        }
-        private void ToggleAdvancedOptionsWindow()
-        {
-            if (advancedOptionsWindow == null)
-            {
-                advancedOptionsWindow = gameObject.AddComponent<AdvancedCameraOptionsWindow>();
-                advancedOptionsWindow.Initialize(this, cameraPanel);
-                advancedOptionsWindow.Show();
-            }
-            else
-            {
-                if (advancedOptionsWindow.IsVisible)
-                {
-                    advancedOptionsWindow.Hide();
-                }
-                else
-                {
-                    advancedOptionsWindow.Show();
-                }
-            }
         }
         #endregion
         #region Event Subscription & Handlers

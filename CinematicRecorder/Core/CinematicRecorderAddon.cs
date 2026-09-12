@@ -96,6 +96,11 @@ namespace CinematicRecorder.Core
             GameObject configObj = new GameObject("CameraPanelConfig");
             DontDestroyOnLoad(configObj);
             configObj.AddComponent<CameraPanelConfig>();
+
+            // Create DearImGui-KSP UI host (draws nothing until window ports land)
+            GameObject uiHostObj = new GameObject("CinematicRecorder_UiHost");
+            DontDestroyOnLoad(uiHostObj);
+            uiHostObj.AddComponent<CinematicUiHost>();
         }
         /// <summary>
         /// Removes toolbar button and destroys UI windows.
@@ -117,6 +122,10 @@ namespace CinematicRecorder.Core
             }
             if (recordingControlsWindow != null && recordingControlsWindow.gameObject != null)
                 Destroy(recordingControlsWindow.gameObject);
+
+            // Destroy the UI host (its OnDestroy unregisters from DearImGui-KSP)
+            if (CinematicUiHost.Instance != null)
+                Destroy(CinematicUiHost.Instance.gameObject);
         }
         private void OnGUIApplicationLauncherReady()
         {
