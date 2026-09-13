@@ -36,6 +36,13 @@ namespace CinematicRecorder.UI
         public RecordingControlsWindow RecordingControls { get; private set; }
 
         /// <summary>
+        /// Fade overlay controller (added in chunk C7): owns the fade clock driver and
+        /// the capture-visible fade quad, plus the single CameraTransitionCoordinator
+        /// instance the chunk C8 camera panel will consume.
+        /// </summary>
+        public FadeOverlayController FadeOverlay { get; private set; }
+
+        /// <summary>
         /// Records the singleton for this host instance and creates the ported views.
         /// </summary>
         void Awake()
@@ -45,6 +52,7 @@ namespace CinematicRecorder.UI
             AdvancedSettings = new AdvancedSettingsWindow();
             FinalReport = new FinalReportWindow();
             RecordingControls = new RecordingControlsWindow();
+            FadeOverlay = new FadeOverlayController();
         }
 
         /// <summary>
@@ -86,8 +94,20 @@ namespace CinematicRecorder.UI
         }
 
         /// <summary>
+        /// Drives the fade overlay controller once per rendered frame: the fade clock
+        /// (deterministic while recording, real-time otherwise — the pre-C5 LateUpdate
+        /// cadence) and the capture-visible fade quad. Deliberately not per physics
+        /// step, which would over-advance the fade under TAB's sub-steps.
+        /// </summary>
+        void LateUpdate()
+        {
+            FadeOverlay?.Tick();
+        }
+
+        /// <summary>
         /// Unregisters the per-frame callback if registered, tears down the recording
-        /// controls view (event unsubscribe + CameraTools shutdown), and clears the singleton.
+        /// controls view (event unsubscribe + CameraTools shutdown) and the fade
+        /// overlay (quad/mesh/material destruction), and clears the singleton.
         /// </summary>
         void OnDestroy()
         {
@@ -98,6 +118,7 @@ namespace CinematicRecorder.UI
             }
 
             RecordingControls?.Shutdown();
+            FadeOverlay?.Shutdown();
 
             if (Instance == this)
                 Instance = null;
