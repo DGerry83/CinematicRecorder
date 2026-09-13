@@ -97,6 +97,7 @@ GameData/
 ```
 
 ### Dependencies
+- **DearImGui-KSP ≥ 1.4.0** — **required**, not bundled. Install/upgrade it separately; the mod will not load without it (hard dependency, equal-major on 1).
 - **Harmony 2** (CKAN identifier `Harmony2`) — **required**, not bundled.
 - **HullCamVDS** — optional; enables hull-camera integration.
 
@@ -114,11 +115,9 @@ Camera paths are authored with the Camera Tools UI in flight, then assigned to r
 
 ---
 
-## Important: UI Prototype Notice
+## User Interface
 
-**The current user interface is a prototype.** It provides basic functionality for testing the underlying capture systems, but it **will change significantly** in future updates. Expect breaking changes to the workflow, settings organization, and visual design.
-
-The current UI is functional but minimal—it exists primarily to validate that the recording pipeline works.  Functionality here will change and improve now that the foundation is done.
+The UI runs on the [DearImGui-KSP](https://github.com/DGerry83/DearImGui-KSP) framework (a hard dependency — see Dependencies). Layout, settings organization, and workflow may still evolve between releases.
 
 ---
 
@@ -128,7 +127,6 @@ The current UI is functional but minimal—it exists primarily to validate that 
 
 - **Stationary camera drift (CameraTools):** assigning a stationary camera to a Camera Panel slot in orbit, then returning to it, produces wildly drifting positions; afterwards pathing positions and CameraTools FOV control can misbehave. Avoid reusing orbital stationary slots.
 - **No audio above 30 simulation FPS:** slow-motion captures are silent.
-- **UI prototype:** layout, settings organization, and workflow will change.
 
 **Capture-core bugs** (crashes, corrupted output, audio desync, encoder failures) are the highest priority, please report them. **CameraTools camera-behaviour bugs** (camera panel operations, pathing quirks) are also welcome but expect them to be fixed *by the replacement* rather than patched.
 
