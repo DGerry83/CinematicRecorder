@@ -1,3 +1,4 @@
+using DearImGuiKSP;
 using UnityEngine;
 
 [assembly: KSPAssemblyDependencyEqualMajor("DearImGuiKSP", 1, 3)]
@@ -21,12 +22,28 @@ namespace CinematicRecorder.UI
 
         private bool _registered;
 
+        /// <summary>Main settings dialog view (ported in chunk C2).</summary>
+        public SettingsDialog Settings { get; private set; }
+
+        // SCAFFOLDING (C2): replaced by C3 port — the legacy IMGUI advanced settings
+        // window stays alive (floating) until then; this host owns its GameObject.
+        private AdvancedSettingsWindow _legacyAdvancedSettings;
+        private GameObject _legacyAdvancedSettingsObject;
+
         /// <summary>
-        /// Records the singleton for this host instance.
+        /// True while the legacy advanced settings window is visible. The settings view
+        /// highlights its Advanced button from this. SCAFFOLDING (C2): replaced by C3 port.
+        /// </summary>
+        public bool LegacyAdvancedSettingsVisible =>
+            _legacyAdvancedSettings != null && _legacyAdvancedSettings.IsVisible;
+
+        /// <summary>
+        /// Records the singleton for this host instance and creates the ported views.
         /// </summary>
         void Awake()
         {
             Instance = this;
+            Settings = new SettingsDialog();
         }
 
         /// <summary>
@@ -56,22 +73,66 @@ namespace CinematicRecorder.UI
                 _registered = false;
             }
 
+            // SCAFFOLDING (C2): replaced by C3 port — destroy the legacy advanced
+            // window this host created.
+            if (_legacyAdvancedSettingsObject != null)
+            {
+                Destroy(_legacyAdvancedSettingsObject);
+                _legacyAdvancedSettingsObject = null;
+                _legacyAdvancedSettings = null;
+            }
+
             if (Instance == this)
                 Instance = null;
         }
 
         /// <summary>
+        /// Toggles the legacy IMGUI advanced settings window, creating it on first use.
+        /// SCAFFOLDING (C2): replaced by C3 port — the settings view calls this because
+        /// a plain view class cannot own components.
+        /// </summary>
+        public void ToggleLegacyAdvancedSettings()
+        {
+            if (_legacyAdvancedSettings == null)
+            {
+                _legacyAdvancedSettingsObject = new GameObject("AdvancedSettingsWindow");
+                DontDestroyOnLoad(_legacyAdvancedSettingsObject);
+                _legacyAdvancedSettings = _legacyAdvancedSettingsObject.AddComponent<AdvancedSettingsWindow>();
+                _legacyAdvancedSettings.Initialize();
+                _legacyAdvancedSettings.Show();
+                return;
+            }
+
+            if (_legacyAdvancedSettings.IsVisible)
+            {
+                _legacyAdvancedSettings.Hide();
+            }
+            else
+            {
+                _legacyAdvancedSettings.Show();
+            }
+        }
+
+        /// <summary>
         /// Per-frame UI declaration, invoked by DearImGui-KSP. Dispatches to the
-        /// window views; this chunk ships zero views, so nothing is drawn yet.
-        /// Future view properties are named after their windows: Settings,
-        /// AdvancedSettings, RecordingControls, FinalReport — each port chunk adds
-        /// its own dispatch block between the markers below.
+        /// window views; each port chunk adds its own dispatch block between the
+        /// markers below.
         /// </summary>
         private void OnFrame()
         {
             // ------------------------------------------------------------------
             // Settings dispatch (added by chunk C2)
             // ------------------------------------------------------------------
+            if (Settings != null && Settings.IsVisible)
+            {
+                using (var window = ImGuiEx.Window(CinematicUIStrings.Settings.WindowTitle, autoResize: true))
+                {
+                    if (window.Visible)
+                    {
+                        Settings.Draw();
+                    }
+                }
+            }
 
             // ------------------------------------------------------------------
             // AdvancedSettings dispatch (added by chunk C3)

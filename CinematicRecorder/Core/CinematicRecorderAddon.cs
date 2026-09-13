@@ -1,4 +1,4 @@
-﻿using CinematicRecorder.Capture;
+using CinematicRecorder.Capture;
 using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
 using FFmpeg.AutoGen;
@@ -16,7 +16,6 @@ namespace CinematicRecorder.Core
         public static FrameCapture FrameCaptureInstance { get; private set; }
 
         private ApplicationLauncherButton toolbarButton;
-        private SettingsDialog settingsDialog;
         private RecordingControlsWindow recordingControlsWindow;
         private Texture2D toolbarIcon;
 
@@ -101,6 +100,12 @@ namespace CinematicRecorder.Core
             GameObject uiHostObj = new GameObject("CinematicRecorder_UiHost");
             DontDestroyOnLoad(uiHostObj);
             uiHostObj.AddComponent<CinematicUiHost>();
+
+            // Settings dialog dismissal resets the toolbar button (HOST-2)
+            if (CinematicUiHost.Instance != null)
+            {
+                CinematicUiHost.Instance.Settings.OnDialogDismissed += OnDialogClosed;
+            }
         }
         /// <summary>
         /// Removes toolbar button and destroys UI windows.
@@ -114,11 +119,9 @@ namespace CinematicRecorder.Core
                 ApplicationLauncher.Instance.RemoveModApplication(toolbarButton);
 
             // Cleanup windows
-            if (settingsDialog != null)
+            if (CinematicUiHost.Instance != null)
             {
-                settingsDialog.OnDialogDismissed -= OnDialogClosed;
-                if (settingsDialog.gameObject != null)
-                    Destroy(settingsDialog.gameObject);
+                CinematicUiHost.Instance.Settings.OnDialogDismissed -= OnDialogClosed;
             }
             if (recordingControlsWindow != null && recordingControlsWindow.gameObject != null)
                 Destroy(recordingControlsWindow.gameObject);
@@ -150,14 +153,10 @@ namespace CinematicRecorder.Core
         }
         private void OnToolbarButtonOn()
         {
-            if (settingsDialog == null)
+            if (CinematicUiHost.Instance != null)
             {
-                GameObject settingsGo = new GameObject("SettingsDialog");
-                DontDestroyOnLoad(settingsGo);
-                settingsDialog = settingsGo.AddComponent<SettingsDialog>();
-                settingsDialog.OnDialogDismissed += OnDialogClosed;
+                CinematicUiHost.Instance.Settings.Show();
             }
-            settingsDialog.Show();
 
             if (recordingControlsWindow == null)
             {
@@ -170,9 +169,9 @@ namespace CinematicRecorder.Core
         private void OnToolbarButtonOff()
         {
             // Button pressed to turn OFF - hide both windows
-            if (settingsDialog != null)
+            if (CinematicUiHost.Instance != null)
             {
-                settingsDialog.Hide();
+                CinematicUiHost.Instance.Settings.Hide();
             }
             if (recordingControlsWindow != null)
             {

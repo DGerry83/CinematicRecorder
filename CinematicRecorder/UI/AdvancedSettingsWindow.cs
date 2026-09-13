@@ -6,13 +6,14 @@ using static CinematicRecorder.UI.CinematicUIStrings;
 namespace CinematicRecorder.UI
 {
     /// <summary>
-    /// Docked panel window for advanced settings. Locks position to follow SettingsDialog.
-    /// Contains: Encoding tab (Safe Mode, Audio Capture, PNG Sequence) and Rendering tab (TAB, Gradient Protection).
+    /// Floating panel window for advanced settings. Contains: Encoding tab (Safe Mode,
+    /// Audio Capture, PNG Sequence) and Rendering tab (TAB, Gradient Protection).
+    /// SCAFFOLDING (C2): replaced by C3 port — no longer docked to the settings dialog;
+    /// floats freely with its default rect until the DearImGui-KSP rewrite.
     /// </summary>
     public class AdvancedSettingsWindow : MonoBehaviour
     {
         #region Fields & State
-        private SettingsDialog parentWindow;
         private Rect windowRect;
         private bool isVisible = false;
         private bool stylesInitialized = false;
@@ -28,12 +29,12 @@ namespace CinematicRecorder.UI
 
         #region Initialization
         /// <summary>
-        /// Initializes the window with parent reference.
+        /// Initializes the window with its plain default rect.
+        /// SCAFFOLDING (C2): replaced by C3 port — the dock-to-parent machinery is gone.
         /// </summary>
-        public void Initialize(SettingsDialog parent)
+        public void Initialize()
         {
-            parentWindow = parent;
-            UpdatePosition();
+            windowRect = new Rect(650f, 60f, CinematicUIResources.Layout.AdvancedSettings.PANEL_WIDTH, 10f);
             InitStyles();
         }
 
@@ -60,45 +61,11 @@ namespace CinematicRecorder.UI
         }
         #endregion
 
-        #region Position Management
-        private void UpdatePosition()
-        {
-            if (parentWindow == null) return;
-
-            Rect parentRect = parentWindow.GetWindowRect();
-
-            float x = parentWindow.GetDockEdgeX();
-            float y = parentRect.y;
-            float width = CinematicUIResources.Layout.AdvancedSettings.PANEL_WIDTH;
-
-            if (windowRect.width == 0f)
-                windowRect = new Rect(x, y, width, 10f);
-
-            windowRect.x = x;
-            windowRect.y = y;
-            windowRect.width = width;
-        }
-
-        /// <summary>
-        /// Forces the window to stay locked to parent position. Call before GUILayout.Window.
-        /// </summary>
-        private void EnforceLockedPosition()
-        {
-            if (parentWindow == null) return;
-
-            Rect parentRect = parentWindow.GetWindowRect();
-
-            windowRect.x = parentWindow.GetDockEdgeX();
-            windowRect.y = parentRect.y;
-        }
-        #endregion
-
         #region Unity Lifecycle
+        // SCAFFOLDING (C2): replaced by C3 port — floats freely, no parent tracking.
         private void OnGUI()
         {
-            if (!isVisible || parentWindow == null) return;
-
-            EnforceLockedPosition();
+            if (!isVisible) return;
 
             windowRect = GUILayout.Window(
                 CinematicUIResources.Windows.IDs.AdvancedSettingsDocked,
@@ -128,7 +95,8 @@ namespace CinematicRecorder.UI
             }
             
             GUILayout.EndVertical();
-            // no DragWindow call, docked window
+            // SCAFFOLDING (C2): replaced by C3 port — draggable while floating.
+            GUI.DragWindow();
         }
 
         private void DrawTabs()
@@ -450,12 +418,11 @@ namespace CinematicRecorder.UI
 
         #region Public API
         /// <summary>
-        /// Shows the advanced settings window and refreshes position.
+        /// Shows the advanced settings window.
         /// </summary>
         public void Show()
         {
             isVisible = true;
-            UpdatePosition();
         }
 
         /// <summary>

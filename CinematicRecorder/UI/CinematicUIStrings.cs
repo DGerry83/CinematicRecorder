@@ -118,6 +118,12 @@ namespace CinematicRecorder.UI
             public const string AudioTooltip = "Records synchronized WAV audio alongside video. Does not work above 30fps capture rates.";
             public const string AudioDisabledScreenMsg = "Audio capture disabled: max 30fps";
 
+            // DearImGui-KSP port additions (chunk C2)
+            public const string EncodingHeader = "Encoding";
+            public const string ReadyStatusPlaybackFormat = "Ready — {0}x{1} @ {2} FPS — Playback Speed: {3:0.##}×";
+            public const string StateOn = "ON";
+            public const string StateOff = "OFF";
+
         }
 
         public static class Recording
