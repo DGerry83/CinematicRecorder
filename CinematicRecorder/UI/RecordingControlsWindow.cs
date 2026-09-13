@@ -24,6 +24,13 @@ namespace CinematicRecorder.UI
         private const float ProgressBarWidth = 320f;
         private const float ProgressBarRounding = 2f;
 
+        // Progress-bar and ramp-slider constants relocated from CinematicUIResources.Layout (file deleted in C9).
+        private const float ProgressBarHeight = 16f;
+        private const float ProgressPulseSpeed = 2f;
+        private const float ProgressSegmentWidth = 60f;
+        private const float RampDurationMin = 0.1f;
+        private const float RampDurationMax = 3.0f;
+
         // Old CinematicUIResources.Colors.PROGRESS_BLUE (0.2, 0.6, 0.9) as bytes.
         private static readonly Color32 ProgressFillColor = new Color32(51, 153, 230, 255);
         private static readonly Color32 ProgressBgColor = KspPalette.FrameBg;
@@ -237,15 +244,15 @@ namespace CinematicRecorder.UI
         private static void DrawPulseBar()
         {
             Vector2 origin = ImGuiDraw.GetCursorScreenPos();
-            float barHeight = CinematicUIResources.Layout.Progress.BAR_HEIGHT;
+            float barHeight = ProgressBarHeight;
             ImGuiDraw.Dummy(ProgressBarWidth, barHeight);
             ImGuiDraw.AddRectFilled(origin, origin + new Vector2(ProgressBarWidth, barHeight),
                 ProgressBgColor, ProgressBarRounding);
 
             // Real-time ping-pong, exactly the old math (outside footage, so the
             // wall-clock Time.time drive is fine).
-            float pulse = Mathf.PingPong(Time.time * CinematicUIResources.Layout.Progress.PULSE_SPEED, 1f);
-            float segmentWidth = CinematicUIResources.Layout.Progress.SEGMENT_WIDTH;
+            float pulse = Mathf.PingPong(Time.time * ProgressPulseSpeed, 1f);
+            float segmentWidth = ProgressSegmentWidth;
             float xPos = pulse * (ProgressBarWidth - segmentWidth);
 
             Vector2 segmentOrigin = origin + new Vector2(xPos, 0f);
@@ -263,7 +270,7 @@ namespace CinematicRecorder.UI
             float percent = target > 0 ? Mathf.Clamp01(current / target) : 0f;
 
             Vector2 origin = ImGuiDraw.GetCursorScreenPos();
-            float barHeight = CinematicUIResources.Layout.Progress.BAR_HEIGHT;
+            float barHeight = ProgressBarHeight;
             ImGuiDraw.Dummy(ProgressBarWidth, barHeight);
             ImGuiDraw.AddRectFilled(origin, origin + new Vector2(ProgressBarWidth, barHeight),
                 ProgressBgColor, ProgressBarRounding);
@@ -281,11 +288,12 @@ namespace CinematicRecorder.UI
         {
             using (ImGuiEx.Row())
             {
-                DearImGuiKSP.DearImGuiKSP.Text(Recording.RampDurationLabel);
+                // Same "Duration" label const as the camera panel's zoom row (dedup, C9).
+                DearImGuiKSP.DearImGuiKSP.Text(CameraController.ZoomDurationLabel);
 
                 float duration = durationSlider;
                 bool durationChanged = DearImGuiKSP.DearImGuiKSP.SliderFloat("##rampDuration", ref duration,
-                    CinematicUIResources.Layout.Ramp.DURATION_MIN, CinematicUIResources.Layout.Ramp.DURATION_MAX);
+                    RampDurationMin, RampDurationMax);
                 // The old permanent help sentence, now a tooltip on the slider.
                 DearImGuiKSP.DearImGuiKSP.Tooltip(Recording.DurationHelper);
                 DearImGuiKSP.DearImGuiKSP.Text(string.Format(Recording.RampDurationValueFormat, duration));

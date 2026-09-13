@@ -14,6 +14,9 @@ namespace CinematicRecorder.UI
     public class CameraSlotManager
     {
         #region Fields & State
+        // Slot count (relocated from the deleted CinematicUIResources.Layout.Camera.TOTAL_SLOTS in C9).
+        private const int TotalSlots = 16;
+
         private readonly List<CameraSlot> cameraSlots = new List<CameraSlot>();
         private int _activeSlotIndex = -1;
         private bool _wasCameraToolsActive = false;
@@ -35,7 +38,7 @@ namespace CinematicRecorder.UI
         }
         public void LoadPreset(CameraPanelPreset preset)
         {
-            if (preset?.buttonAssignments != null && preset.buttonAssignments.Count == CinematicUIResources.Layout.Camera.TOTAL_SLOTS)
+            if (preset?.buttonAssignments != null && preset.buttonAssignments.Count == TotalSlots)
             {
                 cameraSlots.Clear();
                 cameraSlots.AddRange(preset.buttonAssignments.Select(s => new CameraSlot
@@ -117,7 +120,7 @@ namespace CinematicRecorder.UI
 
             if (settings.Mode == ToolModes.Pathing && settings.SelectedPathIndex < 0)
             {
-                ScreenMessages.PostScreenMessage("Cannot save: No path selected in CameraTools", 2f);
+                ScreenMessages.PostScreenMessage(CameraController.NoPathSelectedMessage, 2f);
                 return false;
             }
 
@@ -222,7 +225,7 @@ namespace CinematicRecorder.UI
         private void InitializeSlots()
         {
             cameraSlots.Clear();
-            for (int i = 0; i < CinematicUIResources.Layout.Camera.TOTAL_SLOTS; i++)
+            for (int i = 0; i < TotalSlots; i++)
             {
                 cameraSlots.Add(new CameraSlot { buttonID = string.Format(CameraController.ButtonIdFormat, i) });
             }

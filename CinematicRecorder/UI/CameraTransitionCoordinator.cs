@@ -11,6 +11,10 @@ namespace CinematicRecorder.UI
     public class CameraTransitionCoordinator
     {
         #region Configuration
+        // Fade duration slider range (relocated from CinematicUIResources.Layout.Crossfade — file deleted in C9).
+        private const float FadeDurationMin = 0.05f;
+        private const float FadeDurationMax = 2.0f;
+
         public bool UseFadeOnSwap { get; set; } = true;
 
         /// <summary>
@@ -47,8 +51,8 @@ namespace CinematicRecorder.UI
         private void UpdateDurationFromSlider()
         {
             _fadeDurationSeconds = Mathf.Lerp(
-                CinematicUIResources.Layout.Crossfade.DURATION_MIN,
-                CinematicUIResources.Layout.Crossfade.DURATION_MAX,
+                FadeDurationMin,
+                FadeDurationMax,
                 FadeDurationSlider
             );
         }

@@ -299,7 +299,7 @@ namespace CinematicRecorder.UI
             // If path is a directory (PNG sequence), show folder name with indicator
             if (Directory.Exists(fullPath))
             {
-                return Path.GetFileName(fullPath) + " (PNG Sequence)";
+                return Path.GetFileName(fullPath) + Report.PngSequenceSuffix;
             }
 
             return Path.GetFileName(fullPath);

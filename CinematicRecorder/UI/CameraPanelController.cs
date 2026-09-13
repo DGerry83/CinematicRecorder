@@ -69,6 +69,16 @@ namespace CinematicRecorder.UI
         private static readonly Color32 GreyedColor = KspPalette.TextLightGrey;
         private static readonly Color32 InfoOrangeColor = new Color32(255, 140, 0, 255);
 
+        // Layout constants relocated from CinematicUIResources.Layout (file deleted in C9).
+        private const int GridRows = 4;
+        private const int GridCols = 4;
+        private const int TotalSlots = 16;
+        private const float ZoomMaxSpeed = 40f;
+        private const float ZoomReturnSpeed = 8f;
+        private const float FadeDurationMin = 0.05f;
+        private const float FadeDurationMax = 2.0f;
+        private const float FadeSliderMax = 1f;
+
         // Stock PopupDialog identities (G-U1 exception); names double as dedupe keys.
         private const string DeleteDialogName = "CinematicRecorderDeletePreset";
         private const string UnassignDialogName = "CinematicRecorderUnassignSlot";
@@ -357,7 +367,7 @@ namespace CinematicRecorder.UI
             if (!Input.GetMouseButton(0))
             {
                 _zoomIntent = Mathf.MoveTowards(_zoomIntent, 0f,
-                    Time.deltaTime * CinematicUIResources.Layout.Zoom.RETURN_SPEED);
+                    Time.deltaTime * ZoomReturnSpeed);
             }
         }
 
@@ -366,14 +376,14 @@ namespace CinematicRecorder.UI
             // Interrupt with rate input if slider moved significantly
             if (Mathf.Abs(_zoomIntent) > 0.1f)
             {
-                zoom.Interrupt(new RateBasedZoomStrategy(CinematicUIResources.Layout.Zoom.MAX_SPEED));
+                zoom.Interrupt(new RateBasedZoomStrategy(ZoomMaxSpeed));
                 zoom.SetRateInput(_zoomIntent);
 
                 // Decay and return (rate mode takes precedence when slider active)
                 if (!Input.GetMouseButton(0))
                 {
                     _zoomIntent = Mathf.MoveTowards(_zoomIntent, 0f,
-                        Time.deltaTime * CinematicUIResources.Layout.Zoom.RETURN_SPEED);
+                        Time.deltaTime * ZoomReturnSpeed);
                 }
                 return;
             }
@@ -433,14 +443,14 @@ namespace CinematicRecorder.UI
 
                 float slider = coordinator.FadeDurationSlider;
                 if (DearImGuiKSP.DearImGuiKSP.SliderFloat("##fadeDuration", ref slider, 0f,
-                        CinematicUIResources.Layout.Crossfade.SLIDER_MAX))
+                        FadeSliderMax))
                 {
                     coordinator.FadeDurationSlider = slider;
                 }
 
                 float duration = Mathf.Lerp(
-                    CinematicUIResources.Layout.Crossfade.DURATION_MIN,
-                    CinematicUIResources.Layout.Crossfade.DURATION_MAX,
+                    FadeDurationMin,
+                    FadeDurationMax,
                     coordinator.FadeDurationSlider);
                 DearImGuiKSP.DearImGuiKSP.Text(string.Format(CameraController.FadeDurationFormat, duration));
             }
@@ -450,13 +460,13 @@ namespace CinematicRecorder.UI
         #region Slot Grid
         private void DrawSlotGrid(Vessel currentVessel)
         {
-            for (int row = 0; row < CinematicUIResources.Layout.Camera.GRID_ROWS; row++)
+            for (int row = 0; row < GridRows; row++)
             {
                 using (ImGuiEx.Row())
                 {
-                    for (int col = 0; col < CinematicUIResources.Layout.Camera.GRID_COLS; col++)
+                    for (int col = 0; col < GridCols; col++)
                     {
-                        int index = row * CinematicUIResources.Layout.Camera.GRID_COLS + col;
+                        int index = row * GridCols + col;
                         DrawSlotButton(index, currentVessel);
                     }
                 }
@@ -1361,7 +1371,7 @@ namespace CinematicRecorder.UI
         #region Helpers
         private static string[] BuildSlotButtonLabels()
         {
-            int total = CinematicUIResources.Layout.Camera.TOTAL_SLOTS;
+            int total = TotalSlots;
             var labels = new string[total];
             for (int i = 0; i < total; i++)
             {

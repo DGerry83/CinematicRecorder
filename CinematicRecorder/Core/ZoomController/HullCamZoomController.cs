@@ -6,6 +6,10 @@ namespace CinematicRecorder.Core
 {
     public class HullCamZoomController : IZoomController
     {
+        // Rate-zoom tuning (relocated from CinematicUIResources.Layout.Zoom — file deleted in C9).
+        private const float ZoomMaxSpeed = 40f;
+        private const float ZoomReturnSpeed = 8f;
+
         private IZoomStrategy _currentStrategy;
         private float _rateInput;
         private float _currentFOV = 60f;
@@ -22,7 +26,7 @@ namespace CinematicRecorder.Core
             _rateInput = Mathf.Clamp(input, -1f, 1f);
             if (_currentStrategy == null && Mathf.Abs(_rateInput) > 0.001f)
             {
-                _currentStrategy = new RateBasedZoomStrategy(CinematicUIResources.Layout.Zoom.MAX_SPEED);
+                _currentStrategy = new RateBasedZoomStrategy(ZoomMaxSpeed);
                 ((RateBasedZoomStrategy)_currentStrategy).SetInput(_rateInput);
             }
             else if (_currentStrategy is RateBasedZoomStrategy rateStrategy)
@@ -35,7 +39,7 @@ namespace CinematicRecorder.Core
         {
             if (!Input.GetMouseButton(0))
             {
-                _rateInput = Mathf.MoveTowards(_rateInput, 0f, deltaTime * CinematicUIResources.Layout.Zoom.RETURN_SPEED);
+                _rateInput = Mathf.MoveTowards(_rateInput, 0f, deltaTime * ZoomReturnSpeed);
                 SetRateInput(_rateInput);
             }
         }

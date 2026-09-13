@@ -17,6 +17,9 @@ namespace CinematicRecorder.UI
     public class SettingsDialog
     {
         #region Constants & Static State
+        // Duration step for the ±5s buttons (relocated from the deleted CinematicUIResources.Layout.Duration.STEP in C9).
+        private const float DurationStep = 5f;
+
         // FPS preset values, indexed by SessionState.SimFpsIndex / PlaybackFpsIndex.
         private static readonly int[] FrameratePresets = { 24, 30, 48, 60, 120, 240, 384 };
 
@@ -349,7 +352,7 @@ namespace CinematicRecorder.UI
                 if (DearImGuiKSP.DearImGuiKSP.Button(Settings.DurationDecrement))
                 {
                     SessionState.DurationSeconds = Mathf.Max(0f,
-                        SessionState.DurationSeconds - CinematicUIResources.Layout.Duration.STEP);
+                        SessionState.DurationSeconds - DurationStep);
                 }
 
                 if (DearImGuiKSP.DearImGuiKSP.InputText("##duration", ref _durationText, 16)
@@ -360,10 +363,10 @@ namespace CinematicRecorder.UI
 
                 if (DearImGuiKSP.DearImGuiKSP.Button(Settings.DurationIncrement))
                 {
-                    SessionState.DurationSeconds += CinematicUIResources.Layout.Duration.STEP;
+                    SessionState.DurationSeconds += DurationStep;
                     if (DeterministicCaptureSession.IsRunning)
                     {
-                        DeterministicCaptureSession.ExtendDuration(CinematicUIResources.Layout.Duration.STEP);
+                        DeterministicCaptureSession.ExtendDuration(DurationStep);
                     }
                 }
 
