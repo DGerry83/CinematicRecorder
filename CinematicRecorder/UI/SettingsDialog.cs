@@ -557,7 +557,8 @@ namespace CinematicRecorder.UI
         private static void DrawAdvancedButton()
         {
             bool advancedVisible = CinematicUiHost.Instance != null
-                                   && CinematicUiHost.Instance.LegacyAdvancedSettingsVisible;
+                                   && CinematicUiHost.Instance.AdvancedSettings != null
+                                   && CinematicUiHost.Instance.AdvancedSettings.IsVisible;
             if (advancedVisible)
             {
                 using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
@@ -573,14 +574,19 @@ namespace CinematicRecorder.UI
 
         private static void DrawAdvancedButtonContent(string label)
         {
-            // SCAFFOLDING (C2): the view is a plain class and cannot own components —
-            // the host toggles the legacy IMGUI window until C3 ports it.
             if (DearImGuiKSP.DearImGuiKSP.Button(label))
             {
                 CinematicUiHost host = CinematicUiHost.Instance;
-                if (host != null)
+                if (host != null && host.AdvancedSettings != null)
                 {
-                    host.ToggleLegacyAdvancedSettings();
+                    if (host.AdvancedSettings.IsVisible)
+                    {
+                        host.AdvancedSettings.Hide();
+                    }
+                    else
+                    {
+                        host.AdvancedSettings.Show();
+                    }
                 }
             }
         }

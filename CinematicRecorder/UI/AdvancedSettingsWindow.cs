@@ -1,252 +1,193 @@
 // File: AdvancedSettingsWindow.cs
 using CinematicRecorder.Core;
+using DearImGuiKSP;
+using DearImGuiKSP.Application;
 using UnityEngine;
 using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
     /// <summary>
-    /// Floating panel window for advanced settings. Contains: Encoding tab (Safe Mode,
-    /// Audio Capture, PNG Sequence) and Rendering tab (TAB, Gradient Protection).
-    /// SCAFFOLDING (C2): replaced by C3 port — no longer docked to the settings dialog;
-    /// floats freely with its default rect until the DearImGui-KSP rewrite.
+    /// Advanced settings view — audio capture, UI-layer capture, PNG sequence, temporal
+    /// accumulation blur (TAB), gradient protection, and sharpening. DearImGui-KSP VIEW-1
+    /// port (chunk C3) of the IMGUI MonoBehaviour; the port pattern follows SettingsDialog
+    /// (chunk C2). Tabs dropped per LAYOUT_PROPOSAL §2 option B: one auto-sized column.
+    /// Permanent help labels became tooltips on their toggles; conditional warnings stay
+    /// inline colored text. Drawn inside the "Advanced Settings" window scope from
+    /// CinematicUiHost.
     /// </summary>
-    public class AdvancedSettingsWindow : MonoBehaviour
+    public class AdvancedSettingsWindow
     {
+        #region Constants & Static State
+        // Warning color as bytes for TextColored (was Colors.INFO_ORANGE via Styles.Info() —
+        // the TAB GPU-required, AMF-only, and Capture-UI conflict lines all used it).
+        private static readonly Color32 WarningOrangeColor = new Color32(255, 140, 0, 255);
+
+        // Grey used for every read-only stand-in (theme-disabled text slot).
+        private static readonly Color32 GreyedColor = KspPalette.TextLightGrey;
+
+        // Greyed-stand-in labels, composed once from consts (D-2 ruling: a stand-in for
+        // every non-interactive state — while recording and while a toggle's conditions
+        // are unmet; no per-frame composition).
+        private static readonly string AudioGreyedOn = AdvancedSettings.AudioCaptureToggle + " " + Settings.StateOn;
+        private static readonly string AudioGreyedOff = AdvancedSettings.AudioCaptureToggle + " " + Settings.StateOff;
+        private static readonly string CaptureUiGreyedOn = AdvancedSettings.CaptureUiToggle + " " + Settings.StateOn;
+        private static readonly string CaptureUiGreyedOff = AdvancedSettings.CaptureUiToggle + " " + Settings.StateOff;
+        private static readonly string PngGreyedOn = AdvancedSettings.PngSequenceToggle + " " + Settings.StateOn;
+        private static readonly string PngGreyedOff = AdvancedSettings.PngSequenceToggle + " " + Settings.StateOff;
+        private static readonly string TabGreyedOn = AdvancedSettings.TemporalAccumulationToggle + " " + Settings.StateOn;
+        private static readonly string TabGreyedOff = AdvancedSettings.TemporalAccumulationToggle + " " + Settings.StateOff;
+        private static readonly string GradientGreyedOn = AdvancedSettings.GradientProtectionToggle + " " + Settings.StateOn;
+        private static readonly string GradientGreyedOff = AdvancedSettings.GradientProtectionToggle + " " + Settings.StateOff;
+        private static readonly string SharpeningGreyedOn = AdvancedSettings.SharpeningToggle + " " + Settings.StateOn;
+        private static readonly string SharpeningGreyedOff = AdvancedSettings.SharpeningToggle + " " + Settings.StateOff;
+        #endregion
+
         #region Fields & State
-        private Rect windowRect;
-        private bool isVisible = false;
-        private bool stylesInitialized = false;
-        private GUIStyle windowStyle;
-        private GUIStyle toggleStyleActive;
-        private GUIStyle labelStyle;
-        private GUIStyle tabButtonStyle;
-        private GUIStyle tabButtonActiveStyle;
-
-        private enum AdvancedTab { Encoding, Rendering }
-        private AdvancedTab currentTab = AdvancedTab.Encoding;
+        private bool isVisible;
         #endregion
 
-        #region Initialization
+        #region Public API
+        /// <summary>True while the window should be drawn.</summary>
+        public bool IsVisible => isVisible;
+
+        /// <summary>Shows the advanced settings window.</summary>
+        public void Show()
+        {
+            isVisible = true;
+        }
+
+        /// <summary>Hides the advanced settings window.</summary>
+        public void Hide()
+        {
+            isVisible = false;
+        }
+        #endregion
+
+        #region Draw
         /// <summary>
-        /// Initializes the window with its plain default rect.
-        /// SCAFFOLDING (C2): replaced by C3 port — the dock-to-parent machinery is gone.
+        /// Per-frame widget declarations for the whole window. Called only from
+        /// CinematicUiHost, inside the "Advanced Settings" window scope. One column:
+        /// the three capture toggles, then the three rendering toggles (L2 — no tabs).
         /// </summary>
-        public void Initialize()
+        internal void Draw()
         {
-            windowRect = new Rect(650f, 60f, CinematicUIResources.Layout.AdvancedSettings.PANEL_WIDTH, 10f);
-            InitStyles();
+            DrawAudioCaptureToggle();
+            DrawCaptureUiLayerToggle();
+            DrawPngSequenceToggle();
+            DrawTemporalAccumulationToggle();
+            DrawGradientProtectionToggle();
+            DrawSharpeningToggle();
         }
 
-        private void InitStyles()
+        private static void DrawAudioCaptureToggle()
         {
-            if (stylesInitialized) return;
-
-            windowStyle = CinematicUIResources.Styles.Window();
-
-            toggleStyleActive = new GUIStyle(HighLogic.Skin.toggle);
-            toggleStyleActive.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-            toggleStyleActive.onNormal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-            toggleStyleActive.fontStyle = FontStyle.Bold;
-
-            labelStyle = new GUIStyle(HighLogic.Skin.label);
-
-            tabButtonStyle = new GUIStyle(HighLogic.Skin.button);
-            
-            tabButtonActiveStyle = new GUIStyle(HighLogic.Skin.button);
-            tabButtonActiveStyle.normal.textColor = CinematicUIResources.Colors.TOGGLE_ACTIVE_GREEN;
-            tabButtonActiveStyle.fontStyle = FontStyle.Bold;
-
-            stylesInitialized = true;
-        }
-        #endregion
-
-        #region Unity Lifecycle
-        // SCAFFOLDING (C2): replaced by C3 port — floats freely, no parent tracking.
-        private void OnGUI()
-        {
-            if (!isVisible) return;
-
-            windowRect = GUILayout.Window(
-                CinematicUIResources.Windows.IDs.AdvancedSettingsDocked,
-                windowRect,
-                DrawWindow,
-                AdvancedSettings.WindowTitle,
-                windowStyle
-            );
-        }
-        #endregion
-
-        #region Window Layout
-        private void DrawWindow(int id)
-        {
-            GUILayout.BeginVertical();
-            
-            DrawTabs();
-            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
-            
-            if (currentTab == AdvancedTab.Encoding)
+            if (DeterministicCaptureSession.IsRunning)
             {
-                DrawEncodingTab();
+                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
+                    SessionState.EnableAudioCapture ? AudioGreyedOn : AudioGreyedOff);
+                return;
+            }
+
+            bool enableAudio = SessionState.EnableAudioCapture;
+            bool changed;
+            if (SessionState.EnableAudioCapture)
+            {
+                // Active-state styling: the old green+bold becomes a green Text scope
+                // (the library has no per-widget bold).
+                using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                {
+                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.AudioCaptureToggle, ref enableAudio);
+                }
             }
             else
             {
-                DrawRenderingTab();
+                changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.AudioCaptureToggle, ref enableAudio);
             }
-            
-            GUILayout.EndVertical();
-            // SCAFFOLDING (C2): replaced by C3 port — draggable while floating.
-            GUI.DragWindow();
-        }
+            // Replaces the old permanent help label.
+            DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.AudioCaptureTooltip);
 
-        private void DrawTabs()
-        {
-            GUILayout.BeginHorizontal();
-            
-            GUIStyle encodingStyle = (currentTab == AdvancedTab.Encoding) ? tabButtonActiveStyle : tabButtonStyle;
-            if (GUILayout.Button(AdvancedSettings.EncodingTab, encodingStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(CinematicUIResources.Layout.AdvancedSettings.TAB_BUTTON_WIDTH)))
+            if (changed && !DeterministicCaptureSession.IsRunning)
             {
-                currentTab = AdvancedTab.Encoding;
+                SessionState.EnableAudioCapture = enableAudio;
+                UnityEngine.Debug.Log($"[CinematicRecorder] EnableAudioCapture = {enableAudio}");
             }
-            
-            GUIStyle renderingStyle = (currentTab == AdvancedTab.Rendering) ? tabButtonActiveStyle : tabButtonStyle;
-            if (GUILayout.Button(AdvancedSettings.RenderingTab, renderingStyle, GUILayout.Height(CinematicUIResources.Layout.AdvancedSettings.TAB_HEIGHT), GUILayout.Width(CinematicUIResources.Layout.AdvancedSettings.TAB_BUTTON_WIDTH)))
+        }
+
+        private static void DrawCaptureUiLayerToggle()
+        {
+            bool blockedByTab = SessionState.EnableTemporalAccumulation;
+            if (blockedByTab || DeterministicCaptureSession.IsRunning)
             {
-                currentTab = AdvancedTab.Rendering;
+                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
+                    SessionState.CaptureUiLayer ? CaptureUiGreyedOn : CaptureUiGreyedOff);
             }
-            
-            GUILayout.EndHorizontal();
-        }
-
-        private void DrawEncodingTab()
-        {
-            DrawAudioCaptureToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawCaptureUiLayerToggle();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawPngSequenceToggle();
-        }
-
-        private void DrawRenderingTab()
-        {
-            DrawTemporalAccumulationSection();
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-            DrawGradientProtectionToggle();
-            
-            // Sharpening only available when TAB is enabled
-            if (SessionState.EnableTemporalAccumulation)
+            else
             {
-                GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-                DrawSharpeningToggle();
+                bool captureUi = SessionState.CaptureUiLayer;
+                bool changed;
+                if (SessionState.CaptureUiLayer)
+                {
+                    using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                    {
+                        changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUi);
+                    }
+                }
+                else
+                {
+                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUi);
+                }
+                DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.CaptureUiTooltip);
+
+                if (changed && !DeterministicCaptureSession.IsRunning)
+                {
+                    SessionState.CaptureUiLayer = captureUi;
+                    UnityEngine.Debug.Log($"[CinematicRecorder] CaptureUiLayer = {captureUi}");
+                }
+            }
+
+            // Conditional warning (never a tooltip): TAB and UI capture are mutually
+            // exclusive, so this fires beside whichever of the two toggles is on.
+            if (blockedByTab)
+            {
+                DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.CaptureUiTabConflict);
             }
         }
 
-        private void DrawAudioCaptureToggle()
+        private static void DrawPngSequenceToggle()
         {
-            bool wasEnabled = GUI.enabled;
             if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.EnableAudioCapture)
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
+                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
+                    SessionState.PngSequence ? PngGreyedOn : PngGreyedOff);
+                return;
             }
 
-            bool newValue = GUILayout.Toggle(
-                SessionState.EnableAudioCapture,
-                AdvancedSettings.AudioCaptureToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.EnableAudioCapture && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.EnableAudioCapture = newValue;
-                UnityEngine.Debug.Log($"[CinematicRecorder] EnableAudioCapture = {newValue}");
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(AdvancedSettings.AudioCaptureTooltip, helpStyle);
-
-            GUI.enabled = wasEnabled;
-        }
-
-        private void DrawCaptureUiLayerToggle()
-        {
-            bool wasEnabled = GUI.enabled;
-            if (SessionState.EnableTemporalAccumulation || DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.CaptureUiLayer)
-            {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.CaptureUiLayer,
-                AdvancedSettings.CaptureUiToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.CaptureUiLayer && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.CaptureUiLayer = newValue;
-                UnityEngine.Debug.Log($"[CinematicRecorder] CaptureUiLayer = {newValue}");
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(AdvancedSettings.CaptureUiTooltip, helpStyle);
-
-            if (SessionState.EnableTemporalAccumulation)
-            {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUIStyle conflictStyle = CinematicUIResources.Styles.Help();
-                conflictStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.CaptureUiTabConflict, conflictStyle);
-            }
-
-            GUI.enabled = wasEnabled;
-        }
-
-        private void DrawPngSequenceToggle()
-        {
-            bool wasEnabled = GUI.enabled;
-            if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            bool pngSequence = SessionState.PngSequence;
+            bool changed;
             if (SessionState.PngSequence)
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
+                using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                {
+                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.PngSequenceToggle, ref pngSequence);
+                }
             }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.PngSequence,
-                AdvancedSettings.PngSequenceToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.PngSequence && !DeterministicCaptureSession.IsRunning)
+            else
             {
-                SessionState.PngSequence = newValue;
-                if (newValue)
+                changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.PngSequenceToggle, ref pngSequence);
+            }
+            DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.PngSequenceTooltip);
+
+            if (changed && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.PngSequence = pngSequence;
+                if (pngSequence)
                 {
                     // Force software encoding when PNG mode is enabled
                     SessionState.ForceSoftwareEncoding = true;
                     UnityEngine.Debug.Log("[CinematicRecorder] PNG Sequence enabled - forcing software encoding path");
 
-                    // Also disable TAB since PNG uses CPU path
+                    // Also disable TAB since PNG uses the CPU path
                     if (SessionState.EnableTemporalAccumulation)
                     {
                         SessionState.EnableTemporalAccumulation = false;
@@ -254,191 +195,152 @@ namespace CinematicRecorder.UI
                     }
                 }
             }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(AdvancedSettings.PngSequenceTooltip, helpStyle);
-
-            GUI.enabled = wasEnabled;
         }
 
-        private void DrawTemporalAccumulationSection()
+        private static void DrawTemporalAccumulationToggle()
         {
             // TAB requires the GPU zero-copy path; supported on both AMF (AMD) and NVENC (Nvidia)
             bool hasGpuEncoder = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd
                               || SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Nvidia;
-            bool canUseTab = hasGpuEncoder && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding && !SessionState.CaptureUiLayer;
+            bool canUseTab = hasGpuEncoder && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding
+                          && !SessionState.CaptureUiLayer;
 
-            bool wasEnabled = GUI.enabled;
+            bool tab = SessionState.EnableTemporalAccumulation;
             if (!canUseTab || DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            // Main toggle
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.EnableTemporalAccumulation)
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
-            }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.EnableTemporalAccumulation,
-                AdvancedSettings.TemporalAccumulationToggle,
-                toggleStyle
-            );
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            if (SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.None)
-            {
-                // No GPU encoder detected: explain why TAB is unavailable
-                GUIStyle warningStyle = CinematicUIResources.Styles.Info();
-                warningStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.TabGpuRequiredWarning, warningStyle);
+                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor, tab ? TabGreyedOn : TabGreyedOff);
             }
             else
             {
-                GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-                helpStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.TemporalAccumulationTooltip, helpStyle);
+                bool newValue = tab;
+                if (tab)
+                {
+                    using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                    {
+                        DearImGuiKSP.DearImGuiKSP.Toggle(
+                            AdvancedSettings.TemporalAccumulationToggle, ref newValue);
+                    }
+                }
+                else
+                {
+                    DearImGuiKSP.DearImGuiKSP.Toggle(
+                        AdvancedSettings.TemporalAccumulationToggle, ref newValue);
+                }
+                // Replaces the old permanent help label (shown when a GPU encoder is present).
+                DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.TemporalAccumulationTooltip);
+
+                // TAB only sticks when actually usable
+                SessionState.EnableTemporalAccumulation = newValue && canUseTab;
             }
 
+            // Conditional warning (never a tooltip): no GPU encoder — explains the stand-in.
+            if (SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.None)
+            {
+                DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.TabGpuRequiredWarning);
+            }
+
+            // Conditional warning (never a tooltip): fires beside the TAB toggle when
+            // Capture UI is the toggle that is on (mutual exclusion, see Capture UI above).
             if (SessionState.CaptureUiLayer)
             {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUIStyle conflictStyle = CinematicUIResources.Styles.Help();
-                conflictStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.CaptureUiTabConflict, conflictStyle);
+                DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.CaptureUiTabConflict);
             }
-
-            // TAB only sticks when actually usable
-            SessionState.EnableTemporalAccumulation = newValue && canUseTab;
-
-            GUI.enabled = wasEnabled;
         }
 
-        private void DrawGradientProtectionToggle()
+        private static void DrawGradientProtectionToggle()
         {
-            bool wasEnabled = GUI.enabled;
-            // Gradient protection only available for AMD encoder
+            // Gradient protection only available for the AMD encoder
             bool canUseGradient = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd;
+
+            bool gradient = SessionState.AmfUseBlueNoiseDither;
             if (!canUseGradient || DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
-
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
-            if (SessionState.AmfUseBlueNoiseDither)
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
+                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
+                    gradient ? GradientGreyedOn : GradientGreyedOff);
             }
-            else if (!canUseGradient)
+            else
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.INFO_ORANGE;
+                bool newValue = gradient;
+                bool changed;
+                if (gradient)
+                {
+                    using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                    {
+                        changed = DearImGuiKSP.DearImGuiKSP.Toggle(
+                            AdvancedSettings.GradientProtectionToggle, ref newValue);
+                    }
+                }
+                else
+                {
+                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(
+                        AdvancedSettings.GradientProtectionToggle, ref newValue);
+                }
+                // The old Settings.GradientTooltip help line, now a tooltip on the toggle.
+                DearImGuiKSP.DearImGuiKSP.Tooltip(Settings.GradientTooltip);
+
+                if (canUseGradient && changed && !DeterministicCaptureSession.IsRunning)
+                {
+                    SessionState.AmfUseBlueNoiseDither = newValue;
+                }
             }
 
-            bool newValue = GUILayout.Toggle(
-                SessionState.AmfUseBlueNoiseDither,
-                AdvancedSettings.GradientProtectionToggle,
-                toggleStyle
-            );
-
-            if (canUseGradient && newValue != SessionState.AmfUseBlueNoiseDither && !DeterministicCaptureSession.IsRunning)
-            {
-                SessionState.AmfUseBlueNoiseDither = newValue;
-            }
-
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle tooltipStyle = CinematicUIResources.Styles.Help();
-            tooltipStyle.wordWrap = true;
-
+            // Conditional warning (never a tooltip): explains why the toggle is a stand-in.
             if (!canUseGradient)
             {
-                GUIStyle infoStyle = CinematicUIResources.Styles.Info();
-                infoStyle.wordWrap = true;
-                GUILayout.Label(AdvancedSettings.AMFOnlyWarning, infoStyle);
+                DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.AMFOnlyWarning);
             }
-            else if (SessionState.AmfUseBlueNoiseDither)
-            {
-                GUILayout.Label(Settings.GradientTooltip, tooltipStyle);
-            }
-
-            GUI.enabled = wasEnabled;
         }
 
-        private void DrawSharpeningToggle()
+        private static void DrawSharpeningToggle()
         {
-            bool wasEnabled = GUI.enabled;
-            if (DeterministicCaptureSession.IsRunning)
-                GUI.enabled = false;
+            // Sharpening is only available while TAB is enabled (parity with the old
+            // Rendering tab, which hid the whole section otherwise).
+            if (!SessionState.EnableTemporalAccumulation)
+            {
+                return;
+            }
 
-            GUIStyle toggleStyle = new GUIStyle(HighLogic.Skin.toggle);
+            if (DeterministicCaptureSession.IsRunning)
+            {
+                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
+                    SessionState.TabEnableSharpening ? SharpeningGreyedOn : SharpeningGreyedOff);
+                return;
+            }
+
+            bool sharpening = SessionState.TabEnableSharpening;
+            bool changed;
             if (SessionState.TabEnableSharpening)
             {
-                toggleStyle.normal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.onNormal.textColor = CinematicUIResources.Colors.GLOW_GREEN;
-                toggleStyle.fontStyle = FontStyle.Bold;
+                using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                {
+                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.SharpeningToggle, ref sharpening);
+                }
             }
-
-            bool newValue = GUILayout.Toggle(
-                SessionState.TabEnableSharpening,
-                AdvancedSettings.SharpeningToggle,
-                toggleStyle
-            );
-
-            if (newValue != SessionState.TabEnableSharpening && !DeterministicCaptureSession.IsRunning)
+            else
             {
-                SessionState.TabEnableSharpening = newValue;
+                changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.SharpeningToggle, ref sharpening);
             }
+            DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.SharpeningTooltip);
 
-            GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-            GUIStyle helpStyle = CinematicUIResources.Styles.Help();
-            helpStyle.wordWrap = true;
-            GUILayout.Label(AdvancedSettings.SharpeningTooltip, helpStyle);
+            if (changed && !DeterministicCaptureSession.IsRunning)
+            {
+                SessionState.TabEnableSharpening = sharpening;
+            }
 
             // Strength slider (only if sharpening enabled)
             if (SessionState.TabEnableSharpening)
             {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                
                 float strengthPercent = SessionState.TabSharpeningStrength * 100f;
-                GUILayout.Label(string.Format(AdvancedSettings.SharpeningStrengthLabel, strengthPercent), HighLogic.Skin.label);
-                
-                float newStrength = GUILayout.HorizontalSlider(SessionState.TabSharpeningStrength, 0.0f, 1.0f);
-                if (!Mathf.Approximately(newStrength, SessionState.TabSharpeningStrength))
+                DearImGuiKSP.DearImGuiKSP.Text(
+                    string.Format(AdvancedSettings.SharpeningStrengthLabel, strengthPercent));
+
+                float strength = SessionState.TabSharpeningStrength;
+                if (DearImGuiKSP.DearImGuiKSP.SliderFloat("##sharpening", ref strength, 0f, 1f))
                 {
-                    SessionState.TabSharpeningStrength = newStrength;
+                    SessionState.TabSharpeningStrength = strength;
                 }
             }
-
-            GUI.enabled = wasEnabled;
         }
-        #endregion
-
-        #region Public API
-        /// <summary>
-        /// Shows the advanced settings window.
-        /// </summary>
-        public void Show()
-        {
-            isVisible = true;
-        }
-
-        /// <summary>
-        /// Hides the advanced settings window.
-        /// </summary>
-        public void Hide()
-        {
-            isVisible = false;
-        }
-
-        public bool IsVisible => isVisible;
-
-        /// <summary>
-        /// Returns the current window rectangle.
-        /// </summary>
-        public Rect GetWindowRect() => windowRect;
         #endregion
     }
 }
