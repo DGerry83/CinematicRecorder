@@ -270,6 +270,7 @@ namespace CinematicRecorder.UI
             public const string RealCaptureTime = "Real Capture Time:";
             public const string EncodingMode = "Encoding Mode:";
             public const string FilenameLabel = "Filename:";
+            public const string AudioFileLabel = "Audio File:";
             public const string OpenFolder = "Open Folder";
             public const string SecondsUnit = " sec";
             public const string FolderNotFound = "Folder not found";
@@ -281,6 +282,8 @@ namespace CinematicRecorder.UI
             public const string MuxAudioButton = "Mux Audio";
             public const string MuxingInProgress = "Muxing...";
             public const string MuxingComplete = "Muxing complete!";
+            public const string MuxedButton = "Muxed!";
+            public const string SessionEndWatchdogHint = "Session ends 30s after this report.";
             public const string FfmpegNotFound = "FFmpeg not found";
         }
 

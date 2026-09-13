@@ -509,16 +509,14 @@ namespace CinematicRecorder.Core
             bool wasUnlimited,
             string ffmpegPath) // Parameter to indicate unlimited recording
         {
-            FinalReportWindow report = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
-
-            if (report == null)
+            CinematicUiHost host = CinematicUiHost.Instance;
+            if (host == null || host.FinalReport == null)
             {
-                GameObject go = new GameObject("FinalReportWindow");
-                UnityEngine.Object.DontDestroyOnLoad(go);
-                report = go.AddComponent<FinalReportWindow>();
+                UnityEngine.Debug.LogError("[CinematicRecorder] Cannot show final report: UI host unavailable.");
+                return;
             }
 
-            report.ShowReport(
+            host.FinalReport.ShowReport(
                 frames,
                 simulatedSeconds,
                 outputDuration,

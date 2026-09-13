@@ -593,12 +593,12 @@ namespace CinematicRecorder.UI
 
         private void StartRecording()
         {
-            // Close any open report windows from previous recordings. FindObjectOfType
-            // stays valid until chunk C6 ports FinalReportWindow off MonoBehaviour (REPORT-1).
-            FinalReportWindow existingReport = UnityEngine.Object.FindObjectOfType<FinalReportWindow>();
-            if (existingReport != null && existingReport.IsVisible)
+            // Close any open report from a previous recording (REPORT-1 — the host
+            // owns the ported view; HideReport still forces EndSession if mid-session).
+            CinematicUiHost host = CinematicUiHost.Instance;
+            if (host != null && host.FinalReport != null && host.FinalReport.IsVisible)
             {
-                existingReport.HideReport();
+                host.FinalReport.HideReport();
             }
             stopRequested = false;
             int simFps = FrameratePresets[SessionState.SimFpsIndex];

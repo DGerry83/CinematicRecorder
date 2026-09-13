@@ -28,6 +28,9 @@ namespace CinematicRecorder.UI
         /// <summary>Advanced settings view (ported in chunk C3).</summary>
         public AdvancedSettingsWindow AdvancedSettings { get; private set; }
 
+        /// <summary>Post-capture report view (ported in chunk C6).</summary>
+        public FinalReportWindow FinalReport { get; private set; }
+
         /// <summary>
         /// Records the singleton for this host instance and creates the ported views.
         /// </summary>
@@ -36,6 +39,7 @@ namespace CinematicRecorder.UI
             Instance = this;
             Settings = new SettingsDialog();
             AdvancedSettings = new AdvancedSettingsWindow();
+            FinalReport = new FinalReportWindow();
         }
 
         /// <summary>
@@ -52,6 +56,18 @@ namespace CinematicRecorder.UI
 
             DearImGuiKSP.DearImGuiKSP.Register(ConsumerId, OnFrame);
             _registered = true;
+        }
+
+        /// <summary>
+        /// Drives the report view's 30s session-end watchdog. The view is a plain
+        /// class with no Unity event methods, so the host forwards its own Update.
+        /// </summary>
+        void Update()
+        {
+            if (FinalReport != null)
+            {
+                FinalReport.Tick();
+            }
         }
 
         /// <summary>
@@ -107,6 +123,16 @@ namespace CinematicRecorder.UI
             // ------------------------------------------------------------------
             // FinalReport dispatch (added by chunk C6)
             // ------------------------------------------------------------------
+            if (FinalReport != null && FinalReport.IsVisible)
+            {
+                using (var window = ImGuiEx.Window(CinematicUIStrings.Report.WindowTitle, autoResize: true))
+                {
+                    if (window.Visible)
+                    {
+                        FinalReport.Draw();
+                    }
+                }
+            }
 
             // ------------------------------------------------------------------
             // RecordingControls dispatch (added by chunk C5)

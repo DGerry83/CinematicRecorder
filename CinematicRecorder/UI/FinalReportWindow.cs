@@ -1,5 +1,7 @@
-﻿using CinematicRecorder.Audio;
+using CinematicRecorder.Audio;
 using CinematicRecorder.Core;
+using DearImGuiKSP;
+using DearImGuiKSP.Application;
 using System;
 using System.IO;
 using UnityEngine;
@@ -7,20 +9,30 @@ using static CinematicRecorder.UI.CinematicUIStrings;
 
 namespace CinematicRecorder.UI
 {
-    public class FinalReportWindow : MonoBehaviour
+    /// <summary>
+    /// Post-capture report view — capture summary stats, output paths, optional audio
+    /// muxing, and folder access. DearImGui-KSP VIEW-1 port (chunk C6) of the IMGUI
+    /// MonoBehaviour; the port pattern follows SettingsDialog (chunk C2). Drawn inside
+    /// the "Recording Complete" window scope from CinematicUiHost. The 30s session-end
+    /// watchdog runs in <see cref="Tick"/>, called from the host's Update — the view is
+    /// a plain class with no Unity event methods.
+    /// </summary>
+    public class FinalReportWindow
     {
+        #region Constants & Static State
+        // 30s watchdog, unchanged from the MonoBehaviour version.
+        private const float ReportTimeoutSeconds = 30f;
+
+        // Green for the "Muxed!" completion state (was Color.green text on a disabled button).
+        private static readonly Color32 MuxedGreenColor = KspPalette.GreenLight;
+
+        // Grey for read-only / non-interactive stand-ins (theme-disabled text slot; the
+        // library has no disabled-widget state — C2 D-U8 #1).
+        private static readonly Color32 GreyedColor = KspPalette.TextLightGrey;
+        #endregion
+
         #region Fields & State
-        private Rect windowRect = new Rect(
-            CinematicUIResources.Windows.FinalReport.DEFAULT_X,
-            CinematicUIResources.Windows.FinalReport.DEFAULT_Y,
-            CinematicUIResources.Windows.FinalReport.WIDTH,
-            CinematicUIResources.Windows.FinalReport.HEIGHT
-        );
-
-        private GUIStyle windowStyle;
-        private bool hasInitStyles = false;
-        private bool shouldShow = false;
-
+        private bool shouldShow;
         private int capturedFrames;
         private float simulatedSeconds;
         private float outputDuration;
@@ -30,13 +42,32 @@ namespace CinematicRecorder.UI
         private string audioFilePath;
         private bool wasUnlimitedRecording;
         private float showStartTime = -1f;
-        private const float REPORT_TIMEOUT_SECONDS = 30f;
         private string _ffmpegPath;
-        private bool _isMuxing = false;
-        private bool _muxingCompleted = false;
+        private bool _isMuxing;
+        private bool _muxingCompleted;
+        // Set by the mux completion callback (background threadpool thread); posted to
+        // the screen from Tick on the main thread. Unity UI calls are main-thread-only —
+        // posting directly from the callback crashes the process (issue #008).
+        private volatile string _pendingScreenMessage;
         #endregion
+
         #region Public API
+        /// <summary>True while the report should be drawn.</summary>
         public bool IsVisible => shouldShow;
+
+        /// <summary>
+        /// Shows the report and captures the session outcome. Signature preserved
+        /// verbatim (REPORT-1); also (re)arms the 30s session-end watchdog.
+        /// </summary>
+        /// <param name="frames">Total frames captured.</param>
+        /// <param name="simSeconds">Simulated seconds elapsed.</param>
+        /// <param name="outDuration">Output video duration at playback FPS.</param>
+        /// <param name="realTimeSeconds">Real-world capture wall time.</param>
+        /// <param name="encodingMode">The encoding path that actually ran.</param>
+        /// <param name="filePath">Output video file (or PNG sequence folder).</param>
+        /// <param name="audioPath">Captured audio file, if audio was recorded.</param>
+        /// <param name="unlimited">True when the recording ran in unlimited mode.</param>
+        /// <param name="ffmpegPath">Path to the FFmpeg binary, when muxing is possible.</param>
         public void ShowReport(
             int frames,
             float simSeconds,
@@ -63,6 +94,12 @@ namespace CinematicRecorder.UI
 
             Debug.Log(string.Format(Report.FinalReportLog, frames, simSeconds, realTimeSeconds, encodingMode, unlimited, filePath));
         }
+
+        /// <summary>
+        /// Hides the report. If called while a capture session is still running, forces
+        /// <see cref="DeterministicCaptureSession.EndSession"/> (semantics unchanged from
+        /// the MonoBehaviour version).
+        /// </summary>
         public void HideReport()
         {
             shouldShow = false;
@@ -76,133 +113,154 @@ namespace CinematicRecorder.UI
             }
         }
         #endregion
-        #region Private Implementation
-        private void InitStyles()
+
+        #region Watchdog
+        /// <summary>
+        /// Checks for timeout condition to force session cleanup if the user leaves the
+        /// report open. Called from CinematicUiHost.Update — the view has no Unity
+        /// event methods of its own.
+        /// </summary>
+        internal void Tick()
         {
-            if (hasInitStyles) return;
-            windowStyle = CinematicUIResources.Styles.Window();
-            hasInitStyles = true;
+            // Post any message stashed by the background-thread mux callback (issue #008).
+            string pending = _pendingScreenMessage;
+            if (pending != null)
+            {
+                _pendingScreenMessage = null;
+                ScreenMessages.PostScreenMessage(pending, 3f, ScreenMessageStyle.UPPER_CENTER);
+            }
+
+            if (shouldShow && showStartTime > 0 && DeterministicCaptureSession.IsRunning)
+            {
+                float elapsed = Time.realtimeSinceStartup - showStartTime;
+                if (elapsed > ReportTimeoutSeconds)
+                {
+                    UnityEngine.Debug.LogWarning(string.Format(
+                        "[FinalReportWindow] Report timeout reached ({0}s). Forcing session end.",
+                        ReportTimeoutSeconds));
+
+                    DeterministicCaptureSession.EndSession();
+                    showStartTime = -1f;
+                }
+            }
         }
-        private void OnWindow(int windowId)
+        #endregion
+
+        #region Draw
+        /// <summary>
+        /// Per-frame widget declarations for the whole report. Called only from
+        /// CinematicUiHost, inside the "Recording Complete" window scope. Layout per
+        /// LAYOUT_PROPOSAL §5: header → 5 stat rows → output paths (plain text) →
+        /// footer Row (mux / open folder / okay) → L9 watchdog hint.
+        /// </summary>
+        internal void Draw()
         {
-            GUILayout.BeginVertical();
+            // Header. The old bold-14pt header style is not expressible (no per-widget
+            // font weight — C2 D-U8 #3); plain themed text stands in.
+            DearImGuiKSP.DearImGuiKSP.Text(Report.SummaryHeader);
 
-            GUIStyle headerStyle = CinematicUIResources.Styles.Header();
+            DrawStatRows();
+            DrawOutputPaths();
+            DrawFooterRow();
 
-            GUILayout.Label(Report.SummaryHeader, headerStyle);
-            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
+            // L9: one-line static hint about the 30s session-end watchdog.
+            DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor, Report.SessionEndWatchdogHint);
+        }
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(Report.FramesCaptured, GUILayout.Width(130));
-            GUILayout.Label(capturedFrames.ToString("N0"), GUILayout.Width(100));
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(Report.SimulatedTime, GUILayout.Width(130));
-            GUILayout.Label(simulatedSeconds.ToString("F2") + Report.SecondsUnit, GUILayout.Width(100));
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(wasUnlimitedRecording ? Report.OutputDurationUnlimited : Report.OutputDuration, GUILayout.Width(130));
-            GUILayout.Label(outputDuration.ToString("F2") + Report.SecondsUnit, GUILayout.Width(100));
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(Report.RealCaptureTime, GUILayout.Width(130));
-            GUILayout.Label(FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime)), GUILayout.Width(150));
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(Report.EncodingMode, GUILayout.Width(130));
-            GUILayout.Label(encodingModeUsed);
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(CinematicUIResources.Spacing.NORMAL);
-
-            GUILayout.Label(Report.FilenameLabel, HighLogic.Skin.label);
-
-            GUILayout.BeginHorizontal();
-
-            // Display relative path from GameData if possible, otherwise truncate
-            string displayPath = GetDisplayPath(outputFilePath);
-            GUI.enabled = false;
-            GUILayout.TextField(displayPath, HighLogic.Skin.textField);
-            GUI.enabled = true;
-
-            // Open Folder button
-            if (GUILayout.Button(Report.OpenFolder, GUILayout.Width(90), GUILayout.Height(25)))
+        // Stat values are changing data — formatting them per frame is sanctioned
+        // (spec §4.3); the labels are static consts. The old fixed 130px label column
+        // and the encoding-mode row's missing width constraint disappear with autoResize.
+        private void DrawStatRows()
+        {
+            using (ImGuiEx.Row())
             {
-                OpenContainingFolder();
+                DearImGuiKSP.DearImGuiKSP.Text(Report.FramesCaptured);
+                DearImGuiKSP.DearImGuiKSP.Text(capturedFrames.ToString("N0"));
             }
 
-            GUILayout.EndHorizontal();
-            // Add Mux Audio button if we have both video and audio
-            if (!string.IsNullOrEmpty(audioFilePath) && !string.IsNullOrEmpty(_ffmpegPath))
+            using (ImGuiEx.Row())
             {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUILayout.BeginHorizontal();
-                GUILayout.FlexibleSpace();
-
-                if (_muxingCompleted)
-                {
-                    // Show completed state - green text, disabled
-                    GUIStyle completedStyle = new GUIStyle(HighLogic.Skin.button);
-                    completedStyle.normal.textColor = Color.green;
-                    completedStyle.fontStyle = FontStyle.Bold;
-                    GUI.enabled = false;
-                    GUILayout.Button("Muxed!", completedStyle, GUILayout.Width(100), GUILayout.Height(25));
-                    GUI.enabled = true;
-                }
-                else
-                {
-                    // Show normal or muxing state
-                    GUI.enabled = !_isMuxing;
-                    string buttonText = _isMuxing ? Report.MuxingInProgress : Report.MuxAudioButton;
-
-                    if (GUILayout.Button(buttonText, GUILayout.Width(100), GUILayout.Height(25)))
-                    {
-                        StartMuxing();
-                    }
-                    GUI.enabled = true;
-                }
-
-                GUILayout.FlexibleSpace();
-                GUILayout.EndHorizontal();
+                DearImGuiKSP.DearImGuiKSP.Text(Report.SimulatedTime);
+                DearImGuiKSP.DearImGuiKSP.Text(simulatedSeconds.ToString("F2") + Report.SecondsUnit);
             }
+
+            using (ImGuiEx.Row())
+            {
+                DearImGuiKSP.DearImGuiKSP.Text(
+                    wasUnlimitedRecording ? Report.OutputDurationUnlimited : Report.OutputDuration);
+                DearImGuiKSP.DearImGuiKSP.Text(outputDuration.ToString("F2") + Report.SecondsUnit);
+            }
+
+            using (ImGuiEx.Row())
+            {
+                DearImGuiKSP.DearImGuiKSP.Text(Report.RealCaptureTime);
+                DearImGuiKSP.DearImGuiKSP.Text(FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime)));
+            }
+
+            using (ImGuiEx.Row())
+            {
+                DearImGuiKSP.DearImGuiKSP.Text(Report.EncodingMode);
+                DearImGuiKSP.DearImGuiKSP.Text(encodingModeUsed);
+            }
+        }
+
+        // Readonly paths as plain text (LAYOUT_PROPOSAL §5) — the old disabled
+        // TextFields are gone. Video shows the basename (or PNG-sequence folder marker);
+        // the audio row keeps today's basename-only display.
+        private void DrawOutputPaths()
+        {
+            DearImGuiKSP.DearImGuiKSP.Text(Report.FilenameLabel);
+            DearImGuiKSP.DearImGuiKSP.Text(GetDisplayPath(outputFilePath));
 
             if (!string.IsNullOrEmpty(audioFilePath))
             {
-                GUILayout.Space(CinematicUIResources.Spacing.TIGHT);
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("Audio File:", GUILayout.Width(130));
-                GUI.enabled = false;
-                GUILayout.TextField(Path.GetFileName(audioFilePath), HighLogic.Skin.textField);
-                GUI.enabled = true;
-                GUILayout.EndHorizontal();
+                using (ImGuiEx.Row())
+                {
+                    DearImGuiKSP.DearImGuiKSP.Text(Report.AudioFileLabel);
+                    DearImGuiKSP.DearImGuiKSP.Text(Path.GetFileName(audioFilePath));
+                }
             }
-
-            GUILayout.Space(CinematicUIResources.Spacing.LARGE);
-
-            GUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-
-            if (GUILayout.Button(Common.Okay, HighLogic.Skin.button, GUILayout.Width(100), GUILayout.Height(30)))
-            {
-                HideReport();
-            }
-
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-
-            GUILayout.EndVertical();
-
-            GUI.DragWindow();
         }
 
-        private string NormalizePath(string path)
+        // One footer Row (LAYOUT_PROPOSAL §5): [Mux Audio (if applicable)][Open Folder][Okay].
+        // The mux slot has three states — live button / greyed "Muxing..." stand-in (the
+        // library has no disabled-widget state, C3 D-2 idiom) / green "Muxed!" text.
+        private void DrawFooterRow()
         {
-            return path.Replace('/', '\\');
+            bool muxApplicable = !string.IsNullOrEmpty(audioFilePath) && !string.IsNullOrEmpty(_ffmpegPath);
+
+            using (ImGuiEx.Row())
+            {
+                if (muxApplicable)
+                {
+                    if (_muxingCompleted)
+                    {
+                        DearImGuiKSP.DearImGuiKSP.TextColored(MuxedGreenColor, Report.MuxedButton);
+                    }
+                    else if (_isMuxing)
+                    {
+                        DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor, Report.MuxingInProgress);
+                    }
+                    else if (DearImGuiKSP.DearImGuiKSP.Button(Report.MuxAudioButton))
+                    {
+                        StartMuxing();
+                    }
+                }
+
+                if (DearImGuiKSP.DearImGuiKSP.Button(Report.OpenFolder))
+                {
+                    OpenContainingFolder();
+                }
+
+                if (DearImGuiKSP.DearImGuiKSP.Button(Common.Okay))
+                {
+                    HideReport();
+                }
+            }
         }
+        #endregion
+
+        #region Private Implementation
         private void StartMuxing()
         {
             if (_isMuxing || string.IsNullOrEmpty(_ffmpegPath))
@@ -222,14 +280,15 @@ namespace CinematicRecorder.UI
                     {
                         _muxingCompleted = true;
                         outputFilePath = result; // Update to muxed path
-                        ScreenMessages.PostScreenMessage(Report.MuxingComplete, 3f, ScreenMessageStyle.UPPER_CENTER);
+                        _pendingScreenMessage = Report.MuxingComplete;
                     }
                     else
                     {
-                        ScreenMessages.PostScreenMessage(result, 3f, ScreenMessageStyle.UPPER_CENTER);
+                        _pendingScreenMessage = result;
                     }
                 });
         }
+
         /// <summary>
         /// Returns just the filename without any path
         /// </summary>
@@ -245,6 +304,7 @@ namespace CinematicRecorder.UI
 
             return Path.GetFileName(fullPath);
         }
+
         /// <summary>
         /// Opens the file explorer to the directory containing the output file
         /// </summary>
@@ -282,6 +342,7 @@ namespace CinematicRecorder.UI
                 ScreenMessages.PostScreenMessage(Report.FailedToOpenFolder, 3f, ScreenMessageStyle.UPPER_CENTER);
             }
         }
+
         private string FormatTimeSpan(TimeSpan ts)
         {
             if (ts.TotalHours >= 1)
@@ -289,43 +350,5 @@ namespace CinematicRecorder.UI
             return $"{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds / 100:D1}";
         }
         #endregion
-        #region Unity Lifecycle
-        void Start()
-        {
-            InitStyles();
-        }
-        /// <summary>
-        /// Checks for timeout condition to force session cleanup if user leaves report open.
-        /// </summary>
-        void Update()
-        {
-            if (shouldShow && showStartTime > 0 && DeterministicCaptureSession.IsRunning)
-            {
-                float elapsed = Time.realtimeSinceStartup - showStartTime;
-                if (elapsed > REPORT_TIMEOUT_SECONDS)
-                {
-                    UnityEngine.Debug.LogWarning(string.Format(
-                        "[FinalReportWindow] Report timeout reached ({0}s). Forcing session end.",
-                        REPORT_TIMEOUT_SECONDS));
-
-                    DeterministicCaptureSession.EndSession();
-                    showStartTime = -1f; 
-                }
-            }
-        }
-        void OnGUI()
-        {
-            if (!shouldShow) return;
-
-            windowRect = GUILayout.Window(
-                CinematicUIResources.Windows.IDs.FinalReport,
-                windowRect,
-                OnWindow,
-                Report.WindowTitle,
-                windowStyle
-            );
-        }
-        #endregion
-
     }
 }
