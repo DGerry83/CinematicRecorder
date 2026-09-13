@@ -155,6 +155,15 @@ namespace CinematicRecorder.UI
             public const string CaptureRateFormat = "Capture Rate: {0:F1} FPS";
             public const string CaptureRatePercentFormat = "Capture Rate: {0:F1} FPS ({1:F0}%)";
             public const string EstimatedRemainingFormat = "Est. Remaining: {0:mm\\:ss}";
+
+            // DearImGui-KSP port additions (chunk C5)
+            public const string SpeedRampsHeader = "Speed Ramps";
+            public const string StatusTransitionFormat = "{0} — Transition: {1}";
+            public const string RampDurationLabel = "Duration";
+            public const string RampDurationValueFormat = "{0:F2}s";
+            public const string RampBiasLabel = "Bias";
+            public const string RampBiasValueFormat = "{0:F2}";
+            public const string RampBiasTooltip = "◀ Linger Slow — Linger Normal ▶";
         }
 
         public static class AdvancedSettings

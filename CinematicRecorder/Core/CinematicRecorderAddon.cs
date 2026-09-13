@@ -16,7 +16,6 @@ namespace CinematicRecorder.Core
         public static FrameCapture FrameCaptureInstance { get; private set; }
 
         private ApplicationLauncherButton toolbarButton;
-        private RecordingControlsWindow recordingControlsWindow;
         private Texture2D toolbarIcon;
 
         /// <summary>
@@ -123,10 +122,9 @@ namespace CinematicRecorder.Core
             {
                 CinematicUiHost.Instance.Settings.OnDialogDismissed -= OnDialogClosed;
             }
-            if (recordingControlsWindow != null && recordingControlsWindow.gameObject != null)
-                Destroy(recordingControlsWindow.gameObject);
 
-            // Destroy the UI host (its OnDestroy unregisters from DearImGui-KSP)
+            // Destroy the UI host (its OnDestroy unregisters from DearImGui-KSP and
+            // shuts down the recording controls view)
             if (CinematicUiHost.Instance != null)
                 Destroy(CinematicUiHost.Instance.gameObject);
         }
@@ -156,15 +154,8 @@ namespace CinematicRecorder.Core
             if (CinematicUiHost.Instance != null)
             {
                 CinematicUiHost.Instance.Settings.Show();
+                CinematicUiHost.Instance.RecordingControls.Show();
             }
-
-            if (recordingControlsWindow == null)
-            {
-                GameObject controlsGo = new GameObject("RecordingControlsWindow");
-                DontDestroyOnLoad(controlsGo);
-                recordingControlsWindow = controlsGo.AddComponent<RecordingControlsWindow>();
-            }
-            recordingControlsWindow.Show();
         }
         private void OnToolbarButtonOff()
         {
@@ -172,10 +163,7 @@ namespace CinematicRecorder.Core
             if (CinematicUiHost.Instance != null)
             {
                 CinematicUiHost.Instance.Settings.Hide();
-            }
-            if (recordingControlsWindow != null)
-            {
-                recordingControlsWindow.Hide();
+                CinematicUiHost.Instance.RecordingControls.Hide();
             }
         }
         private void OnDialogClosed()

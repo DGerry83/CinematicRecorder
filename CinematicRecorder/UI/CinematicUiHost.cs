@@ -21,6 +21,7 @@ namespace CinematicRecorder.UI
         private const string ConsumerId = "CinematicRecorder";
 
         private bool _registered;
+        private bool _lastReportVisible;
 
         /// <summary>Main settings dialog view (ported in chunk C2).</summary>
         public SettingsDialog Settings { get; private set; }
@@ -31,6 +32,9 @@ namespace CinematicRecorder.UI
         /// <summary>Post-capture report view (ported in chunk C6).</summary>
         public FinalReportWindow FinalReport { get; private set; }
 
+        /// <summary>Recording controls view (ported in chunk C5).</summary>
+        public RecordingControlsWindow RecordingControls { get; private set; }
+
         /// <summary>
         /// Records the singleton for this host instance and creates the ported views.
         /// </summary>
@@ -40,6 +44,7 @@ namespace CinematicRecorder.UI
             Settings = new SettingsDialog();
             AdvancedSettings = new AdvancedSettingsWindow();
             FinalReport = new FinalReportWindow();
+            RecordingControls = new RecordingControlsWindow();
         }
 
         /// <summary>
@@ -68,10 +73,21 @@ namespace CinematicRecorder.UI
             {
                 FinalReport.Tick();
             }
+
+            // L6: when the final report appears, auto-hide the recording controls
+            // window. Edge-triggered on the rising edge only — a manual re-open while
+            // the report is still up is not fought.
+            bool reportVisible = FinalReport != null && FinalReport.IsVisible;
+            if (reportVisible && !_lastReportVisible && RecordingControls != null)
+            {
+                RecordingControls.Hide();
+            }
+            _lastReportVisible = reportVisible;
         }
 
         /// <summary>
-        /// Unregisters the per-frame callback if registered and clears the singleton.
+        /// Unregisters the per-frame callback if registered, tears down the recording
+        /// controls view (event unsubscribe + CameraTools shutdown), and clears the singleton.
         /// </summary>
         void OnDestroy()
         {
@@ -80,6 +96,8 @@ namespace CinematicRecorder.UI
                 DearImGuiKSP.DearImGuiKSP.Unregister(ConsumerId);
                 _registered = false;
             }
+
+            RecordingControls?.Shutdown();
 
             if (Instance == this)
                 Instance = null;
@@ -137,6 +155,16 @@ namespace CinematicRecorder.UI
             // ------------------------------------------------------------------
             // RecordingControls dispatch (added by chunk C5)
             // ------------------------------------------------------------------
+            if (RecordingControls != null && RecordingControls.IsVisible)
+            {
+                using (var window = ImGuiEx.Window(CinematicUIStrings.Recording.WindowTitle, autoResize: true))
+                {
+                    if (window.Visible)
+                    {
+                        RecordingControls.Draw();
+                    }
+                }
+            }
         }
     }
 }
