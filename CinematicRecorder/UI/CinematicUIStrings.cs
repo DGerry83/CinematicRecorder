@@ -266,6 +266,23 @@ namespace CinematicRecorder.UI
             public const string OverwriteNo = "Create New";
             public const string ConfirmOverwriteTitle = "Confirm Overwrite";
             public const string IvaZoomDisabledNotice = "Camera controls are disabled while in IVA";
+
+            // DearImGui-KSP port additions (chunk C8) — CollapsingHeader labels, the
+            // L5 unassign affordance, zoom-row labels/values, and tooltips per
+            // LAYOUT_PROPOSAL §4.
+            public const string CameraPanelHeader = "Camera Panel";
+            public const string ZoomHeader = "Zoom";
+            public const string SlotLabelFormat = "Slot {0}: {1}";
+            public const string UnassignButton = "× Unassign";
+            public const string PaddingRowLabel = "Padding";
+            public const string PaddingValueFormat = "{0:F1}x";
+            public const string ZoomDurationLabel = "Duration";
+            public const string DurationValueFormat = "{0:F1}s";
+            public const string ZoomDurationRangeTooltip = "0.0 — 5.0";
+
+            // Relocated verbatim from inline literals in the IMGUI panel (invariant 3).
+            public const string InvalidPathIndexMessage = "Cannot activate - invalid path index";
+            public const string SavedPathNoLongerExistsMessage = "Saved path no longer exists";
         }
 
         public static class Report

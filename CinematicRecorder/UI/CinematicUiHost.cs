@@ -36,9 +36,10 @@ namespace CinematicRecorder.UI
         public RecordingControlsWindow RecordingControls { get; private set; }
 
         /// <summary>
-        /// Fade overlay controller (added in chunk C7): owns the fade clock driver and
-        /// the capture-visible fade quad, plus the single CameraTransitionCoordinator
-        /// instance the chunk C8 camera panel will consume.
+        /// Fade overlay controller (added in chunk C7, reworked in the C8 fade
+        /// rework after D-U9 withdrawal): owns the fade clock driver, the IMGUI
+        /// fullscreen overlay draw, and the single CameraTransitionCoordinator
+        /// instance the chunk C8 camera panel consumes.
         /// </summary>
         public FadeOverlayController FadeOverlay { get; private set; }
 
@@ -94,20 +95,34 @@ namespace CinematicRecorder.UI
         }
 
         /// <summary>
-        /// Drives the fade overlay controller once per rendered frame: the fade clock
-        /// (deterministic while recording, real-time otherwise — the pre-C5 LateUpdate
-        /// cadence) and the capture-visible fade quad. Deliberately not per physics
-        /// step, which would over-advance the fade under TAB's sub-steps.
+        /// Drives the fade overlay controller and the camera panel once per rendered
+        /// frame. The fade clock (deterministic while recording, real-time otherwise
+        /// — the pre-C5 LateUpdate cadence) lives in FadeOverlay.Tick; the panel tick
+        /// forwards zoom processing and the fade-midpoint auto-zoom from
+        /// RecordingControls.Tick. Deliberately not per physics step, which would
+        /// over-advance the fade under TAB's sub-steps.
         /// </summary>
         void LateUpdate()
         {
             FadeOverlay?.Tick();
+            RecordingControls?.Tick();
         }
 
         /// <summary>
-        /// Unregisters the per-frame callback if registered, tears down the recording
-        /// controls view (event unsubscribe + CameraTools shutdown) and the fade
-        /// overlay (quad/mesh/material destruction), and clears the singleton.
+        /// Draws the stock IMGUI fade overlay (D-U9 withdrawn — screen overlay,
+        /// pre-0.2.4 behavior; appears in footage only when Capture UI is on).
+        /// Second sanctioned G-U1 exception alongside stock PopupDialog. Renders
+        /// only — the fade clock is driven by LateUpdate, never from here.
+        /// </summary>
+        void OnGUI()
+        {
+            FadeOverlay?.DrawOverlay();
+        }
+
+        /// <summary>
+        /// Unregisters the per-frame callback if registered and tears down the
+        /// recording controls view (event unsubscribe + camera panel + CameraTools
+        /// shutdown), then clears the singleton.
         /// </summary>
         void OnDestroy()
         {
@@ -118,7 +133,6 @@ namespace CinematicRecorder.UI
             }
 
             RecordingControls?.Shutdown();
-            FadeOverlay?.Shutdown();
 
             if (Instance == this)
                 Instance = null;

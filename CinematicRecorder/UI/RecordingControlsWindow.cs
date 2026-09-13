@@ -12,8 +12,9 @@ namespace CinematicRecorder.UI
     /// Recording controls view — speed selection, capture progress, and speed-ramp
     /// parameters. DearImGui-KSP VIEW-1 port (chunk C5) of the IMGUI MonoBehaviour;
     /// follows the SettingsDialog pattern (chunk C2). Drawn inside the
-    /// "Recording Controls" window scope from CinematicUiHost. The camera panel the
-    /// old window hosted is excluded here (PANEL-1) and returns in chunk C8.
+    /// "Recording Controls" window scope from CinematicUiHost. Owns the camera
+    /// panel view (chunk C8) and hosts it in the delimited "Camera Panel"
+    /// collapsing-header region at the end of <see cref="Draw"/> (PANEL-1).
     /// </summary>
     public class RecordingControlsWindow
     {
@@ -37,6 +38,11 @@ namespace CinematicRecorder.UI
         private float durationSlider;
         private float exponentSlider;
 
+        // Camera panel view (owned here per PANEL-1; chunk C8). The header-open
+        // bool feeds the panel's per-frame zoom gate (old showCameraPanel parity).
+        private readonly CameraPanelController cameraPanel;
+        private bool cameraPanelHeaderOpen;
+
         private enum SpeedMode { Normal, Slow, SuperSlow, KrakenTime }
         private SpeedMode currentSpeedMode = SpeedMode.Normal;
         #endregion
@@ -48,6 +54,7 @@ namespace CinematicRecorder.UI
         /// <summary>Subscribes to session events and seeds ramp state from SessionState.</summary>
         public RecordingControlsWindow()
         {
+            cameraPanel = new CameraPanelController();
             SubscribeToEvents();
             LoadFromSessionState();
         }
@@ -59,13 +66,28 @@ namespace CinematicRecorder.UI
         public void Hide() { shouldShow = false; }
 
         /// <summary>
-        /// Unsubscribes from session events and runs the CameraTools shutdown preserved
-        /// from the MonoBehaviour version. Called from CinematicUiHost.OnDestroy.
+        /// Unsubscribes from session events, tears down the camera panel, and runs
+        /// the CameraTools shutdown preserved from the MonoBehaviour version.
+        /// Called from CinematicUiHost.OnDestroy.
         /// </summary>
         internal void Shutdown()
         {
+            cameraPanel?.Shutdown();
             UnsubscribeFromEvents();
             CameraToolsAPIManager.Shutdown();
+        }
+
+        /// <summary>
+        /// Forwards the per-frame camera-panel processing (fade-midpoint auto-zoom
+        /// and zoom input handling) from CinematicUiHost.LateUpdate. Game logic
+        /// only — no ImGui calls. The window-level gate matches the old pre-port
+        /// fade-overlay cadence (window-visible, not foldout); the panel applies
+        /// the old foldout gate itself via the cached "Camera Panel" header state.
+        /// </summary>
+        internal void Tick()
+        {
+            if (!IsVisible) return;
+            cameraPanel?.ProcessFrame(cameraPanelHeaderOpen);
         }
         #endregion
 
@@ -74,7 +96,8 @@ namespace CinematicRecorder.UI
         /// Per-frame widget declarations for the whole window. Called only from
         /// CinematicUiHost, inside the "Recording Controls" window scope.
         /// Layout per LAYOUT_PROPOSAL §3: status line → speed button Row → progress
-        /// (while recording) → Speed Ramps collapsing header (L8).
+        /// (while recording) → Speed Ramps collapsing header (L8) → Camera Panel
+        /// collapsing header (PANEL-1).
         /// </summary>
         internal void Draw()
         {
@@ -90,6 +113,16 @@ namespace CinematicRecorder.UI
             if (DearImGuiKSP.DearImGuiKSP.CollapsingHeader(Recording.SpeedRampsHeader))
             {
                 DrawSpeedRamps();
+            }
+
+            // ------------------------------------------------------------------
+            // Camera Panel region (added by chunk C8 — PANEL-1)
+            // ------------------------------------------------------------------
+            cameraPanelHeaderOpen = DearImGuiKSP.DearImGuiKSP.CollapsingHeader(
+                CameraController.CameraPanelHeader);
+            if (cameraPanelHeaderOpen)
+            {
+                cameraPanel.Draw();
             }
         }
         #endregion
