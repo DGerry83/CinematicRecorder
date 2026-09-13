@@ -292,11 +292,13 @@ namespace CinematicRecorder.UI
                 DearImGuiKSP.DearImGuiKSP.Text(CameraController.ZoomDurationLabel);
 
                 float duration = durationSlider;
+                // Note 13: on-bar seconds via printf format (FR-3); the off-bar value
+                // text is gone. "%.2f" is the conversion; the trailing "s" is a plain
+                // literal (the library passes the format untouched to native printf).
                 bool durationChanged = DearImGuiKSP.DearImGuiKSP.SliderFloat("##rampDuration", ref duration,
-                    RampDurationMin, RampDurationMax);
+                    RampDurationMin, RampDurationMax, format: "%.2fs");
                 // The old permanent help sentence, now a tooltip on the slider.
                 DearImGuiKSP.DearImGuiKSP.Tooltip(Recording.DurationHelper);
-                DearImGuiKSP.DearImGuiKSP.Text(string.Format(Recording.RampDurationValueFormat, duration));
 
                 if (durationChanged)
                 {
@@ -310,10 +312,12 @@ namespace CinematicRecorder.UI
                 DearImGuiKSP.DearImGuiKSP.Text(Recording.RampBiasLabel);
 
                 float bias = exponentSlider;
-                bool biasChanged = DearImGuiKSP.DearImGuiKSP.SliderFloat("##rampBias", ref bias, 0f, 1f);
+                // Note 13: on-bar 0-1 value via printf format; the off-bar value text
+                // is gone (SessionState.RampExponent still drives the curve line below).
+                bool biasChanged = DearImGuiKSP.DearImGuiKSP.SliderFloat("##rampBias", ref bias, 0f, 1f,
+                    format: "%.2f");
                 // The old Linger Slow / Linger Normal slider-end labels, now a tooltip.
                 DearImGuiKSP.DearImGuiKSP.Tooltip(Recording.RampBiasTooltip);
-                DearImGuiKSP.DearImGuiKSP.Text(string.Format(Recording.RampBiasValueFormat, SessionState.RampExponent));
 
                 if (biasChanged)
                 {

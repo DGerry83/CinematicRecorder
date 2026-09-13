@@ -8,8 +8,6 @@ namespace CinematicRecorder.UI
             public const string Cancel = "Cancel";
             public const string Yes = "Yes";
             public const string No = "No";
-            public const string arrowL = "◀";
-            public const string arrowR = "▶";
 
             // Dependency notice (logged by the DearImGui-KSP host at startup)
             public const string DearImGuiKspUnavailableLog = "[CinematicRecorder] DearImGui-KSP not available (not installed or self-disabled); CinematicRecorder UI disabled.";
@@ -23,17 +21,18 @@ namespace CinematicRecorder.UI
         {
             // Window Chrome & Navigation
             public const string WindowTitle = "Cinematic Recorder";
-            public const string AdvancedButton = "Advanced";
-            public const string StartRecording = "● Start Recording";
-            public const string StopRecording = "■ Stop Recording";
+            public const string MainTab = "Main";
+            public const string AdvancedTab = "Advanced";
+            public const string StartRecording = "• Start Recording";
+            public const string StopRecording = "• Stop Recording";
             public const string DurationDecrement = "-5s";
             public const string DurationIncrement = "+5s";
             public const string DurationUnlimitedButton = "∞";
 
             // Recording Status & Timing
-            public const string RecordingStatus = "● RECORDING";
-            public const string UnlimitedRecordingStatus = "● UNLIMITED RECORDING";
-            public const string StoppingStatus = "■ STOPPING...";
+            public const string RecordingStatus = "• RECORDING";
+            public const string UnlimitedRecordingStatus = "• UNLIMITED RECORDING";
+            public const string StoppingStatus = "• STOPPING...";
             public const string CaptureFPS = "Capture FPS";
             public const string PlaybackFPS = "Playback FPS";
             public const string FPSDisplayFormat = "{0} FPS";
@@ -48,7 +47,7 @@ namespace CinematicRecorder.UI
             public const string GradientTooltip = "Reduces color banding in dark areas";
             public const string SafeModeToggle = " Safe Mode (CPU Encoding)";
             public const string SafeModeTooltip = "Forces CPU-based x264 encoding. Use this if you experience issues with the GPU paths.";
-            public const string SafeModeRecordingWarning = "⚠ Cannot modify while recording";
+            public const string SafeModeRecordingWarning = "Cannot modify while recording";
 
             // Encoder Configuration
             public const string AMDHEVC = "AMD (HEVC)";
@@ -114,15 +113,17 @@ namespace CinematicRecorder.UI
             // DearImGui-KSP port additions (chunk C5)
             public const string SpeedRampsHeader = "Speed Ramps";
             public const string StatusTransitionFormat = "{0} — Transition: {1}";
-            public const string RampDurationValueFormat = "{0:F2}s";
             public const string RampBiasLabel = "Bias";
-            public const string RampBiasValueFormat = "{0:F2}";
-            public const string RampBiasTooltip = "◀ Linger Slow — Linger Normal ▶";
+            public const string RampBiasTooltip = "← Linger Slow — Linger Normal →";
         }
 
         public static class AdvancedSettings
         {
-            public const string WindowTitle = "Advanced Settings";
+            // C10: the floating window is gone (L2 superseded) — this section's content
+            // renders as the main window's "Advanced" tab, grouped under these headers.
+            public const string CaptureHeader = "Capture";
+            public const string TemporalAccumulationHeader = "Temporal Accumulation";
+            public const string PostProcessingHeader = "Post-Processing";
 
             // Encoding tab
             public const string AudioCaptureToggle = " Enable Audio Capture";
@@ -131,7 +132,8 @@ namespace CinematicRecorder.UI
             public const string PngSequenceTooltip = "Outputs individual PNG frames. Forces software encoding and disables hardware acceleration.";
             public const string CaptureUiToggle = " Capture UI Layer";
             public const string CaptureUiTooltip = "Includes the game UI layer in the recorded video. Applies at capture start; cannot be changed while recording.";
-            public const string CaptureUiTabConflict = "UI capture and Temporal Accumulation Blur are incompatible.";
+            public const string CaptureUiUnavailableTooltip = "Unavailable while Temporal Accumulation Blur is on.";
+            public const string TemporalAccumulationUnavailableTooltip = "Unavailable while Capture UI Layer is on.";
 
             // Rendering tab
             public const string TemporalAccumulationToggle = " Temporal Accumulation Blur";
@@ -150,7 +152,7 @@ namespace CinematicRecorder.UI
         {
             public const string RequiresHullCam = "Camera Panel requires HullCam VDS";
             public const string FadeOnSwapToggle = " Fade-On-Swap";
-            public const string FadeDurationFormat = "Fade Duration: {0:F2}s";
+            public const string FadeDurationValueFormat = "{0:F2}s";
             public const string ButtonIdFormat = "Cam_{0}";
             public const string ControlsHeader = "Controls:";
             public const string ControlLeftClick = "• Left-click camera to view";
@@ -163,7 +165,7 @@ namespace CinematicRecorder.UI
             public const string ResetZoom = "Reset Zoom";
             public const string SavePreset = "Save";
             public const string DeletePreset = "Delete";
-            public const string LoadPreset = "Load ▼";
+            public const string LoadPreset = "Load";
             public const string ConfirmDeleteTitle = "Confirm Delete";
             public const string ConfirmUnassignTitle = "Confirm Unassign";
             public const string UnassignConfirmFormat = "Unassign camera from slot {0}?";

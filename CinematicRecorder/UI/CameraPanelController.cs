@@ -79,6 +79,12 @@ namespace CinematicRecorder.UI
         private const float FadeDurationMax = 2.0f;
         private const float FadeSliderMax = 1f;
 
+        // Note 15: one explicit size for all 16 slot cells — uniform 4x4 grid (labels
+        // auto-sized before, so "1" and "16" rendered different widths). 40px fits the
+        // two-digit label with padding (demo grid precedent). Explicit px sizes do not
+        // follow the library UI scale (documented limitation).
+        private static readonly Vector2 SlotButtonSize = new Vector2(40f, 26f);
+
         // Stock PopupDialog identities (G-U1 exception); names double as dedupe keys.
         private const string DeleteDialogName = "CinematicRecorderDeletePreset";
         private const string UnassignDialogName = "CinematicRecorderUnassignSlot";
@@ -108,6 +114,12 @@ namespace CinematicRecorder.UI
         private bool targetIsConsistentFraming = false;
         private float targetFOVValue = 60f;
         private string _targetFovText = "60.0";
+
+        // Note 16: on-bar fade-seconds cache (FR-3 valueText) — recomputed only when
+        // the coordinator's slider value changes; never per frame. Seeded to -1 so the
+        // first frame always computes (the slider range is 0..1).
+        private float _lastFadeSliderValue = -1f;
+        private string _fadeDurationText;
         #endregion
 
         #region Preset Name Cache
@@ -409,10 +421,10 @@ namespace CinematicRecorder.UI
         #endregion
 
         #region Fade Controls
-        // Fade row (LAYOUT_PROPOSAL §4 item 1): one Row — toggle, duration slider,
-        // value text. Both widgets write the shared coordinator (C7 accessor);
-        // the slider is now always visible (the locked single-row layout), where
-        // the old UI hid it while the toggle was off.
+        // Fade row (LAYOUT_PROPOSAL §4 item 1): one Row — toggle + duration slider with
+        // the lerped seconds on the bar (note 16, FR-3 valueText). Both widgets write
+        // the shared coordinator (C7 accessor); the slider is now always visible (the
+        // locked single-row layout), where the old UI hid it while the toggle was off.
         private void DrawFadeRow()
         {
             CameraTransitionCoordinator coordinator = CinematicUiHost.Instance?.FadeOverlay?.Coordinator;
@@ -441,18 +453,22 @@ namespace CinematicRecorder.UI
                     coordinator.UseFadeOnSwap = useFade;
                 }
 
+                // Note 16: refresh the cached on-bar string before drawing so the bar
+                // text matches this frame's slider. The printf format cannot express the
+                // Lerp, so the seconds string is a cached valueText (change-guarded).
                 float slider = coordinator.FadeDurationSlider;
+                if (slider != _lastFadeSliderValue)
+                {
+                    _lastFadeSliderValue = slider;
+                    _fadeDurationText = string.Format(CameraController.FadeDurationValueFormat,
+                        Mathf.Lerp(FadeDurationMin, FadeDurationMax, slider));
+                }
+
                 if (DearImGuiKSP.DearImGuiKSP.SliderFloat("##fadeDuration", ref slider, 0f,
-                        FadeSliderMax))
+                        FadeSliderMax, valueText: _fadeDurationText))
                 {
                     coordinator.FadeDurationSlider = slider;
                 }
-
-                float duration = Mathf.Lerp(
-                    FadeDurationMin,
-                    FadeDurationMax,
-                    coordinator.FadeDurationSlider);
-                DearImGuiKSP.DearImGuiKSP.Text(string.Format(CameraController.FadeDurationFormat, duration));
             }
         }
         #endregion
@@ -483,7 +499,7 @@ namespace CinematicRecorder.UI
             {
                 using (ImGuiEx.StyleColor(ImGuiCol.Text, SlotButtonTextColors[styleIndex]))
                 {
-                    if (DearImGuiKSP.DearImGuiKSP.Button(SlotButtonLabels[index]))
+                    if (DearImGuiKSP.DearImGuiKSP.Button(SlotButtonLabels[index], SlotButtonSize))
                     {
                         OnButtonClicked(index);
                     }
@@ -892,6 +908,11 @@ namespace CinematicRecorder.UI
             CameraPanelConfig scenario = CameraPanelConfig.Instance;
             CameraPanelPreset activePreset = scenario?.GetActivePreset();
             EnsurePresetNameBuffer();
+
+            // Note 18: the presets block is always its own section, regardless of
+            // camera-active state — the separator splits it from the instruction/
+            // context content that immediately precedes it when no camera is active.
+            DearImGuiKSP.DearImGuiKSP.Separator();
 
             using (ImGuiEx.Row())
             {
@@ -1356,7 +1377,9 @@ namespace CinematicRecorder.UI
 
         private string GetDefaultPresetName()
         {
-            return FlightGlobals.ActiveVessel?.vesselName ?? CameraController.Preset;
+            // Note 17: GetDisplayName() returns the localized name — raw vesselName can
+            // carry a "#autoLOC_" tag for vessels named via localization keys.
+            return FlightGlobals.ActiveVessel?.GetDisplayName() ?? CameraController.Preset;
         }
 
         private void EnsurePresetNameBuffer()

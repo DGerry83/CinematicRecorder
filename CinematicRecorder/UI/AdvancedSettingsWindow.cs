@@ -8,13 +8,14 @@ using static CinematicRecorder.UI.CinematicUIStrings;
 namespace CinematicRecorder.UI
 {
     /// <summary>
-    /// Advanced settings view — audio capture, UI-layer capture, PNG sequence, temporal
+    /// Advanced settings content — audio capture, UI-layer capture, PNG sequence, temporal
     /// accumulation blur (TAB), gradient protection, and sharpening. DearImGui-KSP VIEW-1
     /// port (chunk C3) of the IMGUI MonoBehaviour; the port pattern follows SettingsDialog
-    /// (chunk C2). Tabs dropped per LAYOUT_PROPOSAL §2 option B: one auto-sized column.
-    /// Permanent help labels became tooltips on their toggles; conditional warnings stay
-    /// inline colored text. Drawn inside the "Advanced Settings" window scope from
-    /// CinematicUiHost.
+    /// (chunk C2). C10 (note 6, supersedes L2): no longer a floating window — the content
+    /// renders as the "Advanced" tab of the main settings window, grouped into default-open
+    /// CollapsingHeaders. Permanent help labels became tooltips on their toggles; conditional
+    /// warnings stay inline colored text. Drawn from SettingsDialog inside the
+    /// "Cinematic Recorder" window scope.
     /// </summary>
     public class AdvancedSettingsWindow
     {
@@ -43,41 +44,36 @@ namespace CinematicRecorder.UI
         private static readonly string SharpeningGreyedOff = AdvancedSettings.SharpeningToggle + " " + Settings.StateOff;
         #endregion
 
-        #region Fields & State
-        private bool isVisible;
-        #endregion
-
-        #region Public API
-        /// <summary>True while the window should be drawn.</summary>
-        public bool IsVisible => isVisible;
-
-        /// <summary>Shows the advanced settings window.</summary>
-        public void Show()
-        {
-            isVisible = true;
-        }
-
-        /// <summary>Hides the advanced settings window.</summary>
-        public void Hide()
-        {
-            isVisible = false;
-        }
-        #endregion
-
         #region Draw
         /// <summary>
-        /// Per-frame widget declarations for the whole window. Called only from
-        /// CinematicUiHost, inside the "Advanced Settings" window scope. One column:
-        /// the three capture toggles, then the three rendering toggles (L2 — no tabs).
+        /// Per-frame widget declarations for the advanced content. Called only from
+        /// SettingsDialog's "Advanced" tab (C10 note 6). Three default-open
+        /// CollapsingHeader groups (note 6 grouping): Capture — Audio, Capture UI Layer,
+        /// PNG Sequence; Temporal Accumulation — TAB, Gradient Protection;
+        /// Post-Processing — Sharpening (+ strength while on).
         /// </summary>
-        internal void Draw()
+        internal static void Draw()
         {
-            DrawAudioCaptureToggle();
-            DrawCaptureUiLayerToggle();
-            DrawPngSequenceToggle();
-            DrawTemporalAccumulationToggle();
-            DrawGradientProtectionToggle();
-            DrawSharpeningToggle();
+            if (DearImGuiKSP.DearImGuiKSP.CollapsingHeader(
+                AdvancedSettings.CaptureHeader, defaultOpen: true))
+            {
+                DrawAudioCaptureToggle();
+                DrawCaptureUiLayerToggle();
+                DrawPngSequenceToggle();
+            }
+
+            if (DearImGuiKSP.DearImGuiKSP.CollapsingHeader(
+                AdvancedSettings.TemporalAccumulationHeader, defaultOpen: true))
+            {
+                DrawTemporalAccumulationToggle();
+                DrawGradientProtectionToggle();
+            }
+
+            if (DearImGuiKSP.DearImGuiKSP.CollapsingHeader(
+                AdvancedSettings.PostProcessingHeader, defaultOpen: true))
+            {
+                DrawSharpeningToggle();
+            }
         }
 
         private static void DrawAudioCaptureToggle()
@@ -117,40 +113,48 @@ namespace CinematicRecorder.UI
         private static void DrawCaptureUiLayerToggle()
         {
             bool blockedByTab = SessionState.EnableTemporalAccumulation;
-            if (blockedByTab || DeterministicCaptureSession.IsRunning)
+
+            // Note 8: TAB is on — the toggle renders as a real disabled widget whose
+            // tooltip explains the conflict (replaces the greyed stand-in + orange
+            // conflict line for this widget pair). The recording-state stand-in keeps
+            // precedence while a recording is running.
+            if (blockedByTab && !DeterministicCaptureSession.IsRunning)
+            {
+                using (ImGuiEx.Disabled(true))
+                {
+                    bool captureUi = SessionState.CaptureUiLayer;
+                    DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUi);
+                    DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.CaptureUiUnavailableTooltip);
+                }
+                return;
+            }
+
+            if (DeterministicCaptureSession.IsRunning)
             {
                 DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
                     SessionState.CaptureUiLayer ? CaptureUiGreyedOn : CaptureUiGreyedOff);
+                return;
+            }
+
+            bool captureUiLive = SessionState.CaptureUiLayer;
+            bool changed;
+            if (SessionState.CaptureUiLayer)
+            {
+                using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                {
+                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUiLive);
+                }
             }
             else
             {
-                bool captureUi = SessionState.CaptureUiLayer;
-                bool changed;
-                if (SessionState.CaptureUiLayer)
-                {
-                    using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
-                    {
-                        changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUi);
-                    }
-                }
-                else
-                {
-                    changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUi);
-                }
-                DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.CaptureUiTooltip);
-
-                if (changed && !DeterministicCaptureSession.IsRunning)
-                {
-                    SessionState.CaptureUiLayer = captureUi;
-                    UnityEngine.Debug.Log($"[CinematicRecorder] CaptureUiLayer = {captureUi}");
-                }
+                changed = DearImGuiKSP.DearImGuiKSP.Toggle(AdvancedSettings.CaptureUiToggle, ref captureUiLive);
             }
+            DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.CaptureUiTooltip);
 
-            // Conditional warning (never a tooltip): TAB and UI capture are mutually
-            // exclusive, so this fires beside whichever of the two toggles is on.
-            if (blockedByTab)
+            if (changed && !DeterministicCaptureSession.IsRunning)
             {
-                DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.CaptureUiTabConflict);
+                SessionState.CaptureUiLayer = captureUiLive;
+                UnityEngine.Debug.Log($"[CinematicRecorder] CaptureUiLayer = {captureUiLive}");
             }
         }
 
@@ -202,48 +206,59 @@ namespace CinematicRecorder.UI
             // TAB requires the GPU zero-copy path; supported on both AMF (AMD) and NVENC (Nvidia)
             bool hasGpuEncoder = SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Amd
                               || SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.Nvidia;
+            bool blockedByCaptureUi = SessionState.CaptureUiLayer;
             bool canUseTab = hasGpuEncoder && !SessionState.PngSequence && !SessionState.ForceSoftwareEncoding
-                          && !SessionState.CaptureUiLayer;
+                          && !blockedByCaptureUi;
 
-            bool tab = SessionState.EnableTemporalAccumulation;
-            if (!canUseTab || DeterministicCaptureSession.IsRunning)
+            // Note 8: Capture UI Layer is on — the toggle renders as a real disabled
+            // widget whose tooltip explains the conflict (replaces the greyed stand-in
+            // + orange conflict line for this widget pair). The recording-state and
+            // off-limits stand-ins below keep precedence otherwise.
+            if (blockedByCaptureUi && !DeterministicCaptureSession.IsRunning)
             {
-                DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor, tab ? TabGreyedOn : TabGreyedOff);
+                using (ImGuiEx.Disabled(true))
+                {
+                    bool tabDisabled = SessionState.EnableTemporalAccumulation;
+                    DearImGuiKSP.DearImGuiKSP.Toggle(
+                        AdvancedSettings.TemporalAccumulationToggle, ref tabDisabled);
+                    DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.TemporalAccumulationUnavailableTooltip);
+                }
             }
             else
             {
-                bool newValue = tab;
-                if (tab)
+                bool tab = SessionState.EnableTemporalAccumulation;
+                if (!canUseTab || DeterministicCaptureSession.IsRunning)
                 {
-                    using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                    DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor, tab ? TabGreyedOn : TabGreyedOff);
+                }
+                else
+                {
+                    bool newValue = tab;
+                    if (tab)
+                    {
+                        using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
+                        {
+                            DearImGuiKSP.DearImGuiKSP.Toggle(
+                                AdvancedSettings.TemporalAccumulationToggle, ref newValue);
+                        }
+                    }
+                    else
                     {
                         DearImGuiKSP.DearImGuiKSP.Toggle(
                             AdvancedSettings.TemporalAccumulationToggle, ref newValue);
                     }
-                }
-                else
-                {
-                    DearImGuiKSP.DearImGuiKSP.Toggle(
-                        AdvancedSettings.TemporalAccumulationToggle, ref newValue);
-                }
-                // Replaces the old permanent help label (shown when a GPU encoder is present).
-                DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.TemporalAccumulationTooltip);
+                    // Replaces the old permanent help label (shown when a GPU encoder is present).
+                    DearImGuiKSP.DearImGuiKSP.Tooltip(AdvancedSettings.TemporalAccumulationTooltip);
 
-                // TAB only sticks when actually usable
-                SessionState.EnableTemporalAccumulation = newValue && canUseTab;
+                    // TAB only sticks when actually usable
+                    SessionState.EnableTemporalAccumulation = newValue && canUseTab;
+                }
             }
 
             // Conditional warning (never a tooltip): no GPU encoder — explains the stand-in.
             if (SessionState.DetectedGpuEncoder == SessionState.GpuEncoder.None)
             {
                 DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.TabGpuRequiredWarning);
-            }
-
-            // Conditional warning (never a tooltip): fires beside the TAB toggle when
-            // Capture UI is the toggle that is on (mutual exclusion, see Capture UI above).
-            if (SessionState.CaptureUiLayer)
-            {
-                DearImGuiKSP.DearImGuiKSP.TextColored(WarningOrangeColor, AdvancedSettings.CaptureUiTabConflict);
             }
         }
 

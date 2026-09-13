@@ -32,9 +32,13 @@ namespace CinematicRecorder.UI
         private static readonly string SafeModeGreyedOn = Settings.SafeModeToggle + " " + Settings.StateOn;
         private static readonly string SafeModeGreyedOff = Settings.SafeModeToggle + " " + Settings.StateOff;
 
-        // Advanced-button labels per visibility state (arrow swap, as in the old UI).
-        private static readonly string AdvancedButtonShown = Common.arrowL + Settings.AdvancedButton;
-        private static readonly string AdvancedButtonHidden = Common.arrowR + Settings.AdvancedButton;
+        // Record-button gradient stops (C10 note 3): green = idle/Start, red = recording/Stop.
+        // KspPalette ships green accents but no red; the green bottom stop and both red
+        // stops are new named consts (the palette has no suitable dark-green/red entries).
+        private static readonly Color32 RecordButtonGreenTop = KspPalette.GreenDark;
+        private static readonly Color32 RecordButtonGreenBottom = new Color32(26, 153, 26, 255);
+        private static readonly Color32 RecordButtonRedTop = new Color32(230, 51, 51, 255);
+        private static readonly Color32 RecordButtonRedBottom = new Color32(153, 26, 26, 255);
 
         // Status colors as bytes for TextColored (old Color values preserved).
         private static readonly Color32 StatusRecordingColor = new Color32(255, 255, 0, 255); // was Color.yellow
@@ -69,6 +73,12 @@ namespace CinematicRecorder.UI
             public Action<int> SetTargetBitrate;
             public Func<int> GetSpeed;
             public Action<int> SetSpeed;
+
+            // On-bar quality text cache (C10 note 5, FR-3 valueText): recomputed only
+            // when the mapped integer QP/CRF value changes — never per frame. Cached
+            // per binding so switching vendors never shows another vendor's text.
+            public int CachedQualityValue = int.MinValue;
+            public string CachedQualityText;
         }
 
         private static readonly VendorPanelBindings AmfBindings = new VendorPanelBindings
@@ -145,27 +155,58 @@ namespace CinematicRecorder.UI
         #region Draw
         /// <summary>
         /// Per-frame widget declarations for the whole dialog. Called only from
-        /// CinematicUiHost, inside the "Cinematic Recorder" window scope.
-        /// Layout per LAYOUT_PROPOSAL §1: status block → FPS combo row (L1) → duration
-        /// row → Encoding collapsing header → record button.
+        /// CinematicUiHost, inside the "Cinematic Recorder" window scope. The window is
+        /// a TabBar (C10 note 6, supersedes L2): the "Main" tab holds today's main-panel
+        /// content; the "Advanced" tab hosts the former AdvancedSettingsWindow content
+        /// regrouped into default-open CollapsingHeaders.
         /// </summary>
         internal void Draw()
         {
+            using (var tabBar = ImGuiEx.TabBar("##settingsTabs"))
+            {
+                if (tabBar.Visible)
+                {
+                    using (var mainTab = ImGuiEx.TabItem(Settings.MainTab))
+                    {
+                        if (mainTab.Visible)
+                        {
+                            DrawMainTab();
+                        }
+                    }
+
+                    using (var advancedTab = ImGuiEx.TabItem(Settings.AdvancedTab))
+                    {
+                        if (advancedTab.Visible)
+                        {
+                            AdvancedSettingsWindow.Draw();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Main-tab content — everything the pre-tab main panel drew (status block →
+        // vertical FPS rows (note 1) → duration row → Encoding header → record button).
+        private void DrawMainTab()
+        {
             DrawStatusSection();
 
-            // L1: one row — Capture combo ‖ Playback combo (greyed stand-in while
-            // locked) ‖ Lock toggle. The library has no disabled-widget state, so the
-            // locked playback combo is not declared; greyed text stands in (D-U8 entry).
+            // Note 1: FPS combos stacked vertically. Row 1 = Capture combo + Lock toggle;
+            // Row 2 = Playback combo (greyed stand-in while locked, per note 1). Combos
+            // stay default width — the narrowing half of notes 1/2 is axed (FR-2).
             using (ImGuiEx.Row())
             {
                 DrawCaptureFpsCombo();
-                DrawPlaybackFpsControl();
                 DrawLockToggle();
             }
             // Old Lock semantics: the playback preset follows the capture preset while locked.
             if (SessionState.LockFps)
             {
                 SessionState.PlaybackFpsIndex = SessionState.SimFpsIndex;
+            }
+            using (ImGuiEx.Row())
+            {
+                DrawPlaybackFpsControl();
             }
 
             DearImGuiKSP.DearImGuiKSP.Text(Settings.SimulatedTimeLabel);
@@ -177,7 +218,7 @@ namespace CinematicRecorder.UI
                 DrawEncodingSection();
             }
 
-            DrawRecordAndAdvancedRow();
+            DrawRecordButtonRow();
         }
         #endregion
 
@@ -300,8 +341,8 @@ namespace CinematicRecorder.UI
         {
             if (SessionState.LockFps)
             {
-                // Locked: the combo is not declared (no disabled state in the library);
-                // the effective value shows as greyed text instead.
+                // Locked: note 1 keeps the greyed text stand-in idiom (the combo is not
+                // declared; the effective value shows as greyed text instead).
                 DearImGuiKSP.DearImGuiKSP.Text(Settings.PlaybackFPS);
                 DearImGuiKSP.DearImGuiKSP.TextColored(GreyedColor,
                     string.Format(Settings.FPSDisplayFormat, FrameratePresets[SessionState.PlaybackFpsIndex]));
@@ -484,14 +525,22 @@ namespace CinematicRecorder.UI
                 using (ImGuiEx.Row())
                 {
                     DearImGuiKSP.DearImGuiKSP.Text(Settings.QualityLabel);
+                    // Note 5: the semantic quality string ("QP 12 (Master Quality)") is
+                    // drawn on the bar via FR-3 valueText, recomputed only when the
+                    // mapped QP/CRF value changes (cache on the vendor binding).
+                    int qualityValue = vendor.GetQualityValue();
+                    if (qualityValue != vendor.CachedQualityValue)
+                    {
+                        vendor.CachedQualityValue = qualityValue;
+                        vendor.CachedQualityText = string.Format(
+                            vendor.QualityValueFormat, qualityValue, DescribeQuality(qualityValue));
+                    }
                     float qualitySlider = vendor.GetQualitySlider();
-                    DearImGuiKSP.DearImGuiKSP.SliderFloat("##quality", ref qualitySlider, 0f, 1f);
+                    DearImGuiKSP.DearImGuiKSP.SliderFloat(
+                        "##quality", ref qualitySlider, 0f, 1f, valueText: vendor.CachedQualityText);
                     // The old CQLabel help line, now a tooltip on the slider.
                     DearImGuiKSP.DearImGuiKSP.Tooltip(Settings.CQLabel);
                     vendor.SetQualitySlider(qualitySlider);
-                    int qualityValue = vendor.GetQualityValue();
-                    DearImGuiKSP.DearImGuiKSP.Text(
-                        string.Format(vendor.QualityValueFormat, qualityValue, DescribeQuality(qualityValue)));
                 }
             }
             else
@@ -530,67 +579,32 @@ namespace CinematicRecorder.UI
         }
         #endregion
 
-        #region Record & Advanced
-        private void DrawRecordAndAdvancedRow()
+        #region Record Button
+        // Note 3: explicit-color gradient — green when idle (Start), red while recording
+        // (Stop). Same label text and 40px height as before; size.x = 0 auto-fits the
+        // label width (library sizing rule).
+        private void DrawRecordButtonRow()
         {
             bool running = DeterministicCaptureSession.IsRunning;
-            using (ImGuiEx.Row())
+            string label = running ? Settings.StopRecording : Settings.StartRecording;
+            bool clicked = running
+                ? ImGuiGradients.GradientButton(
+                    label, RecordButtonRedTop, RecordButtonRedBottom, new Vector2(0f, 40f))
+                : ImGuiGradients.GradientButton(
+                    label, RecordButtonGreenTop, RecordButtonGreenBottom, new Vector2(0f, 40f));
+            if (!clicked)
             {
-                // Primary gradient CTA, 40px tall (LAYOUT_PROPOSAL §1 item 5). size.x = 0
-                // auto-fits the label width (library sizing rule) — see D-U8 note.
-                if (ImGuiGradients.GradientButton(
-                    running ? Settings.StopRecording : Settings.StartRecording,
-                    new Vector2(0f, 40f), GradientButtonStyle.Primary))
-                {
-                    if (running)
-                    {
-                        stopRequested = true;
-                        DeterministicCaptureSession.RequestStop();
-                    }
-                    else
-                    {
-                        StartRecording();
-                    }
-                }
-
-                DrawAdvancedButton();
+                return;
             }
-        }
 
-        private static void DrawAdvancedButton()
-        {
-            bool advancedVisible = CinematicUiHost.Instance != null
-                                   && CinematicUiHost.Instance.AdvancedSettings != null
-                                   && CinematicUiHost.Instance.AdvancedSettings.IsVisible;
-            if (advancedVisible)
+            if (running)
             {
-                using (ImGuiEx.StyleColor(ImGuiCol.Text, KspPalette.GreenLight))
-                {
-                    DrawAdvancedButtonContent(AdvancedButtonShown);
-                }
+                stopRequested = true;
+                DeterministicCaptureSession.RequestStop();
             }
             else
             {
-                DrawAdvancedButtonContent(AdvancedButtonHidden);
-            }
-        }
-
-        private static void DrawAdvancedButtonContent(string label)
-        {
-            if (DearImGuiKSP.DearImGuiKSP.Button(label))
-            {
-                CinematicUiHost host = CinematicUiHost.Instance;
-                if (host != null && host.AdvancedSettings != null)
-                {
-                    if (host.AdvancedSettings.IsVisible)
-                    {
-                        host.AdvancedSettings.Hide();
-                    }
-                    else
-                    {
-                        host.AdvancedSettings.Show();
-                    }
-                }
+                StartRecording();
             }
         }
 

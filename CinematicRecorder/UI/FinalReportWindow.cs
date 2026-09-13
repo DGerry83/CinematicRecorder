@@ -150,17 +150,22 @@ namespace CinematicRecorder.UI
         /// <summary>
         /// Per-frame widget declarations for the whole report. Called only from
         /// CinematicUiHost, inside the "Recording Complete" window scope. Layout per
-        /// LAYOUT_PROPOSAL §5: header → 5 stat rows → output paths (plain text) →
-        /// footer Row (mux / open folder / okay) → L9 watchdog hint.
+        /// LAYOUT_PROPOSAL §5: header → 5 stat rows (with a separator before Encoding
+        /// Mode, C10 note 10) → output paths (plain text) → separator → footer Row
+        /// (mux / open folder / okay) → L9 watchdog hint.
         /// </summary>
         internal void Draw()
         {
-            // Header. The old bold-14pt header style is not expressible (no per-widget
-            // font weight — C2 D-U8 #3); plain themed text stands in.
-            DearImGuiKSP.DearImGuiKSP.Text(Report.SummaryHeader);
+            // Header at 1.3x body size (C10 note 9, FR-5 TextHeader — size-only; no
+            // bold weight exists in the library).
+            DearImGuiKSP.DearImGuiKSP.TextHeader(Report.SummaryHeader);
 
             DrawStatRows();
             DrawOutputPaths();
+
+            // C10 note 10 (FR-4): divider between the paths block and the footer row.
+            DearImGuiKSP.DearImGuiKSP.Separator();
+
             DrawFooterRow();
 
             // L9: one-line static hint about the 30s session-end watchdog.
@@ -196,6 +201,10 @@ namespace CinematicRecorder.UI
                 DearImGuiKSP.DearImGuiKSP.Text(Report.RealCaptureTime);
                 DearImGuiKSP.DearImGuiKSP.Text(FormatTimeSpan(TimeSpan.FromSeconds(realWorldCaptureTime)));
             }
+
+            // C10 note 10 (FR-4): divider between the Real Capture Time row and the
+            // Encoding Mode row.
+            DearImGuiKSP.DearImGuiKSP.Separator();
 
             using (ImGuiEx.Row())
             {

@@ -8,7 +8,8 @@ namespace CinematicRecorder.UI
     /// <summary>
     /// DearImGui-KSP host for CinematicRecorder. Owns the per-frame UI callback
     /// registration and dispatches drawing to the window views as they are ported.
-    /// The remaining IMGUI windows run alongside this host until their port chunks.
+    /// C10: three window views (Settings — with the Advanced content as its second
+    /// tab — FinalReport, RecordingControls); the L6 auto-hide is superseded.
     /// </summary>
     public sealed class CinematicUiHost : MonoBehaviour
     {
@@ -21,13 +22,9 @@ namespace CinematicRecorder.UI
         private const string ConsumerId = "CinematicRecorder";
 
         private bool _registered;
-        private bool _lastReportVisible;
 
-        /// <summary>Main settings dialog view (ported in chunk C2).</summary>
+        /// <summary>Main settings dialog view (ported in chunk C2; hosts the Advanced tab since C10).</summary>
         public SettingsDialog Settings { get; private set; }
-
-        /// <summary>Advanced settings view (ported in chunk C3).</summary>
-        public AdvancedSettingsWindow AdvancedSettings { get; private set; }
 
         /// <summary>Post-capture report view (ported in chunk C6).</summary>
         public FinalReportWindow FinalReport { get; private set; }
@@ -50,7 +47,6 @@ namespace CinematicRecorder.UI
         {
             Instance = this;
             Settings = new SettingsDialog();
-            AdvancedSettings = new AdvancedSettingsWindow();
             FinalReport = new FinalReportWindow();
             RecordingControls = new RecordingControlsWindow();
             FadeOverlay = new FadeOverlayController();
@@ -75,6 +71,8 @@ namespace CinematicRecorder.UI
         /// <summary>
         /// Drives the report view's 30s session-end watchdog. The view is a plain
         /// class with no Unity event methods, so the host forwards its own Update.
+        /// (L6 auto-hide was removed in C10 — the recording-controls window stays
+        /// visible when the report appears.)
         /// </summary>
         void Update()
         {
@@ -82,16 +80,6 @@ namespace CinematicRecorder.UI
             {
                 FinalReport.Tick();
             }
-
-            // L6: when the final report appears, auto-hide the recording controls
-            // window. Edge-triggered on the rising edge only — a manual re-open while
-            // the report is still up is not fought.
-            bool reportVisible = FinalReport != null && FinalReport.IsVisible;
-            if (reportVisible && !_lastReportVisible && RecordingControls != null)
-            {
-                RecordingControls.Hide();
-            }
-            _lastReportVisible = reportVisible;
         }
 
         /// <summary>
@@ -146,7 +134,7 @@ namespace CinematicRecorder.UI
         private void OnFrame()
         {
             // ------------------------------------------------------------------
-            // Settings dispatch (added by chunk C2)
+            // Settings dispatch (added by chunk C2; hosts the Advanced tab since C10)
             // ------------------------------------------------------------------
             if (Settings != null && Settings.IsVisible)
             {
@@ -155,20 +143,6 @@ namespace CinematicRecorder.UI
                     if (window.Visible)
                     {
                         Settings.Draw();
-                    }
-                }
-            }
-
-            // ------------------------------------------------------------------
-            // AdvancedSettings dispatch (added by chunk C3)
-            // ------------------------------------------------------------------
-            if (AdvancedSettings != null && AdvancedSettings.IsVisible)
-            {
-                using (var window = ImGuiEx.Window(CinematicUIStrings.AdvancedSettings.WindowTitle, autoResize: true))
-                {
-                    if (window.Visible)
-                    {
-                        AdvancedSettings.Draw();
                     }
                 }
             }
@@ -190,8 +164,12 @@ namespace CinematicRecorder.UI
             // ------------------------------------------------------------------
             // RecordingControls dispatch (added by chunk C5)
             // ------------------------------------------------------------------
+            // Note 7 (FR-6): open offset to the right of the main panel so both are
+            // visible (main opens at the library default ~60,60 and is auto-sized).
+            // FirstUseEver positions once per session and never fights user drags.
             if (RecordingControls != null && RecordingControls.IsVisible)
             {
+                ImGuiEx.SetNextWindowPos(new Vector2(560f, 60f), ImGuiCond.FirstUseEver);
                 using (var window = ImGuiEx.Window(CinematicUIStrings.Recording.WindowTitle, autoResize: true))
                 {
                     if (window.Visible)
