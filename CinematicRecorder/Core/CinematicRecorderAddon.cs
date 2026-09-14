@@ -95,6 +95,10 @@ namespace CinematicRecorder.Core
             DontDestroyOnLoad(configObj);
             configObj.AddComponent<CameraPanelConfig>();
 
+            // Restore persisted user settings (once per process) before the UI host
+            // seeds its views from SessionState
+            SettingsPersistence.LoadFromDisk();
+
             // Create DearImGui-KSP UI host (draws nothing until window ports land)
             GameObject uiHostObj = new GameObject("CinematicRecorder_UiHost");
             DontDestroyOnLoad(uiHostObj);
@@ -111,6 +115,10 @@ namespace CinematicRecorder.Core
         /// </summary>
         void OnDestroy()
         {
+            // Persist settings on Flight-scene exit (covers ramp changes, which have
+            // no dialog-close event)
+            SettingsPersistence.SaveToDisk();
+
             GameEvents.onGUIApplicationLauncherReady.Remove(OnGUIApplicationLauncherReady);
             GameEvents.onGUIApplicationLauncherDestroyed.Remove(OnGUIApplicationLauncherDestroyed);
 
@@ -169,7 +177,11 @@ namespace CinematicRecorder.Core
         private void OnDialogClosed()
         {
             if (toolbarButton != null)
-                toolbarButton.SetFalse(false); 
+                toolbarButton.SetFalse(false);
+
+            // The Advanced tab lives inside this dialog, so every dismissal covers
+            // the whole settings surface
+            SettingsPersistence.SaveToDisk();
         }
     }
 }
