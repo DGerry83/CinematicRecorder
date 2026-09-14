@@ -1,3 +1,4 @@
+using CinematicRecorder.Integration;
 using DearImGuiKSP;
 using UnityEngine;
 
@@ -20,6 +21,14 @@ namespace CinematicRecorder.UI
         public static CinematicUiHost Instance { get; private set; }
 
         private const string ConsumerId = "CinematicRecorder";
+
+        /// <summary>
+        /// Which host instance currently owns the DearImGui registration. Tracked
+        /// separately from <see cref="Instance"/> because the two diverge during a
+        /// Flight→Flight transition: the new host registers while the previous
+        /// generation's host is still alive awaiting deferred destruction (#011).
+        /// </summary>
+        private static CinematicUiHost registeredHost;
 
         private bool _registered;
 
@@ -64,7 +73,18 @@ namespace CinematicRecorder.UI
                 return;
             }
 
+            // #011: the library IGNORES duplicate-id registrations (no replacement),
+            // and a previous scene generation's host may still hold the consumer ID
+            // when this Start runs (its GameObject destruction is deferred). Take the
+            // ID over explicitly so this host's callback becomes the live one.
+            if (registeredHost != null && registeredHost != this)
+            {
+                DearImGuiKSP.DearImGuiKSP.Unregister(ConsumerId);
+                registeredHost = null;
+            }
+
             DearImGuiKSP.DearImGuiKSP.Register(ConsumerId, OnFrame);
+            registeredHost = this;
             _registered = true;
         }
 
@@ -108,22 +128,35 @@ namespace CinematicRecorder.UI
         }
 
         /// <summary>
-        /// Unregisters the per-frame callback if registered and tears down the
-        /// recording controls view (event unsubscribe + camera panel + CameraTools
-        /// shutdown), then clears the singleton.
+        /// Tears down the recording controls view (event unsubscribe + camera panel —
+        /// instance-level, always runs). Shared resources are released only by their
+        /// current owner: the CameraTools interop statics and the singleton gate on
+        /// <see cref="Instance"/>, the DearImGui consumer-ID registration gates on
+        /// <see cref="registeredHost"/> (#010/#011 — on a Flight→Flight transition the
+        /// next scene's host may have taken over either or both before a previous
+        /// generation's deferred destruction runs).
         /// </summary>
         void OnDestroy()
         {
-            if (_registered)
+            bool ownsSharedState = Instance == this;
+
+            if (ownsSharedState)
             {
-                DearImGuiKSP.DearImGuiKSP.Unregister(ConsumerId);
-                _registered = false;
+                CameraToolsAPIManager.Shutdown();
+                Instance = null;
+            }
+
+            if (registeredHost == this)
+            {
+                if (_registered)
+                {
+                    DearImGuiKSP.DearImGuiKSP.Unregister(ConsumerId);
+                    _registered = false;
+                }
+                registeredHost = null;
             }
 
             RecordingControls?.Shutdown();
-
-            if (Instance == this)
-                Instance = null;
         }
 
         /// <summary>

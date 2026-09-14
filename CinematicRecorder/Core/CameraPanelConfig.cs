@@ -1,4 +1,4 @@
-﻿using CinematicRecorder.Integration;
+using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
 using System;
 using System.Collections.Generic;
@@ -43,7 +43,8 @@ namespace CinematicRecorder.Core
         }
         void OnDestroy()
         {
-            Instance = null;
+            if (Instance == this)
+                Instance = null;
         }
         #endregion
         #region Public API

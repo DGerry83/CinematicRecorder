@@ -18,6 +18,14 @@ namespace CinematicRecorder.Core
         private ApplicationLauncherButton toolbarButton;
         private Texture2D toolbarIcon;
 
+        // Owned runtime objects (#009/#010): teardown uses these private refs, never
+        // the statics — on a Flight→Flight transition the next scene's generation may
+        // already own the statics by the time this instance's OnDestroy runs
+        private FrameCapture frameCapture;
+        private GameObject safetyMonitorObj;
+        private CameraPanelConfig cameraPanelConfig;
+        private CinematicUiHost uiHost;
+
         /// <summary>
         /// Locates FFmpeg binaries and initializes AutoGen bindings.
         /// </summary>
@@ -72,9 +80,10 @@ namespace CinematicRecorder.Core
             GameObject coreObject = new GameObject("CinematicRecorder_Core");
             DontDestroyOnLoad(coreObject);
 
-            FrameCaptureInstance = coreObject.AddComponent<FrameCapture>();
+            frameCapture = coreObject.AddComponent<FrameCapture>();
+            FrameCaptureInstance = frameCapture;
 
-            GameObject safetyMonitorObj = new GameObject("CinematicRecorder_SafetyMonitor");
+            safetyMonitorObj = new GameObject("CinematicRecorder_SafetyMonitor");
             DontDestroyOnLoad(safetyMonitorObj);
             safetyMonitorObj.AddComponent<SafetyMonitor>();
             UnityEngine.Debug.Log("[CinematicRecorder] SafetyMonitor initialized");
@@ -93,7 +102,7 @@ namespace CinematicRecorder.Core
             // Init Camera Panel Config
             GameObject configObj = new GameObject("CameraPanelConfig");
             DontDestroyOnLoad(configObj);
-            configObj.AddComponent<CameraPanelConfig>();
+            cameraPanelConfig = configObj.AddComponent<CameraPanelConfig>();
 
             // Restore persisted user settings (once per process) before the UI host
             // seeds its views from SessionState
@@ -102,13 +111,11 @@ namespace CinematicRecorder.Core
             // Create DearImGui-KSP UI host (draws nothing until window ports land)
             GameObject uiHostObj = new GameObject("CinematicRecorder_UiHost");
             DontDestroyOnLoad(uiHostObj);
-            uiHostObj.AddComponent<CinematicUiHost>();
+            uiHost = uiHostObj.AddComponent<CinematicUiHost>();
 
             // Settings dialog dismissal resets the toolbar button (HOST-2)
-            if (CinematicUiHost.Instance != null)
-            {
-                CinematicUiHost.Instance.Settings.OnDialogDismissed += OnDialogClosed;
-            }
+            // (AddComponent runs Awake synchronously, so the views exist already)
+            uiHost.Settings.OnDialogDismissed += OnDialogClosed;
         }
         /// <summary>
         /// Removes toolbar button and destroys UI windows.
@@ -125,16 +132,37 @@ namespace CinematicRecorder.Core
             if (toolbarButton != null)
                 ApplicationLauncher.Instance.RemoveModApplication(toolbarButton);
 
-            // Cleanup windows
-            if (CinematicUiHost.Instance != null)
+            // Destroy only the objects THIS addon created (#009/#010: teardown via the
+            // statics could hit the next Flight scene's generation when it initializes
+            // before this teardown runs)
+            if (uiHost != null)
             {
-                CinematicUiHost.Instance.Settings.OnDialogDismissed -= OnDialogClosed;
+                uiHost.Settings.OnDialogDismissed -= OnDialogClosed;
+                // The host's OnDestroy unregisters from DearImGui-KSP and shuts down
+                // the recording controls view; shared-state teardown is owner-gated there
+                Destroy(uiHost.gameObject);
+                uiHost = null;
             }
 
-            // Destroy the UI host (its OnDestroy unregisters from DearImGui-KSP and
-            // shuts down the recording controls view)
-            if (CinematicUiHost.Instance != null)
-                Destroy(CinematicUiHost.Instance.gameObject);
+            if (cameraPanelConfig != null)
+            {
+                Destroy(cameraPanelConfig.gameObject);
+                cameraPanelConfig = null;
+            }
+
+            if (safetyMonitorObj != null)
+            {
+                Destroy(safetyMonitorObj);
+                safetyMonitorObj = null;
+            }
+
+            if (frameCapture != null)
+            {
+                if (FrameCaptureInstance == frameCapture)
+                    FrameCaptureInstance = null;
+                Destroy(frameCapture.gameObject);
+                frameCapture = null;
+            }
         }
         private void OnGUIApplicationLauncherReady()
         {

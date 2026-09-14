@@ -41,7 +41,9 @@ namespace CinematicRecorder.UI
         #endregion
 
         #region Fields & State
-        private bool shouldShow;
+        // Static: window visibility is mod-level UI state that must survive Flight→Flight
+        // scene re-entry (each entry creates a fresh view instance via the UI host)
+        private static bool shouldShow;
         private float durationSlider;
         private float exponentSlider;
 
@@ -73,15 +75,16 @@ namespace CinematicRecorder.UI
         public void Hide() { shouldShow = false; }
 
         /// <summary>
-        /// Unsubscribes from session events, tears down the camera panel, and runs
-        /// the CameraTools shutdown preserved from the MonoBehaviour version.
-        /// Called from CinematicUiHost.OnDestroy.
+        /// Unsubscribes from session events and tears down the camera panel —
+        /// instance-level teardown only. The static CameraTools interop shutdown
+        /// lives in CinematicUiHost.OnDestroy, gated on that host still owning the
+        /// shared state (#010: a previous scene generation's teardown must not kill
+        /// the current generation's interop hooks).
         /// </summary>
         internal void Shutdown()
         {
             cameraPanel?.Shutdown();
             UnsubscribeFromEvents();
-            CameraToolsAPIManager.Shutdown();
         }
 
         /// <summary>

@@ -50,7 +50,9 @@ namespace CinematicRecorder.UI
         #endregion
 
         #region Fields & State
-        private bool renderDisplay;
+        // Static: window visibility is mod-level UI state that must survive Flight→Flight
+        // scene re-entry (each entry creates a fresh view instance via the UI host)
+        private static bool renderDisplay;
         private bool stopRequested;
         private string _durationText = "10.0";
         #endregion
