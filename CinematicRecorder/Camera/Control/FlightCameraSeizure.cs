@@ -214,6 +214,44 @@ namespace CinematicRecorder.Camera.Control
             }
         }
         #endregion
+        #region Driving API
+        /// <summary>
+        /// Drives the seized rig — and through it the flight camera — to a world
+        /// pose: the rig is placed at <paramref name="worldPosition"/> with
+        /// <paramref name="worldRotation"/>, and the camera's local pose under
+        /// the rig is reset to identity so the camera's world pose becomes
+        /// exactly the requested pose. The camera controller (P1-C5) calls this
+        /// once per evaluation while holding; the rig keeps the stock camera's
+        /// own transform untouched except for parenting, so the snapshot's
+        /// local pos/rot restore on release stays exact (G-P1c).
+        ///
+        /// Drive writes are gated on CaptureCameraResolver.IsIvaMode() per the
+        /// P1-C3 D-2(B) ruling (drive writes gated; Release stays exempt).
+        /// Returns false without writing while IVA is active or when not
+        /// holding. When the flight camera has vanished while holding, releases
+        /// and returns false (same self-release pattern as AssertControl).
+        /// </summary>
+        /// <param name="worldPosition">World position the seized camera must take.</param>
+        /// <param name="worldRotation">World rotation the seized camera must take.</param>
+        /// <returns>True when the pose was written; false otherwise.</returns>
+        public bool SetRigWorldPose(Vector3 worldPosition, Quaternion worldRotation)
+        {
+            if (!_holding) return false;
+            if (CaptureCameraResolver.IsIvaMode()) return false;
+
+            FlightCamera flightCamera = FlightCamera.fetch;
+            if (flightCamera == null || _rigObject == null)
+            {
+                Release();
+                return false;
+            }
+
+            _rigObject.transform.SetPositionAndRotation(worldPosition, worldRotation);
+            flightCamera.transform.localPosition = Vector3.zero;
+            flightCamera.transform.localRotation = Quaternion.identity;
+            return true;
+        }
+        #endregion
         #region Unity Lifecycle
         void OnEnable()
         {

@@ -1,4 +1,6 @@
-﻿using CinematicRecorder.UI;
+﻿using CinematicRecorder.Camera.Control;
+using CinematicRecorder.Camera.GateInstrumentation;
+using CinematicRecorder.UI;
 using KSP;
 using System;
 using UnityEngine;
@@ -29,6 +31,11 @@ namespace CinematicRecorder.Core
             DeterministicCaptureSession.OnRecordingStarted += OnRecordingStarted;
             DeterministicCaptureSession.OnRecordingStopped += OnRecordingStopped;
             GameEvents.onGameSceneLoadRequested.Add(OnGameSceneLoadRequested);
+
+            // TEMPORARY (P1-C7 gate harness; removed with the harness in
+            // P2-C4): host the debug camera gate harness so its keybinds and
+            // the native camera manager exist before any capture.
+            DebugCameraGateHarness.EnsureCreated();
 
             if (DeterministicCaptureSession.IsRunning && !hasStoredValues)
             {
@@ -136,6 +143,24 @@ namespace CinematicRecorder.Core
         /// Public API to check if safety monitor has stored time values.
         /// </summary>
         public bool HasStoredValues => hasStoredValues;
+
+        /// <summary>
+        /// Public emergency reset (P1-C7; parent spec §5.2, gate G-P1c):
+        /// deactivates the active native camera through its manager, releases
+        /// any seized flight camera (one-line seizure hook), and — only when a
+        /// capture session is running — restores the stored time values and
+        /// terminates the session. Camera release runs even outside recording
+        /// so a previewing native camera can never hold the stock camera
+        /// hostage; every path no-ops when nothing is active.
+        /// </summary>
+        public void RequestEmergencyReset()
+        {
+            DebugCameraGateHarness.EmergencyResetActiveCamera();
+            FlightCameraSeizure.EmergencyRelease();
+
+            if (DeterministicCaptureSession.IsRunning)
+                ForceEmergencyReset();
+        }
         #endregion
     }
 }

@@ -384,6 +384,12 @@ namespace CinematicRecorder.Capture
         // NEW: Standard single-step capture (original behavior)
         private IEnumerator RunStandardCaptureStep(float currentSimFps)
         {
+            // P1-C7 (CHUNK_P1-C7_CONTRACT): before-render, per-captured-frame
+            // native camera evaluation + pose-log row. Placed before any
+            // rendering so the captured frame contains this evaluation (the CT
+            // interop path evaluates after render and lags one frame).
+            DeterministicCaptureSession.NotifyCapturedFrameStarting();
+
             _audioController?.CaptureSubFrame(simFrameDelta);
 
             if (usingZeroCopyPath)
@@ -405,6 +411,12 @@ namespace CinematicRecorder.Capture
         // NEW: TAB 16-step cycle (8 rendered + 8 skipped for 180° shutter)
         private IEnumerator RunTabCaptureCycle(float currentSimFps)
         {
+            // P1-C7 (CHUNK_P1-C7_CONTRACT): TAB discipline — camera evaluation
+            // and the pose-log row happen ONCE per captured OUTPUT frame, here
+            // at the top of the TAB cycle before the first sub-frame render,
+            // never per micro-step render.
+            DeterministicCaptureSession.NotifyCapturedFrameStarting();
+
             float stepDelta = simFrameDelta / 16.0f;
 
             // CRITICAL: Increase capture rate to match micro-step timing

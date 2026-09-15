@@ -1,4 +1,6 @@
 using CinematicRecorder.Audio;
+using CinematicRecorder.Camera.Control;
+using CinematicRecorder.Camera.GateInstrumentation;
 using CinematicRecorder.Capture;
 using CinematicRecorder.Integration;
 using CinematicRecorder.UI;
@@ -7,6 +9,7 @@ using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using UnityEngine;
+using PlaybackClock = CinematicRecorder.Camera.Time.PlaybackClock;
 
 namespace CinematicRecorder.Core
 {
@@ -39,6 +42,12 @@ namespace CinematicRecorder.Core
 
         /// <summary>Active deterministic zoom controller during capture. Null when not running.</summary>
         public static DeterministicZoomController ActiveZoomController { get; private set; }
+
+        // P1-C7: single-owner playback clock (frame-counter; plan invariant 1 —
+        // its FPS comes from this session, never from an engine clock) and the
+        // gate pose log. Both are per-capture-run state.
+        private static readonly PlaybackClock _playbackClock = new PlaybackClock(() => PlaybackFPS);
+        private static PoseLogger _poseLogger;
         #endregion
         #region Progress Tracking  
         public static float CaptureFPS { get; internal set; }
@@ -111,6 +120,17 @@ namespace CinematicRecorder.Core
         public static void InvokeOnPhysicsStepped(float physicsDeltaTime)
         {
             OnPhysicsStepped?.Invoke(physicsDeltaTime);
+
+            // P1-C7: drive the active native camera's velocity model on the
+            // sim-step clock (incl. TAB micro-steps). The native path and the
+            // CT interop path never drive the same frame (chunk contract
+            // invariant 5): CT is only driven when no native camera is active.
+            NativeCamera activeNativeCamera = ActiveNativeCamera;
+            if (activeNativeCamera != null)
+            {
+                activeNativeCamera.Evaluate(physicsDeltaTime);
+                return;
+            }
 
             // Drive CameraTools deterministic camera updates if available
             // CameraTools uses the physicsDeltaTime or playbackDeltaTime based on LockPathingToPlaybackRate setting
@@ -258,8 +278,22 @@ namespace CinematicRecorder.Core
 
             ActiveZoomController = runner.AddComponent<DeterministicZoomController>();
 
-            if (!CaptureCameraResolver.IsIvaMode())
+            // P1-C7: when a native camera is active it owns this capture — arm
+            // it (velocity state initialized per its definition, parent spec
+            // §5.1) and zero the playback clock. A native camera and a CT
+            // pathing camera never drive the same capture.
+            bool nativeCameraActive = ActiveNativeCamera != null;
+            if (nativeCameraActive)
+            {
+                _playbackClock.Reset();
+                ActiveNativeCamera.ArmForRecording();
+            }
+            else if (!CaptureCameraResolver.IsIvaMode())
+            {
                 TakeControlOfActivePathingCamera(playbackFps);
+            }
+
+            StartPoseLogging();
 
             captureRunner.Controller = controller;
 
@@ -346,6 +380,11 @@ namespace CinematicRecorder.Core
 
             ActiveZoomController = null;
 
+            // P1-C7: close the gate pose log (idempotent; also covers the
+            // emergency-reset path, which reaches EndSession directly).
+            _poseLogger?.Close();
+            _poseLogger = null;
+
             // Reset time scale state
             CurrentTimeScale = 1.0f;
             TargetTimeScale = 1.0f;
@@ -359,8 +398,114 @@ namespace CinematicRecorder.Core
             CapturedSeconds = seconds;
             CaptureFPS = fps;
         }
+        /// <summary>
+        /// P1-C7 before-render hook (CHUNK_P1-C7_CONTRACT): called by
+        /// OfflineCaptureController once per captured OUTPUT frame — at the top
+        /// of the standard step and of the TAB cycle, before any rendering —
+        /// so the captured frame contains this evaluation (the CT interop path
+        /// evaluates after render and lags one frame; the native path must
+        /// not). TAB discipline: this runs once per output frame, never per
+        /// micro-step. The velocity model is NOT advanced here (a zero-length
+        /// step); it advances on OnPhysicsStepped via the sim-step drive.
+        /// Also writes the pose-log row for the frame about to render and
+        /// advances the playback clock one captured frame.
+        /// </summary>
+        internal static void NotifyCapturedFrameStarting()
+        {
+            // Evaluate the active native camera for the frame about to render.
+            NativeCamera activeNativeCamera = ActiveNativeCamera;
+            if (activeNativeCamera != null)
+                activeNativeCamera.Evaluate(0.0);
+
+            // Pose-log row for the frame about to render (the evaluation above
+            // has just driven the camera), stamped with the current clock time.
+            PoseLogger logger = _poseLogger;
+            if (logger != null)
+                LogPoseRow(logger);
+
+            // One captured output frame has started: advance the playback clock.
+            _playbackClock.AdvanceOneFrame();
+        }
         #endregion
         #region Internal Implementation
+        /// <summary>
+        /// Active native camera for this capture, or null (P1-C7 seam into the
+        /// gate harness; TEMPORARY — moves with the manager owner in P2-C4).
+        /// </summary>
+        private static NativeCamera ActiveNativeCamera => DebugCameraGateHarness.ActiveNativeCamera;
+
+        /// <summary>
+        /// Opens the gate pose log for this run (P1-C7). Fail-soft: pose
+        /// logging is gate instrumentation and must never prevent a capture.
+        /// </summary>
+        private static void StartPoseLogging()
+        {
+            try
+            {
+                NativeCamera activeNativeCamera = ActiveNativeCamera;
+                string cameraLabel = activeNativeCamera != null
+                    ? "native:" + activeNativeCamera.DisplayName
+                    : (CameraToolsAPIManager.IsAvailable && CameraToolsAPIManager.IsCameraActive() ? "ct" : "none");
+
+                _poseLogger = new PoseLogger(
+                    PoseLogger.DefaultDirectory,
+                    HardwareDetector.PrimaryGpuVendor.ToString(),
+                    PlaybackFPS,
+                    SimulationFPS,
+                    cameraLabel,
+                    DebugCameraGateHarness.ActiveCameraAnchorDescriptor);
+            }
+            catch (Exception ex)
+            {
+                _poseLogger = null;
+                UnityEngine.Debug.LogWarning("[DeterministicCaptureSession] Pose log disabled: " + ex.Message);
+            }
+        }
+
+        /// <summary>Writes one pose row for the frame about to render.</summary>
+        private static void LogPoseRow(PoseLogger logger)
+        {
+            double posX = double.NaN, posY = double.NaN, posZ = double.NaN;
+            double rotX = double.NaN, rotY = double.NaN, rotZ = double.NaN, rotW = double.NaN;
+            double fov = double.NaN;
+
+            FlightCamera flightCamera = FlightCamera.fetch;
+            if (flightCamera != null)
+            {
+                Vector3 position = flightCamera.transform.position;
+                Quaternion rotation = flightCamera.transform.rotation;
+                posX = position.x;
+                posY = position.y;
+                posZ = position.z;
+                rotX = rotation.x;
+                rotY = rotation.y;
+                rotZ = rotation.z;
+                rotW = rotation.w;
+                fov = flightCamera.FieldOfView;
+            }
+
+            logger.LogFrame(
+                _playbackClock.FrameIndex,
+                _playbackClock.TimeSeconds,
+                posX, posY, posZ,
+                rotX, rotY, rotZ, rotW,
+                fov,
+                CurrentFrameDriverLabel());
+        }
+
+        /// <summary>Camera driver label for the pose-log row being written.</summary>
+        private static string CurrentFrameDriverLabel()
+        {
+            NativeCamera activeNativeCamera = ActiveNativeCamera;
+            if (activeNativeCamera != null)
+                return "native:" + activeNativeCamera.DisplayName;
+
+            if (CameraToolsAPIManager.IsAvailable && CameraToolsAPIManager.IsCameraActive())
+                return "ct";
+
+            return "none";
+        }
+
         /// <summary>
         /// If a CameraTools pathing camera is already active when recording starts,
         /// enable deterministic control and capture current path progress without jumping.
@@ -492,6 +637,11 @@ namespace CinematicRecorder.Core
 
             // Fire stopped event before cleanup
             OnRecordingStopped?.Invoke();
+
+            // P1-C7 stop hook (parent spec §5.1): the playback clock halts (no
+            // further advances outside the capture loop) and the native camera
+            // returns to preview for review instead of staying RecordingDriven.
+            DebugCameraGateHarness.ReturnActiveCameraToPreview();
 
             EndSession();
 
