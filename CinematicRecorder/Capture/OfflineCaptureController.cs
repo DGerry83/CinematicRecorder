@@ -15,8 +15,8 @@ namespace CinematicRecorder.Capture
     public sealed class OfflineCaptureController
     {
         #region Fields
-        private Camera camera;
-        private Camera _pendingCamera;
+        private UnityEngine.Camera camera;
+        private UnityEngine.Camera _pendingCamera;
         private readonly int width;
         private readonly int height;
         private readonly int playbackFps;
@@ -68,7 +68,7 @@ namespace CinematicRecorder.Capture
 
         #region Constructor
         public OfflineCaptureController(
-                    Camera camera,
+                    UnityEngine.Camera camera,
                     int width,
                     int height,
                     int simulationFps,
@@ -114,7 +114,7 @@ namespace CinematicRecorder.Capture
         /// The actual swap is deferred to the next capture-loop frame boundary.
         /// </summary>
         /// <param name="newCamera">The camera to capture from.</param>
-        public void RequestCameraRetarget(Camera newCamera)
+        public void RequestCameraRetarget(UnityEngine.Camera newCamera)
         {
             if (newCamera == null)
                 return;
@@ -135,7 +135,7 @@ namespace CinematicRecorder.Capture
         /// Event-driven retargets must use <see cref="RequestCameraRetarget"/> instead.
         /// </summary>
         /// <param name="newCamera">The camera to capture from.</param>
-        public void RetargetCameraImmediate(Camera newCamera)
+        public void RetargetCameraImmediate(UnityEngine.Camera newCamera)
         {
             _pendingCamera = null;
             ApplyCameraRetarget(newCamera);
@@ -667,7 +667,7 @@ namespace CinematicRecorder.Capture
         /// </summary>
         private void ApplyPendingCameraRetarget()
         {
-            Camera newCamera = _pendingCamera;
+            UnityEngine.Camera newCamera = _pendingCamera;
             _pendingCamera = null;
 
             ApplyCameraRetarget(newCamera);
@@ -677,7 +677,7 @@ namespace CinematicRecorder.Capture
         /// from the previous camera and attaches it to the new one. No-op for null or unchanged
         /// targets. Safe from Update (pre-render) and from the capture-loop frame boundary.
         /// </summary>
-        private void ApplyCameraRetarget(Camera newCamera)
+        private void ApplyCameraRetarget(UnityEngine.Camera newCamera)
         {
             if (newCamera == null || newCamera == camera)
                 return;
@@ -694,7 +694,7 @@ namespace CinematicRecorder.Capture
             if (newCamera != null)
                 newCamera.targetTexture = null;
 
-            Camera oldCamera = camera;
+            UnityEngine.Camera oldCamera = camera;
             camera = newCamera;
 
             UnityEngine.Debug.Log(

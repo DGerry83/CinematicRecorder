@@ -26,7 +26,7 @@ namespace CinematicRecorder.Capture
         /// <see cref="FlightCamera.fetch.mainCamera"/>; or <see cref="Camera.main"/> as a
         /// last-resort fallback with a one-time warning.
         /// </returns>
-        public static Camera ResolveForCurrentMode()
+        public static UnityEngine.Camera ResolveForCurrentMode()
         {
             CameraManager cameraManager = CameraManager.Instance;
             if (cameraManager != null)
@@ -37,7 +37,7 @@ namespace CinematicRecorder.Capture
                 {
                     // IVA: prefer the InternalCamera on depth ties — in stock IVA it renders
                     // the interior after the flight-camera exterior pass.
-                    Camera last = ResolveLastCompositingCamera(preferInternalOnTie: true);
+                    UnityEngine.Camera last = ResolveLastCompositingCamera(preferInternalOnTie: true);
                     if (last != null)
                         return last;
                 }
@@ -46,7 +46,7 @@ namespace CinematicRecorder.Capture
                     // Flight: prefer the flight camera on depth ties; the InternalCamera only
                     // wins when a mod (e.g. Through The Eyes first-person) has enabled it as
                     // a later compositing pass.
-                    Camera last = ResolveLastCompositingCamera(preferInternalOnTie: false);
+                    UnityEngine.Camera last = ResolveLastCompositingCamera(preferInternalOnTie: false);
                     if (last != null)
                         return last;
                 }
@@ -56,14 +56,14 @@ namespace CinematicRecorder.Capture
                     FlightCamera flightCamera = FlightCamera.fetch;
                     if (flightCamera != null)
                     {
-                        Camera mainCamera = flightCamera.mainCamera;
+                        UnityEngine.Camera mainCamera = flightCamera.mainCamera;
                         if (mainCamera != null)
                             return mainCamera;
                     }
                 }
             }
 
-            Camera fallback = Camera.main;
+            UnityEngine.Camera fallback = UnityEngine.Camera.main;
             if (fallback != null && !_warnedCameraMainFallback)
             {
                 _warnedCameraMainFallback = true;
@@ -82,19 +82,19 @@ namespace CinematicRecorder.Capture
         /// last one records what the player actually sees. Base-game UI is unaffected: IMGUI
         /// and screen-space-overlay uGUI draw after all cameras and are never captured.
         /// </summary>
-        private static Camera ResolveLastCompositingCamera(bool preferInternalOnTie)
+        private static UnityEngine.Camera ResolveLastCompositingCamera(bool preferInternalOnTie)
         {
-            Camera flightCam = null;
+            UnityEngine.Camera flightCam = null;
             FlightCamera flightCamera = FlightCamera.fetch;
             if (flightCamera != null)
                 flightCam = flightCamera.mainCamera;
 
-            Camera internalCam = null;
+            UnityEngine.Camera internalCam = null;
             InternalCamera internalCamera = InternalCamera.Instance;
             if (internalCamera != null)
-                internalCam = internalCamera.GetComponent<Camera>();
+                internalCam = internalCamera.GetComponent<UnityEngine.Camera>();
 
-            Camera best = null;
+            UnityEngine.Camera best = null;
             if (preferInternalOnTie)
             {
                 ConsiderCompositingCamera(flightCam, ref best);
@@ -114,7 +114,7 @@ namespace CinematicRecorder.Capture
         /// off-screen (target-texture) cameras; keeps the one with the highest depth.
         /// Later candidates win ties, so evaluation order encodes tie preference.
         /// </summary>
-        private static void ConsiderCompositingCamera(Camera candidate, ref Camera best)
+        private static void ConsiderCompositingCamera(UnityEngine.Camera candidate, ref UnityEngine.Camera best)
         {
             if (candidate == null)
                 return;
@@ -144,7 +144,7 @@ namespace CinematicRecorder.Capture
         /// Returns <c>true</c> if the supplied camera is the <see cref="Camera"/> component on
         /// <see cref="InternalCamera.Instance"/>.
         /// </summary>
-        internal static bool IsInternalCamera(Camera camera)
+        internal static bool IsInternalCamera(UnityEngine.Camera camera)
         {
             if (camera == null)
                 return false;
@@ -153,7 +153,7 @@ namespace CinematicRecorder.Capture
             if (internalCamera == null)
                 return false;
 
-            Camera internalCameraComponent = internalCamera.GetComponent<Camera>();
+            UnityEngine.Camera internalCameraComponent = internalCamera.GetComponent<UnityEngine.Camera>();
             return internalCameraComponent != null && internalCameraComponent == camera;
         }
     }

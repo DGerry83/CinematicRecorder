@@ -304,8 +304,8 @@ namespace CinematicRecorder.Integration
                     fc.SetFoV(60f);
                 }
 
-                if (Camera.main != null)
-                    Camera.main.nearClipPlane = 0.1f;
+                if (UnityEngine.Camera.main != null)
+                    UnityEngine.Camera.main.nearClipPlane = 0.1f;
 
                 Debug.Log("[HullCamBridge] Emergency camera reset executed");
             }

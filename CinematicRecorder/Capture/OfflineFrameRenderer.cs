@@ -7,10 +7,10 @@ namespace CinematicRecorder.Capture
     /// </summary>
     public sealed class OfflineFrameRenderer
     {
-        private readonly Camera camera;
+        private readonly UnityEngine.Camera camera;
         private readonly RenderTexture target;
 
-        public OfflineFrameRenderer(Camera camera, RenderTexture target)
+        public OfflineFrameRenderer(UnityEngine.Camera camera, RenderTexture target)
         {
             this.camera = camera;
             this.target = target;

@@ -177,7 +177,7 @@ namespace CinematicRecorder.Core
             realWorldTimer = new Stopwatch();
             realWorldTimer.Start();
 
-            Camera cam = CaptureCameraResolver.ResolveForCurrentMode();
+            UnityEngine.Camera cam = CaptureCameraResolver.ResolveForCurrentMode();
             if (cam == null)
                 throw new Exception("No camera available for capture");
 
